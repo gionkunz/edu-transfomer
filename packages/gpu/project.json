@@ -11,9 +11,19 @@
         "outputPath": "packages/gpu/dist",
         "main": "packages/gpu/src/index.ts",
         "rootDir": "packages/gpu/src",
-        "tsConfig": "packages/gpu/tsconfig.json",
-        "generatePackageJson": false
+        "tsConfig": "packages/gpu/tsconfig.build.json",
+        "generatePackageJson": false,
+        "assets": [
+          {
+            "glob": "*.wgsl",
+            "input": "packages/gpu/src/kernels",
+            "output": "kernels"
+          }
+        ]
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:gpu", "type:lib"]

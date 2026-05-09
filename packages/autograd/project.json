@@ -11,9 +11,12 @@
         "outputPath": "packages/autograd/dist",
         "main": "packages/autograd/src/index.ts",
         "rootDir": "packages/autograd/src",
-        "tsConfig": "packages/autograd/tsconfig.json",
+        "tsConfig": "packages/autograd/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:autograd", "type:lib"]

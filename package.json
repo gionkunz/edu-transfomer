@@ -8,21 +8,32 @@
     "node": ">=20.18.0"
   },
   "scripts": {
-    "build": "nx run-many -t build --all",
-    "test": "vitest run",
+    "build": "nx run-many -t build --all && node tools/patch-dist-esm-imports.mjs",
+    "test": "nx run-many -t test --all",
+    "test:vitest": "vitest run",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@nx/eslint": "22.7.1",
     "@nx/js": "22.7.1",
+    "@nx/vite": "22.7.1",
+    "@nx/vitest": "22.7.1",
+    "@swc-node/register": "~1.11.1",
+    "@swc/core": "~1.15.5",
+    "@swc/helpers": "~0.5.18",
     "@types/node": "^22.19.18",
+    "@vitest/coverage-v8": "^3.0.5",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
+    "jsonc-eslint-parser": "^2.1.0",
     "nx": "22.7.1",
     "prettier": "^3.7.4",
+    "tslib": "^2.3.0",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.46.5",
+    "vite": "6.3.5",
     "vitest": "^3.2.4"
   }
 }

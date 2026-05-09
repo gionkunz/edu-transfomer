@@ -11,9 +11,12 @@
         "outputPath": "packages/inference/dist",
         "main": "packages/inference/src/index.ts",
         "rootDir": "packages/inference/src",
-        "tsConfig": "packages/inference/tsconfig.json",
+        "tsConfig": "packages/inference/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:inference", "type:lib"]

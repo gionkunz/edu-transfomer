@@ -11,5 +11,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"]
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "webgpu": "0.4.0"
+  }
 }

@@ -11,9 +11,12 @@
         "outputPath": "packages/tokenizer/dist",
         "main": "packages/tokenizer/src/index.ts",
         "rootDir": "packages/tokenizer/src",
-        "tsConfig": "packages/tokenizer/tsconfig.json",
+        "tsConfig": "packages/tokenizer/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:tokenizer", "type:lib"]

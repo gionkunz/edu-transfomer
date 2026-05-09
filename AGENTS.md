@@ -38,7 +38,7 @@ Project-specific agent rules (if present) live in **`.cursor/rules/`** as `.mdc`
 ## Practical defaults for agents
 
 - Match existing naming, imports, and test style in whichever package you touch.
-- Prefer tests (e.g. Vitest) when behavior is easy to specify; respect the testing approach described in `docs/project.md`.
+- Prefer tests (e.g. Vitest) when behavior is easy to specify; each package/app owns a `vitest.config.ts`, and Nx runs them via `@nx/vitest:test` (`nx run <project>:test` or `nx run-many -t test --all`). Stay aligned with `docs/project.md`.
 - Avoid new markdown/docs files unless the user asks for documentation deliverables.
 
 When in doubt, re-read **`docs/project.md`** before refactoring or proposing dependencies.

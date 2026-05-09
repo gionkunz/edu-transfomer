@@ -11,9 +11,12 @@
         "outputPath": "packages/training/dist",
         "main": "packages/training/src/index.ts",
         "rootDir": "packages/training/src",
-        "tsConfig": "packages/training/tsconfig.json",
+        "tsConfig": "packages/training/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:training", "type:lib"]

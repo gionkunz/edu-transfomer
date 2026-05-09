@@ -4,15 +4,17 @@ import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'vitest/config';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Workspace root: `vitest` / `vitest run` discovers each package/app
+ * `vitest.config.ts` via `test.projects` (Vitest 3).
+ *
+ * Prefer Nx for CI: `nx run-many -t test --all` or `nx run <proj>:test`.
+ */
 export default defineConfig({
-  resolve: {
-    conditions: ['import', 'node', 'default'],
-  },
+  root: workspaceRoot,
   test: {
-    environment: 'node',
-    include: ['apps/**/src/**/*.spec.ts', 'packages/**/src/**/*.spec.ts'],
+    projects: ['packages/*', 'apps/*'],
   },
-  root,
 });

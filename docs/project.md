@@ -15,42 +15,44 @@ Build a transformer-based language model engine from scratch in **TypeScript** f
 
 **Allowed dependencies (and why):**
 
-| Package | Purpose | Justification |
-|---------|---------|---------------|
-| `webgpu` (npm) | WebGPU device access in Node.js via Dawn | Hardware interface only — we write all shaders |
-| `wolf-tui` | Terminal UI rendering | UX layer — not ML logic |
-| Nx + `@nx/js` | Monorepo tooling | Build infrastructure only |
-| `vitest` | Unit/integration tests | Test infrastructure only |
-| `eslint` + `prettier` | Code quality | Style enforcement only |
-| `commander` / `yargs` | CLI argument parsing | Ergonomics only |
-| `glob` | File discovery for training data | Utility only |
+| Package               | Purpose                                  | Justification                                                               |
+| --------------------- | ---------------------------------------- | --------------------------------------------------------------------------- |
+| `webgpu` (npm)        | WebGPU device access in Node.js via Dawn | Hardware interface only — we write all shaders                              |
+| `wolf-tui`            | Terminal UI rendering                    | UX layer — not ML logic                                                     |
+| Nx + `@nx/js`         | Monorepo tooling                         | Build infrastructure only                                                   |
+| `@nx/vitest`          | Nx Vitest test executor                  | Wires `project.json` `test` targets to Vitest only                          |
+| `vite`                | Vitest config loading (Vite-backed)      | Required peer for `@nx/vitest` / Vitest 3 config — not application bundling |
+| `vitest`              | Unit/integration tests                   | Test infrastructure only                                                    |
+| `eslint` + `prettier` | Code quality                             | Style enforcement only                                                      |
+| `commander` / `yargs` | CLI argument parsing                     | Ergonomics only                                                             |
+| `glob`                | File discovery for training data         | Utility only                                                                |
 
 **Explicitly forbidden:**
 
-| Package | Reason |
-|---------|--------|
-| `@tensorflow/tfjs` | Hides compute |
-| `onnxruntime` | Hides inference |
-| `transformers` / HuggingFace | Hides everything |
-| `tiktoken` / `sentencepiece` | We write our own tokenizer |
-| Any autograd library (`surfgrad`, `shade`, etc.) | We write our own |
+| Package                                          | Reason                     |
+| ------------------------------------------------ | -------------------------- |
+| `@tensorflow/tfjs`                               | Hides compute              |
+| `onnxruntime`                                    | Hides inference            |
+| `transformers` / HuggingFace                     | Hides everything           |
+| `tiktoken` / `sentencepiece`                     | We write our own tokenizer |
+| Any autograd library (`surfgrad`, `shade`, etc.) | We write our own           |
 
 ---
 
 ## Technology Stack
 
-| Concern | Choice |
-|---------|--------|
-| Language | TypeScript (strict mode, ESM) |
-| Runtime | Node.js 24 LTS |
-| GPU | WebGPU via `webgpu` npm package (Dawn v0.4.0) |
-| Shader language | WGSL |
-| Monorepo | Nx with `@nx/js`, pnpm workspaces |
-| TUI | wolf-tui (framework-agnostic, Taffy layout engine) |
-| Tests | Vitest |
-| Linting | ESLint + Prettier |
-| Package manager | pnpm |
-| GPU strategy | GPU-only (hard requirement — fail loudly if no adapter) |
+| Concern           | Choice                                                                       |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Language          | TypeScript (strict mode, ESM)                                                |
+| Runtime           | Node.js 24 LTS                                                               |
+| GPU               | WebGPU via `webgpu` npm package (Dawn v0.4.0)                                |
+| Shader language   | WGSL                                                                         |
+| Monorepo          | Nx with `@nx/js`, pnpm workspaces                                            |
+| TUI               | wolf-tui (framework-agnostic, Taffy layout engine)                           |
+| Tests             | Vitest                                                                       |
+| Linting           | ESLint + Prettier                                                            |
+| Package manager   | pnpm                                                                         |
+| GPU strategy      | GPU-only (hard requirement — fail loudly if no adapter)                      |
 | Checkpoint format | Binary `.bin` (packed Float32 tensors) + `.json` sidecar (config + metadata) |
 
 ---
@@ -218,7 +220,9 @@ llm-transformer-diy/
 ├── package.json
 ├── .eslintrc.json
 ├── .prettierrc
-└── vitest.workspace.ts
+├── vitest.config.ts                Root Vitest `test.projects` (optional all-in-one run)
+├── vitest.config.base.ts           Shared defaults for each package/app `vitest.config.ts`
+└── eslint.config.js
 ```
 
 ---
@@ -229,15 +233,15 @@ llm-transformer-diy/
 
 WebGPU is a modern GPU compute API (W3C standard). In Node.js, the `webgpu` npm package provides access via Dawn (Google's C++ WebGPU implementation). Key concepts:
 
-| Concept | What it is |
-|---------|------------|
-| **Adapter** | A handle to a physical GPU |
-| **Device** | Logical connection to the GPU — all work goes through this |
-| **Queue** | Where you submit command buffers for execution |
-| **Buffer** | A chunk of GPU memory (`GPUBuffer`) |
-| **Bind Group** | Maps buffers to shader variables (inputs/outputs) |
-| **Compute Pipeline** | A compiled WGSL shader ready to dispatch |
-| **Dispatch** | Launch N workgroups of M threads each |
+| Concept              | What it is                                                 |
+| -------------------- | ---------------------------------------------------------- |
+| **Adapter**          | A handle to a physical GPU                                 |
+| **Device**           | Logical connection to the GPU — all work goes through this |
+| **Queue**            | Where you submit command buffers for execution             |
+| **Buffer**           | A chunk of GPU memory (`GPUBuffer`)                        |
+| **Bind Group**       | Maps buffers to shader variables (inputs/outputs)          |
+| **Compute Pipeline** | A compiled WGSL shader ready to dispatch                   |
+| **Dispatch**         | Launch N workgroups of M threads each                      |
 
 ### Initialization flow
 
@@ -277,23 +281,23 @@ This is a naive matmul — we'll optimize with tiled shared-memory access in lat
 
 ### Required WGSL Kernels (complete inventory)
 
-| Kernel | Forward | Backward | Notes |
-|--------|---------|----------|-------|
-| `matmul` | C = A @ B | dA = dC @ B^T, dB = A^T @ dC | Core operation, tiled for perf |
-| `add` | C = A + B | dA = dC, dB = dC (broadcast) | Element-wise with broadcasting |
-| `mul` | C = A * B | dA = dC * B, dB = dC * A | Element-wise (Hadamard) |
-| `scale` | Y = α·X | dX = α·dY | Scalar multiply |
-| `gelu` | y = x·Φ(x) | dy·gelu'(x) | Approximation formula |
-| `softmax` | Stable 2-pass: max → exp → sum → normalize | Jacobian-vector product | Numerically stable |
-| `rmsnorm` | y = x / rms(x) · γ | Chain rule through norm | Fused kernel |
-| `embedding` | Gather rows by index | Scatter-add gradients | Index-based lookup |
-| `cross_entropy` | -log(softmax(logits)[target]) | Combined softmax+CE grad | Fused for stability |
-| `adamw` | θ -= lr·m̂/(√v̂+ε) + λ·θ | N/A (optimizer step) | Fused update |
-| `reduce_sum` | Sum along axis | Expand gradient | For loss computation |
-| `reduce_max` | Max along axis | Mask gradient | For softmax stability |
-| `clip_norm` | Scale if norm > threshold | N/A | Gradient clipping |
-| `causal_mask` | Fill upper-tri with -inf | N/A | Attention masking |
-| `transpose` | Swap axes | Same transpose | For matmul backward |
+| Kernel          | Forward                                    | Backward                     | Notes                          |
+| --------------- | ------------------------------------------ | ---------------------------- | ------------------------------ |
+| `matmul`        | C = A @ B                                  | dA = dC @ B^T, dB = A^T @ dC | Core operation, tiled for perf |
+| `add`           | C = A + B                                  | dA = dC, dB = dC (broadcast) | Element-wise with broadcasting |
+| `mul`           | C = A \* B                                 | dA = dC _ B, dB = dC _ A     | Element-wise (Hadamard)        |
+| `scale`         | Y = α·X                                    | dX = α·dY                    | Scalar multiply                |
+| `gelu`          | y = x·Φ(x)                                 | dy·gelu'(x)                  | Approximation formula          |
+| `softmax`       | Stable 2-pass: max → exp → sum → normalize | Jacobian-vector product      | Numerically stable             |
+| `rmsnorm`       | y = x / rms(x) · γ                         | Chain rule through norm      | Fused kernel                   |
+| `embedding`     | Gather rows by index                       | Scatter-add gradients        | Index-based lookup             |
+| `cross_entropy` | -log(softmax(logits)[target])              | Combined softmax+CE grad     | Fused for stability            |
+| `adamw`         | θ -= lr·m̂/(√v̂+ε) + λ·θ                     | N/A (optimizer step)         | Fused update                   |
+| `reduce_sum`    | Sum along axis                             | Expand gradient              | For loss computation           |
+| `reduce_max`    | Max along axis                             | Mask gradient                | For softmax stability          |
+| `clip_norm`     | Scale if norm > threshold                  | N/A                          | Gradient clipping              |
+| `causal_mask`   | Fill upper-tri with -inf                   | N/A                          | Attention masking              |
+| `transpose`     | Swap axes                                  | Same transpose               | For matmul backward            |
 
 ---
 
@@ -312,6 +316,7 @@ interface TensorData {
 ```
 
 All tensors live on GPU. We only read back to CPU when:
+
 - Logging a scalar loss value
 - Saving a checkpoint
 - Printing generated tokens
@@ -331,12 +336,12 @@ The `Tensor` class provides methods that dispatch to the appropriate WGSL kernel
 ### Initialization
 
 ```typescript
-Tensor.zeros(shape)         // GPU buffer filled with 0
-Tensor.ones(shape)          // GPU buffer filled with 1
-Tensor.randn(shape, std)    // Gaussian random (Box-Muller on GPU or seed from CPU)
-Tensor.xavier(shape)        // Xavier/Glorot initialization
-Tensor.fromArray(data, shape) // Upload Float32Array to GPU
-tensor.toArray()            // Download GPUBuffer to Float32Array (async)
+Tensor.zeros(shape); // GPU buffer filled with 0
+Tensor.ones(shape); // GPU buffer filled with 1
+Tensor.randn(shape, std); // Gaussian random (Box-Muller on GPU or seed from CPU)
+Tensor.xavier(shape); // Xavier/Glorot initialization
+Tensor.fromArray(data, shape); // Upload Float32Array to GPU
+tensor.toArray(); // Download GPUBuffer to Float32Array (async)
 ```
 
 ---
@@ -346,6 +351,7 @@ tensor.toArray()            // Download GPUBuffer to Float32Array (async)
 ### Design: Define-by-Run (PyTorch-style)
 
 Every operation builds a computation graph as it executes. Each node records:
+
 - The operation type
 - Input tensors (parents)
 - A closure or method to compute the backward pass (local Jacobian × incoming gradient)
@@ -379,6 +385,7 @@ interface Operation {
 ### Parameter management
 
 A `ParameterRegistry` tracks all trainable `Variable` instances. It provides:
+
 - `parameters()` → iterator of all Variables with `requiresGrad = true`
 - `zeroGrad()` → set all `.grad = null`
 - `clipGradNorm(maxNorm)` → compute global L2 norm, scale if exceeds threshold
@@ -451,25 +458,28 @@ Input token IDs: [batch, seq_len]
 ### Default Model Configs
 
 | Config | `d_model` | `n_layers` | `n_heads` | `d_ff` | `max_seq_len` | `vocab_size` | ~Params |
-|--------|-----------|------------|-----------|--------|---------------|--------------|---------|
-| tiny | 128 | 2 | 2 | 512 | 128 | 512 (char) | ~0.5M |
-| small | 256 | 4 | 4 | 1024 | 256 | 4096 | ~5M |
-| medium | 512 | 8 | 8 | 2048 | 512 | 8192 | ~30M |
-| large | 768 | 12 | 12 | 3072 | 1024 | 16384 | ~85M |
+| ------ | --------- | ---------- | --------- | ------ | ------------- | ------------ | ------- |
+| tiny   | 128       | 2          | 2         | 512    | 128           | 512 (char)   | ~0.5M   |
+| small  | 256       | 4          | 4         | 1024   | 256           | 4096         | ~5M     |
+| medium | 512       | 8          | 8         | 2048   | 512           | 8192         | ~30M    |
+| large  | 768       | 12         | 12        | 3072   | 1024          | 16384        | ~85M    |
 
 Start with `tiny` for development (trains in seconds), graduate to `small`/`medium` for real text generation quality.
 
 ### Sub-components
 
 **RMSNorm:**
+
 ```
 RMSNorm(x) = x / sqrt(mean(x²) + ε) · γ
 ```
+
 - `γ`: learned scale, shape `[d_model]`
 - `ε = 1e-6`
 - Applied **before** each sub-layer (Pre-Norm convention)
 
 **Causal Multi-Head Self-Attention:**
+
 ```
 Q = x @ W_Q    K = x @ W_K    V = x @ W_V
   each: [batch, seq_len, d_model] → reshape to [batch, n_heads, seq_len, d_k]
@@ -484,6 +494,7 @@ output = attn_out @ W_O
 ```
 
 **Feed-Forward Network (FFN):**
+
 ```
 FFN(x) = GELU(x @ W1 + b1) @ W2 + b2
   W1: [d_model, d_ff]
@@ -587,22 +598,22 @@ let context = tokenizer.encode(prompt);
 
 for (let i = 0; i < maxNewTokens; i++) {
   const input = context.slice(-maxSeqLen);
-  const logits = model.forward(input);             // [seq_len, vocab_size]
-  const nextLogits = logits.slice(-1);             // last position only
+  const logits = model.forward(input); // [seq_len, vocab_size]
+  const nextLogits = logits.slice(-1); // last position only
   const nextToken = sampler.sample(nextLogits);
   context.push(nextToken);
-  onToken(tokenizer.decode([nextToken]));           // stream to TUI
+  onToken(tokenizer.decode([nextToken])); // stream to TUI
   if (nextToken === eosTokenId) break;
 }
 ```
 
 ### Sampling Strategies
 
-| Strategy | Behavior |
-|----------|----------|
-| Greedy | `argmax(logits)` — deterministic, repetitive |
+| Strategy    | Behavior                                                     |
+| ----------- | ------------------------------------------------------------ |
+| Greedy      | `argmax(logits)` — deterministic, repetitive                 |
 | Temperature | `softmax(logits / τ)` then sample — τ<1 sharper, τ>1 flatter |
-| Top-k | Zero out all but top-k logits, then temperature sample |
+| Top-k       | Zero out all but top-k logits, then temperature sample       |
 
 Default: `temperature=0.8`, `topK=40`.
 
@@ -613,12 +624,13 @@ With cache: store K, V tensors from each layer, only compute new token's Q.
 
 ```typescript
 interface KVCache {
-  keys: Tensor[];    // one per layer, shape grows: [batch, n_heads, seq_so_far, d_k]
-  values: Tensor[];  // same
+  keys: Tensor[]; // one per layer, shape grows: [batch, n_heads, seq_so_far, d_k]
+  values: Tensor[]; // same
 }
 ```
 
 On each step:
+
 1. Compute Q, K, V for the new token only
 2. Append new K, V to cache
 3. Attend: new Q against full cached K → weights → apply to full cached V
@@ -634,14 +646,14 @@ Single entry point with subcommands. Short commands use plain stdout; long-runni
 
 ### Commands
 
-| Command | Description | TUI? |
-|---------|-------------|------|
-| `llm tokenizer train --data ./text.txt --vocab-size 4096 --out ./tok.json` | Train a tokenizer on text | No (progress bar only) |
-| `llm tokenizer encode --tokenizer ./tok.json "Hello world"` | Encode text to IDs | No |
-| `llm tokenizer decode --tokenizer ./tok.json 42,17,8` | Decode IDs to text | No |
-| `llm train --data ./corpus/**/*.txt --config small --out ./model/` | Train a model | Yes — live dashboard |
-| `llm generate --model ./model/ --prompt "Once upon"` | Generate text | Yes — streaming output |
-| `llm inspect --model ./model/` | Print model config, param count, layer shapes | No |
+| Command                                                                    | Description                                   | TUI?                   |
+| -------------------------------------------------------------------------- | --------------------------------------------- | ---------------------- |
+| `llm tokenizer train --data ./text.txt --vocab-size 4096 --out ./tok.json` | Train a tokenizer on text                     | No (progress bar only) |
+| `llm tokenizer encode --tokenizer ./tok.json "Hello world"`                | Encode text to IDs                            | No                     |
+| `llm tokenizer decode --tokenizer ./tok.json 42,17,8`                      | Decode IDs to text                            | No                     |
+| `llm train --data ./corpus/**/*.txt --config small --out ./model/`         | Train a model                                 | Yes — live dashboard   |
+| `llm generate --model ./model/ --prompt "Once upon"`                       | Generate text                                 | Yes — streaming output |
+| `llm inspect --model ./model/`                                             | Print model config, param count, layer shapes | No                     |
 
 ### Train Dashboard (wolf-tui)
 
@@ -714,15 +726,15 @@ Raw concatenation of Float32 arrays in the order specified by the manifest. Each
 
 ## Numerical Stability
 
-| Issue | Symptom | Fix |
-|-------|---------|-----|
-| Softmax overflow | NaN logits | Subtract `max(scores)` before `exp()` — implemented in `softmax.wgsl` as 2-pass |
-| Exploding gradients | NaN loss after N steps | Gradient clipping (global norm ≤ 1.0) |
-| Poor weight init | Loss stuck or diverges | Xavier init for linear; embedding std ≈ 0.02 |
-| Weight tying + large embedding std | Logit overflow | Keep std at 0.02 when tying |
-| Large LR at step 0 | Immediate divergence | Linear warmup for first 100 steps |
-| FP32 precision on GPU | Rounding in long reductions | Use workgroup-level Kahan summation if needed |
-| Cross-entropy with raw softmax | Catastrophic cancellation | Fuse log-softmax + NLL into single kernel |
+| Issue                              | Symptom                     | Fix                                                                             |
+| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------------- |
+| Softmax overflow                   | NaN logits                  | Subtract `max(scores)` before `exp()` — implemented in `softmax.wgsl` as 2-pass |
+| Exploding gradients                | NaN loss after N steps      | Gradient clipping (global norm ≤ 1.0)                                           |
+| Poor weight init                   | Loss stuck or diverges      | Xavier init for linear; embedding std ≈ 0.02                                    |
+| Weight tying + large embedding std | Logit overflow              | Keep std at 0.02 when tying                                                     |
+| Large LR at step 0                 | Immediate divergence        | Linear warmup for first 100 steps                                               |
+| FP32 precision on GPU              | Rounding in long reductions | Use workgroup-level Kahan summation if needed                                   |
+| Cross-entropy with raw softmax     | Catastrophic cancellation   | Fuse log-softmax + NLL into single kernel                                       |
 
 ---
 
@@ -793,34 +805,34 @@ Raw concatenation of Float32 arrays in the order specified by the manifest. Each
 
 ## Key Concepts Learned by the End
 
-| # | Concept | Where you'll encounter it |
-|---|---------|---------------------------|
-| 1 | GPU compute programming (WGSL, workgroups, dispatch) | `packages/gpu` |
-| 2 | Tensor operations on GPU (matmul, reduce, element-wise) | `packages/tensor` |
-| 3 | Automatic differentiation (computation graph, chain rule) | `packages/autograd` |
-| 4 | Why attention works (content-based routing) | `packages/model/attention.ts` |
-| 5 | Positional embeddings (why order matters) | `packages/model/embedding.ts` |
-| 6 | Residual connections (gradient highways) | `packages/model/block.ts` |
-| 7 | Normalization (preventing activation explosion) | `packages/model/norm.ts` |
-| 8 | BPE tokenization (subword decomposition) | `packages/tokenizer/bpe.ts` |
-| 9 | Next-token prediction training objective | `packages/training/trainer.ts` |
-| 10 | AdamW optimizer (adaptive LR + weight decay) | `packages/training/adamw.ts` |
-| 11 | LR scheduling + gradient clipping (training stability) | `packages/training/scheduler.ts` |
-| 12 | Autoregressive generation + sampling strategies | `packages/inference/generate.ts` |
-| 13 | KV cache (O(n²) → O(n) inference) | `packages/inference/kv-cache.ts` |
-| 14 | Numerical stability on GPU (softmax, init, clipping) | Throughout |
+| #   | Concept                                                   | Where you'll encounter it        |
+| --- | --------------------------------------------------------- | -------------------------------- |
+| 1   | GPU compute programming (WGSL, workgroups, dispatch)      | `packages/gpu`                   |
+| 2   | Tensor operations on GPU (matmul, reduce, element-wise)   | `packages/tensor`                |
+| 3   | Automatic differentiation (computation graph, chain rule) | `packages/autograd`              |
+| 4   | Why attention works (content-based routing)               | `packages/model/attention.ts`    |
+| 5   | Positional embeddings (why order matters)                 | `packages/model/embedding.ts`    |
+| 6   | Residual connections (gradient highways)                  | `packages/model/block.ts`        |
+| 7   | Normalization (preventing activation explosion)           | `packages/model/norm.ts`         |
+| 8   | BPE tokenization (subword decomposition)                  | `packages/tokenizer/bpe.ts`      |
+| 9   | Next-token prediction training objective                  | `packages/training/trainer.ts`   |
+| 10  | AdamW optimizer (adaptive LR + weight decay)              | `packages/training/adamw.ts`     |
+| 11  | LR scheduling + gradient clipping (training stability)    | `packages/training/scheduler.ts` |
+| 12  | Autoregressive generation + sampling strategies           | `packages/inference/generate.ts` |
+| 13  | KV cache (O(n²) → O(n) inference)                         | `packages/inference/kv-cache.ts` |
+| 14  | Numerical stability on GPU (softmax, init, clipping)      | Throughout                       |
 
 ---
 
 ## References
 
-- Vaswani et al., *Attention Is All You Need* (2017) — original transformer
-- Radford et al., *Language Models are Unsupervised Multitask Learners* (2019) — GPT-2
-- Touvron et al., *LLaMA: Open and Efficient Foundation Language Models* (2023) — RMSNorm, RoPE, SwiGLU
-- Karpathy, *minbpe* (2024) — minimal BPE tokenizer reference
-- Timashov, *LLM From Scratch: Building TinyGPT* (2025) — stability tricks
-- W3C, *WebGPU Specification* (2024) — GPU compute API
-- W3C, *WGSL Specification* (2024) — shader language
+- Vaswani et al., _Attention Is All You Need_ (2017) — original transformer
+- Radford et al., _Language Models are Unsupervised Multitask Learners_ (2019) — GPT-2
+- Touvron et al., _LLaMA: Open and Efficient Foundation Language Models_ (2023) — RMSNorm, RoPE, SwiGLU
+- Karpathy, _minbpe_ (2024) — minimal BPE tokenizer reference
+- Timashov, _LLM From Scratch: Building TinyGPT_ (2025) — stability tricks
+- W3C, _WebGPU Specification_ (2024) — GPU compute API
+- W3C, _WGSL Specification_ (2024) — shader language
 - dawn-gpu/node-webgpu — Node.js WebGPU bindings
 - wolf-tui — framework-agnostic terminal UI
-- *Optimizing a WebGPU Matmul Kernel for 1TFLOP+* (2025) — kernel optimization reference
+- _Optimizing a WebGPU Matmul Kernel for 1TFLOP+_ (2025) — kernel optimization reference

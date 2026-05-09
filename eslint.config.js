@@ -12,12 +12,18 @@ export default tseslint.config(
       'coverage/**',
       'pnpm-lock.yaml',
       'eslint.config.js',
-      'vitest.config.ts',
     ],
   },
   eslint.configs.recommended,
   {
-    files: ['apps/**/src/**/*.ts', 'packages/**/src/**/*.ts'],
+    files: [
+      'vitest.config.ts',
+      'vitest.config.base.ts',
+      'apps/**/vitest.config.ts',
+      'packages/**/vitest.config.ts',
+      'apps/**/src/**/*.ts',
+      'packages/**/src/**/*.ts',
+    ],
     extends: [...tseslint.configs.strictTypeChecked],
     languageOptions: {
       parserOptions: {
@@ -40,6 +46,13 @@ export default tseslint.config(
           varsIgnorePattern: '^_',
         },
       ],
+    },
+  },
+  {
+    files: ['apps/**/vitest.config.ts', 'packages/**/vitest.config.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
     },
   },
   eslintConfigPrettier,

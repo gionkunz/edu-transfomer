@@ -11,9 +11,12 @@
         "outputPath": "packages/io/dist",
         "main": "packages/io/src/index.ts",
         "rootDir": "packages/io/src",
-        "tsConfig": "packages/io/tsconfig.json",
+        "tsConfig": "packages/io/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:io", "type:lib"]

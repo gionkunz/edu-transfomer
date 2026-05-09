@@ -11,9 +11,12 @@
         "outputPath": "packages/model/dist",
         "main": "packages/model/src/index.ts",
         "rootDir": "packages/model/src",
-        "tsConfig": "packages/model/tsconfig.json",
+        "tsConfig": "packages/model/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:model", "type:lib"]

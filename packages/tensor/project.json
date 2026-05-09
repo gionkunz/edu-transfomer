@@ -11,9 +11,12 @@
         "outputPath": "packages/tensor/dist",
         "main": "packages/tensor/src/index.ts",
         "rootDir": "packages/tensor/src",
-        "tsConfig": "packages/tensor/tsconfig.json",
+        "tsConfig": "packages/tensor/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["layer:tensor", "type:lib"]

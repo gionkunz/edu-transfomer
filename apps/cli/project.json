@@ -11,9 +11,12 @@
         "outputPath": "apps/cli/dist",
         "main": "apps/cli/src/main.ts",
         "rootDir": "apps/cli/src",
-        "tsConfig": "apps/cli/tsconfig.json",
+        "tsConfig": "apps/cli/tsconfig.build.json",
         "generatePackageJson": false
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test"
     }
   },
   "tags": ["type:app"]
