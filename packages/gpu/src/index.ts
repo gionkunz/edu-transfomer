@@ -15,6 +15,33 @@ export {
   registerBootstrapKernels,
   smokeFillPiBuffer,
 } from './bootstrap-kernels';
+export {
+  CORE_KERNEL_ADD,
+  CORE_KERNEL_GELU,
+  CORE_KERNEL_IDS,
+  CORE_KERNEL_MATMUL,
+  CORE_KERNEL_MUL,
+  CORE_KERNEL_SCALE,
+  CORE_KERNEL_TRANSPOSE,
+  dispatchAdd,
+  dispatchGelu,
+  dispatchMatMul,
+  dispatchMul,
+  dispatchScale,
+  dispatchTranspose,
+  registerCoreKernels,
+} from './core-kernels';
+export {
+  cpuAdd,
+  cpuGelu,
+  cpuMatMul,
+  cpuMul,
+  cpuScale,
+  cpuTranspose,
+  geluScalar,
+  GELU_CUBE_COEF,
+  GELU_TANH_COEF,
+} from './cpu-reference';
 export { GpuContext, probeWebGpu, type GpuBootstrapOptions } from './device';
 export { KernelRegistry } from './kernel-registry';
 export {
