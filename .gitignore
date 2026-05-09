@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Nx
+.nx/cache
+.nx/workspace-data
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/

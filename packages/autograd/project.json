@@ -1,0 +1,20 @@
+{
+  "name": "@llm-transformer-diy/autograd",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/autograd/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "packages/autograd/dist",
+        "main": "packages/autograd/src/index.ts",
+        "rootDir": "packages/autograd/src",
+        "tsConfig": "packages/autograd/tsconfig.json",
+        "generatePackageJson": false
+      }
+    }
+  },
+  "tags": ["layer:autograd", "type:lib"]
+}

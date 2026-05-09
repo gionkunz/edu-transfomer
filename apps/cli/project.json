@@ -1,0 +1,20 @@
+{
+  "name": "@llm-transformer-diy/cli",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/cli/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "apps/cli/dist",
+        "main": "apps/cli/src/main.ts",
+        "rootDir": "apps/cli/src",
+        "tsConfig": "apps/cli/tsconfig.json",
+        "generatePackageJson": false
+      }
+    }
+  },
+  "tags": ["type:app"]
+}

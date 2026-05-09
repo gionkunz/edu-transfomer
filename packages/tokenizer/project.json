@@ -1,0 +1,20 @@
+{
+  "name": "@llm-transformer-diy/tokenizer",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/tokenizer/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "packages/tokenizer/dist",
+        "main": "packages/tokenizer/src/index.ts",
+        "rootDir": "packages/tokenizer/src",
+        "tsConfig": "packages/tokenizer/tsconfig.json",
+        "generatePackageJson": false
+      }
+    }
+  },
+  "tags": ["layer:tokenizer", "type:lib"]
+}

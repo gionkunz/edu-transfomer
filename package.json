@@ -1,0 +1,28 @@
+{
+  "name": "llm-transformer-diy",
+  "private": true,
+  "type": "module",
+  "description": "Educational transformer stack (TypeScript, WebGPU WGSL, autograd) — monorepo root",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "scripts": {
+    "build": "nx run-many -t build --all",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@nx/js": "22.7.1",
+    "@types/node": "^22.19.18",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "nx": "22.7.1",
+    "prettier": "^3.7.4",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.46.5",
+    "vitest": "^3.2.4"
+  }
+}

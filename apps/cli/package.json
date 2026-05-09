@@ -1,0 +1,15 @@
+{
+  "name": "@llm-transformer-diy/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "`llm` entrypoint placeholder — scaffold only until CLI/TUI proposals land",
+  "main": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "dependencies": {
+    "@llm-transformer-diy/inference": "workspace:*",
+    "@llm-transformer-diy/tokenizer": "workspace:*",
+    "@llm-transformer-diy/training": "workspace:*"
+  },
+  "files": ["dist"]
+}

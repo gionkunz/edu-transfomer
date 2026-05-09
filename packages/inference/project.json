@@ -1,0 +1,20 @@
+{
+  "name": "@llm-transformer-diy/inference",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/inference/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "packages/inference/dist",
+        "main": "packages/inference/src/index.ts",
+        "rootDir": "packages/inference/src",
+        "tsConfig": "packages/inference/tsconfig.json",
+        "generatePackageJson": false
+      }
+    }
+  },
+  "tags": ["layer:inference", "type:lib"]
+}

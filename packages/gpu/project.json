@@ -1,0 +1,20 @@
+{
+  "name": "@llm-transformer-diy/gpu",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/gpu/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "packages/gpu/dist",
+        "main": "packages/gpu/src/index.ts",
+        "rootDir": "packages/gpu/src",
+        "tsConfig": "packages/gpu/tsconfig.json",
+        "generatePackageJson": false
+      }
+    }
+  },
+  "tags": ["layer:gpu", "type:lib"]
+}
