@@ -11,8 +11,13 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@llm-transformer-diy/gpu": "workspace:*"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.69"
   }
 }

@@ -305,13 +305,21 @@ This is a naive matmul — we'll optimize with tiled shared-memory access in lat
 
 ### Design
 
+The tensor layer is **functional**: plain immutable data records plus free functions. There are no classes, no methods on `Tensor`, and no module-level mutable state. Every function that allocates or dispatches takes a `TensorRuntime` as its first argument; pure metadata transforms (e.g. `reshape`) take none.
+
 ```typescript
-interface TensorData {
+interface Tensor {
   readonly shape: readonly number[];
-  readonly strides: readonly number[];
+  readonly strides: readonly number[]; // row-major, contiguous in the current scope
   readonly dtype: 'f32';
-  readonly gpuBuffer: GPUBuffer;
+  readonly device: 'gpu';
+  readonly buffer: GPUBuffer;
   readonly length: number; // total elements
+}
+
+interface TensorRuntime {
+  readonly ctx: GpuContext;
+  readonly registry: KernelRegistry;
 }
 ```
 
@@ -323,26 +331,29 @@ All tensors live on GPU. We only read back to CPU when:
 
 ### Key operations
 
-The `Tensor` class provides methods that dispatch to the appropriate WGSL kernel:
+Op functions are free, return new `Tensor` records, and never mutate inputs. They route to kernels in `packages/gpu`'s registry under stable IDs (`core.matmul`, `core.add`, …):
 
-- `Tensor.matmul(other)` → dispatches `matmul.wgsl`
-- `Tensor.add(other)` → dispatches `elementwise.wgsl` (add variant)
-- `Tensor.mul(other)` → dispatches `elementwise.wgsl` (mul variant)
-- `Tensor.gelu()` → dispatches `elementwise.wgsl` (gelu variant)
-- `Tensor.softmax(dim)` → dispatches `softmax.wgsl`
-- `Tensor.reshape(shape)` → no-op (just metadata change, same buffer)
-- `Tensor.transpose(dim0, dim1)` → dispatches `transpose.wgsl` (or metadata if contiguous)
+- `matmul(rt, a, b)` → dispatches `core.matmul` (rank-2 only in the current scope)
+- `add(rt, a, b)` → dispatches `core.add` (equal shape; no broadcasting yet)
+- `mul(rt, a, b)` → dispatches `core.mul` (equal shape; no broadcasting yet)
+- `scale(rt, a, k)` → dispatches `core.scale`
+- `gelu(rt, a)` → dispatches `core.gelu`
+- `transpose(rt, a)` → dispatches `core.transpose` (rank-2 only in the current scope)
+- `softmax(rt, a, dim)` → dispatches `softmax.wgsl` _(planned: kernel and op land in a later change)_
+- `reshape(a, newShape)` → pure metadata transform (no `rt`, shares the same `GPUBuffer`; rejects non-contiguous inputs)
+
+Composition is plain function nesting: `gelu(rt, add(rt, x, b))`.
 
 ### Initialization
 
 ```typescript
-Tensor.zeros(shape); // GPU buffer filled with 0
-Tensor.ones(shape); // GPU buffer filled with 1
-Tensor.randn(shape, std); // Gaussian random (Box-Muller on GPU or seed from CPU)
-Tensor.xavier(shape); // Xavier/Glorot initialization
-Tensor.fromArray(data, shape); // Upload Float32Array to GPU
-tensor.toArray(); // Download GPUBuffer to Float32Array (async)
+createZeros(rt, shape); // allocate GPU buffer and zero-fill
+createFromArray(rt, data, shape); // allocate GPU buffer and upload Float32Array
+toArray(rt, t); // async readback: GPUBuffer → Float32Array
+destroy(t); // release the GPU buffer (no internal alive-flag)
 ```
+
+`createOnes`, `createRandn` (Box-Muller on GPU or seed from CPU), and `createXavier` (Xavier/Glorot) are planned for a later **tensor-init** change.
 
 ---
 

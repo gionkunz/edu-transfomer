@@ -1,0 +1,153 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion --
+ * Float32Array reads are typed `number | undefined` under
+ * `noUncheckedIndexedAccess`; lengths are checked before iterating.
+ */
+import {
+  cpuAdd,
+  cpuGelu,
+  cpuMatMul,
+  cpuMul,
+  cpuScale,
+  cpuTranspose,
+  GpuContext,
+  KernelRegistry,
+  probeWebGpu,
+  registerCoreKernels,
+} from '@llm-transformer-diy/gpu';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
+import { createFromArray, createZeros, destroy, toArray } from './tensor';
+import type { Tensor, TensorRuntime } from './types';
+
+const webgpuAvailable = await probeWebGpu();
+
+function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
+  expect(actual.length).toBe(expected.length);
+  for (let i = 0; i < actual.length; i++) {
+    expect(actual[i]).toBeCloseTo(expected[i]!, 5);
+  }
+}
+
+describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
+  let rt: TensorRuntime;
+  /** Tensors registered here are destroyed in afterEach; `null` slots indicate a tensor whose buffer is shared. */
+  const allocatedThisTest: Tensor[] = [];
+
+  function track<T extends Tensor>(t: T): T {
+    allocatedThisTest.push(t);
+    return t;
+  }
+
+  beforeAll(async () => {
+    const ctx = await GpuContext.create();
+    const registry = new KernelRegistry();
+    registerCoreKernels(ctx.device, registry);
+    rt = { ctx, registry };
+  });
+
+  afterEach(() => {
+    while (allocatedThisTest.length > 0) {
+      const t = allocatedThisTest.pop();
+      if (t) {
+        try {
+          destroy(t);
+        } catch {
+          // Buffer may already be destroyed via reshape sharing — ignore.
+        }
+      }
+    }
+  });
+
+  it('createFromArray + toArray round-trips data', async () => {
+    const data = new Float32Array([1, 2, 3, 4, 5, 6]);
+    const t = track(createFromArray(rt, data, [2, 3]));
+    expect(t.shape).toEqual([2, 3]);
+    expect(t.strides).toEqual([3, 1]);
+    expect(t.length).toBe(6);
+    expectCloseVec(await toArray(rt, t), data);
+  });
+
+  it('createZeros allocates a zero-filled buffer of the requested shape', async () => {
+    const t = track(createZeros(rt, [2, 4]));
+    expect(t.length).toBe(8);
+    expectCloseVec(await toArray(rt, t), new Float32Array(8));
+  });
+
+  it('matmul matches the CPU reference for non-square shapes', async () => {
+    const M = 3;
+    const K = 2;
+    const N = 4;
+    const aData = Float32Array.from({ length: M * K }, (_, i) => i + 1);
+    const bData = Float32Array.from({ length: K * N }, (_, i) => i * 0.5 - 1);
+
+    const a = track(createFromArray(rt, aData, [M, K]));
+    const b = track(createFromArray(rt, bData, [K, N]));
+    const c = track(matmul(rt, a, b));
+
+    expect(c.shape).toEqual([M, N]);
+    expectCloseVec(await toArray(rt, c), cpuMatMul(aData, bData, M, N, K));
+  });
+
+  it('add / mul / scale match CPU references on a non-trivial vector', async () => {
+    const n = 64;
+    const aData = Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.1));
+    const bData = Float32Array.from({ length: n }, (_, i) => Math.cos(i * 0.07));
+
+    const a = track(createFromArray(rt, aData, [n]));
+    const b = track(createFromArray(rt, bData, [n]));
+
+    const sumT = track(add(rt, a, b));
+    const prodT = track(mul(rt, a, b));
+    const scaledT = track(scale(rt, a, 2.5));
+
+    expectCloseVec(await toArray(rt, sumT), cpuAdd(aData, bData, n));
+    expectCloseVec(await toArray(rt, prodT), cpuMul(aData, bData, n));
+    expectCloseVec(await toArray(rt, scaledT), cpuScale(aData, 2.5, n));
+  });
+
+  it('gelu matches the CPU reference', async () => {
+    const n = 32;
+    const data = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
+    const t = track(createFromArray(rt, data, [n]));
+    const out = track(gelu(rt, t));
+    expectCloseVec(await toArray(rt, out), cpuGelu(data, n));
+  });
+
+  it('transpose matches the CPU reference for a non-square matrix', async () => {
+    const rows = 3;
+    const cols = 5;
+    const data = Float32Array.from({ length: rows * cols }, (_, i) => i * 0.25 - 2);
+    const t = track(createFromArray(rt, data, [rows, cols]));
+    const tT = track(transpose(rt, t));
+    expect(tT.shape).toEqual([cols, rows]);
+    expectCloseVec(await toArray(rt, tT), cpuTranspose(data, rows, cols));
+  });
+
+  it('reshape preserves data on a GPU round-trip and shares the underlying buffer', async () => {
+    const data = Float32Array.from({ length: 6 }, (_, i) => i + 1);
+    const a = track(createFromArray(rt, data, [2, 3]));
+    const b = reshape(a, [3, 2]);
+    // Don't track `b` — it shares `a.buffer`; destroying `a` releases both.
+    expect(b.buffer).toBe(a.buffer);
+    expect(b.shape).toEqual([3, 2]);
+    expectCloseVec(await toArray(rt, b), data);
+  });
+
+  it('matmul throws on inner-dim mismatch before any dispatch', () => {
+    const a = track(createFromArray(rt, new Float32Array(6), [2, 3]));
+    const b = track(createFromArray(rt, new Float32Array(8), [4, 2]));
+    expect(() => matmul(rt, a, b)).toThrow(/inner dimensions must match/);
+  });
+
+  it('add throws on shape mismatch before any dispatch', () => {
+    const a = track(createFromArray(rt, new Float32Array(6), [2, 3]));
+    const b = track(createFromArray(rt, new Float32Array(4), [2, 2]));
+    expect(() => add(rt, a, b)).toThrow(/shapes differ/);
+  });
+
+  it('transpose throws on rank ≠ 2 before any dispatch', () => {
+    const a = track(createFromArray(rt, new Float32Array(8), [2, 2, 2]));
+    expect(() => transpose(rt, a)).toThrow(/expected rank 2/);
+  });
+});

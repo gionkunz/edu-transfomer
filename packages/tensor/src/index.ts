@@ -1,8 +1,26 @@
-import { GPU_LAYER_MARKER } from '@llm-transformer-diy/gpu';
+/**
+ * `@llm-transformer-diy/tensor` — functional tensor layer.
+ *
+ * Public surface is **data + free functions**. There are no classes, no methods
+ * on `Tensor`, and no module-level mutable state (no global default runtime).
+ * Every function that allocates or dispatches takes a {@link TensorRuntime} as
+ * its first argument; {@link reshape} is a pure metadata transform and takes none.
+ */
 
-/** Tensor primitive — scaffold only */
-export const TENSOR_LAYER_MARKER = Symbol.for('@llm-transformer-diy/tensor');
+/**
+ * Layer marker retained for the `@llm-transformer-diy/autograd` stub's dependency-edge
+ * import. Will be removed once autograd uses real tensor types.
+ */
+export const TENSOR_LAYER_MARKER: unique symbol = Symbol.for('@llm-transformer-diy/tensor');
 
-export function __tensorDependsOnGpu(): typeof GPU_LAYER_MARKER {
-  return GPU_LAYER_MARKER;
-}
+export type { Device, DType, Tensor, TensorRuntime } from './types';
+export {
+  assertRank,
+  assertSameShape,
+  computeContiguousStrides,
+  isContiguous,
+  productOfShape,
+  sameShape,
+} from './shape';
+export { createFromArray, createZeros, destroy, toArray } from './tensor';
+export { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
