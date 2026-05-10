@@ -1,0 +1,95 @@
+import { add as tensorAdd } from '@llm-transformer-diy/tensor';
+import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
+
+import type { Operation, Parameter, Variable } from './types';
+
+/**
+ * Process-monotonic counter for {@link Variable.id}. This is the **only**
+ * module-level mutable state in `@llm-transformer-diy/autograd`. Reset only on
+ * Node.js process restart; cross-process identity is undefined.
+ */
+let nextVariableId = 0;
+
+/** Allocate the next id. Internal helper, not re-exported. */
+function nextId(): number {
+  const id = nextVariableId;
+  nextVariableId += 1;
+  return id;
+}
+
+/**
+ * Build a leaf {@link Variable} that has no creator. Use for external inputs
+ * (training batches, mask tensors). For trainable leaves, prefer
+ * {@link createParameter}, which always sets `requiresGrad: true`.
+ */
+export function createLeafVariable(tensor: Tensor, requiresGrad: boolean): Variable {
+  return {
+    id: nextId(),
+    tensor,
+    requiresGrad,
+    creator: null,
+    parents: [],
+    grad: null,
+  };
+}
+
+/**
+ * Build a trainable leaf — a {@link Parameter} with `requiresGrad: true` and
+ * `creator: null`. This is the canonical constructor for any tensor that
+ * should accumulate gradients during backward and be tracked by a
+ * {@link import('./types').ParameterRegistry}.
+ */
+export function createParameter(tensor: Tensor): Parameter {
+  return {
+    id: nextId(),
+    tensor,
+    requiresGrad: true,
+    creator: null,
+    parents: [],
+    grad: null,
+  };
+}
+
+/**
+ * Build an internal graph node — a {@link Variable} produced by an op wrapper.
+ * The caller passes the freshly-computed forward tensor and the bound
+ * {@link Operation}; `parents` mirrors `op.inputs` so the topo walk avoids a
+ * null-check per node.
+ *
+ * Not re-exported from the package index — only `./ops` constructs internal
+ * nodes.
+ */
+export function createInternalVariable(
+  tensor: Tensor,
+  op: Operation,
+  requiresGrad: boolean,
+): Variable {
+  return {
+    id: nextId(),
+    tensor,
+    requiresGrad,
+    creator: op,
+    parents: op.inputs,
+    grad: null,
+  };
+}
+
+/**
+ * Accumulate `contribution` onto `target.grad`.
+ *
+ * - When `target.grad === null`, assigns the contribution directly (no
+ *   `tensor.add` dispatch — saves a buffer allocation on the common single-path
+ *   case).
+ * - Otherwise, allocates a fresh sum via `tensor.add(rt, target.grad,
+ *   contribution)` and reassigns.
+ *
+ * This helper and {@link import('./parameter-registry').zeroGrad} are the
+ * **only** writes to {@link Variable.grad} in `@llm-transformer-diy/autograd`.
+ */
+export function accumulateGrad(rt: TensorRuntime, target: Variable, contribution: Tensor): void {
+  if (target.grad === null) {
+    target.grad = contribution;
+    return;
+  }
+  target.grad = tensorAdd(rt, target.grad, contribution);
+}
