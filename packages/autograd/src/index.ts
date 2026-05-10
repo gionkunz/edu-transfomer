@@ -40,5 +40,18 @@ export {
   totalParams,
   zeroGrad,
 } from './parameter-registry';
-export { add, gelu, matmul, mul, reshape, scale, softmax, transpose } from './ops';
+export {
+  add,
+  crossEntropyMeanFromLogits,
+  crossEntropyRowsFromLogits,
+  embedding,
+  gelu,
+  matmul,
+  mul,
+  reshape,
+  scale,
+  softmax,
+  sumFlat,
+  transpose,
+} from './ops';
 export { backward, topologicalOrder } from './backward';

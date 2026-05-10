@@ -218,3 +218,99 @@ export function cpuRmsNorm(
   }
   return out;
 }
+
+/** Gather rows from weight matrix [vocab, embed_dim] flat using u32 indices. */
+export function cpuEmbeddingGather(
+  weights: Float32Array,
+  indices: Uint32Array,
+  vocabSize: number,
+  embedDim: number,
+): Float32Array {
+  const n = indices.length;
+  const out = new Float32Array(n * embedDim);
+  const maxIx = vocabSize * embedDim;
+  for (let t = 0; t < n; t++) {
+    const vid = indices[t]!;
+    const baseOut = t * embedDim;
+    const baseW = vid * embedDim;
+    if (baseW + embedDim > maxIx) {
+      throw new Error(
+        `cpuEmbeddingGather: token ${String(t)} vocab id ${String(vid)} exceeds weight table bounds`,
+      );
+    }
+    for (let d = 0; d < embedDim; d++) {
+      out[baseOut + d] = weights[baseW + d]!;
+    }
+  }
+  return out;
+}
+
+/** Embedding backward: dense gradWeights [vocab*embed_dim] accumulator from token grads. */
+export function cpuEmbeddingScatterAccum(
+  gradTokens: Float32Array,
+  indices: Uint32Array,
+  vocabSize: number,
+  embedDim: number,
+): Float32Array {
+  const gradW = new Float32Array(vocabSize * embedDim);
+  const n = indices.length;
+  for (let t = 0; t < n; t++) {
+    const vid = indices[t]!;
+    const bt = t * embedDim;
+    const bw = vid * embedDim;
+    for (let d = 0; d < embedDim; d++) {
+      const ix = bw + d;
+      gradW[ix] = (gradW[ix] ?? 0) + gradTokens[bt + d]!;
+    }
+  }
+  return gradW;
+}
+
+/** Per-row cross-entropy from logits (numerically identical to WGSL helper). */
+export function cpuCrossEntropyFromLogits(
+  logits: Float32Array,
+  targets: Uint32Array,
+  rows: number,
+  cols: number,
+): Float32Array {
+  const losses = new Float32Array(rows);
+  for (let row = 0; row < rows; row++) {
+    const base = row * cols;
+    let m = logits[base]!;
+    for (let j = 1; j < cols; j++) {
+      m = Math.max(m, logits[base + j]!);
+    }
+    let sumexp = 0;
+    for (let j = 0; j < cols; j++) {
+      sumexp += Math.exp(logits[base + j]! - m);
+    }
+    const t = targets[row]!;
+    losses[row] = Math.log(sumexp) + m - logits[base + t]!;
+  }
+  return losses;
+}
+
+/**
+ * Gradient of weighted sum Σ_i upstream[i] * CE_row(logits[:,], target[i]) w.r.t. logits,
+ * assuming ∂CE/∂logits follows softmax probabilities `probs` (row-wise).
+ */
+export function cpuCrossEntropyLogitsGradFromProbs(
+  probs: Float32Array,
+  targets: Uint32Array,
+  upstream: Float32Array,
+  rows: number,
+  cols: number,
+): Float32Array {
+  const out = new Float32Array(rows * cols);
+  for (let row = 0; row < rows; row++) {
+    const tgt = targets[row]!;
+    const u = upstream[row]!;
+    const base = row * cols;
+    for (let col = 0; col < cols; col++) {
+      const p = probs[base + col]!;
+      const delta = col === tgt ? u * (p - 1) : u * p;
+      out[base + col] = delta;
+    }
+  }
+  return out;
+}

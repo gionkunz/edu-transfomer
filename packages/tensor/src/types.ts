@@ -2,8 +2,8 @@
 
 import type { GpuContext, KernelRegistry } from '@llm-transformer-diy/gpu';
 
-/** Single supported element type for now — see `tensor-bootstrap` proposal. */
-export type DType = 'f32';
+/** Scalar element dtypes for **`Tensor`** storage (matches WGSL **`f32`** / **`u32`**). */
+export type DType = 'f32' | 'u32';
 
 /** Single supported storage backend for now — see `tensor-bootstrap` proposal. */
 export type Device = 'gpu';

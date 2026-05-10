@@ -53,3 +53,23 @@ export function loadSoftmaxBackwardWgsl(): string {
 export function loadRmsNormWgsl(): string {
   return loadWgsl('./rmsnorm.wgsl');
 }
+
+export function loadEmbeddingGatherWgsl(): string {
+  return loadWgsl('./embedding-gather.wgsl');
+}
+
+export function loadEmbeddingScatterAccumWgsl(): string {
+  return loadWgsl('./embedding-scatter-accum.wgsl');
+}
+
+export function loadCrossEntropyFromLogitsWgsl(): string {
+  return loadWgsl('./cross-entropy-from-logits.wgsl');
+}
+
+export function loadCrossEntropyLogitsGradWgsl(): string {
+  return loadWgsl('./cross-entropy-logits-grad.wgsl');
+}
+
+export function loadBroadcastFillScalarWgsl(): string {
+  return loadWgsl('./broadcast-fill-scalar.wgsl');
+}

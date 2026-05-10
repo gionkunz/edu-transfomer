@@ -15,6 +15,7 @@ export const TENSOR_LAYER_MARKER: unique symbol = Symbol.for('@llm-transformer-d
 
 export type { Device, DType, Tensor, TensorRuntime } from './types';
 export {
+  assertDtype,
   assertRank,
   assertSameShape,
   computeContiguousStrides,
@@ -22,16 +23,30 @@ export {
   productOfShape,
   sameShape,
 } from './shape';
-export { createFromArray, createZeros, destroy, toArray } from './tensor';
+export {
+  createIndices,
+  createFromArray,
+  createZeros,
+  destroy,
+  makeIndicesTensor,
+  readIndices,
+  toArray,
+} from './tensor';
 export {
   add,
+  broadcastFillFromScalar,
+  crossEntropyLogitsGrad,
+  crossEntropyRowsFromLogits,
+  embedding,
   gelu,
   geluBackward,
   matmul,
   mul,
   reshape,
   scale,
+  scatterEmbeddingAccum,
   softmax,
   softmaxBackward,
+  sumFlat,
   transpose,
 } from './ops';

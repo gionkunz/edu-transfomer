@@ -1,11 +1,16 @@
 import type { GpuContext } from './device';
 import type { KernelRegistry } from './kernel-registry';
 import {
+  loadBroadcastFillScalarWgsl,
+  loadCrossEntropyFromLogitsWgsl,
+  loadCrossEntropyLogitsGradWgsl,
   loadElementwiseAddWgsl,
   loadElementwiseGeluBackwardWgsl,
   loadElementwiseGeluWgsl,
   loadElementwiseMulWgsl,
   loadElementwiseScaleWgsl,
+  loadEmbeddingGatherWgsl,
+  loadEmbeddingScatterAccumWgsl,
   loadMatMulWgsl,
   loadReduceMaxWgsl,
   loadReduceSumWgsl,
@@ -52,6 +57,24 @@ export const CORE_KERNEL_SOFTMAX_BACKWARD = 'core.softmax_backward';
 /** Row-wise RMSNorm of [rows, cols] f32 matrix with learned `gamma: [cols]`. */
 export const CORE_KERNEL_RMSNORM = 'core.rmsnorm';
 
+/** Row-major gather of `[vocab, embed]` by u32 indices → `[tokens, embed]`. */
+export const CORE_KERNEL_EMBEDDING_GATHER = 'core.embedding_gather';
+
+/**
+ * Atomic accumulation of `[tokens, embed]` token gradients into `[vocab, embed]` dense
+ * grad backing (must start zero-filled).
+ */
+export const CORE_KERNEL_EMBEDDING_SCATTER_ACCUM = 'core.embedding_scatter_accum';
+
+/** Stable per-example cross-entropy from raw logits `[rows, classes]`. */
+export const CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS = 'core.cross_entropy_from_logits';
+
+/** ∂L/∂logits given softmax probs and upstream per-row grads. */
+export const CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD = 'core.cross_entropy_logits_grad';
+
+/** `out[i] = scalar[0]` for length `n` (broadcast from a `[1]` buffer). */
+export const CORE_KERNEL_BROADCAST_FILL_SCALAR = 'core.broadcast_fill_scalar';
+
 /** All core numeric kernels registered by {@link registerCoreKernels}. */
 export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MATMUL,
@@ -66,6 +89,11 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_SOFTMAX,
   CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_RMSNORM,
+  CORE_KERNEL_EMBEDDING_GATHER,
+  CORE_KERNEL_EMBEDDING_SCATTER_ACCUM,
+  CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
+  CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
+  CORE_KERNEL_BROADCAST_FILL_SCALAR,
 ] as const;
 
 const WGSL_MAIN = 'main';
@@ -156,6 +184,56 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   registry.register(
     CORE_KERNEL_RMSNORM,
     make(loadRmsNormWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
+
+  // embedding_gather: uniform(num_tokens, embed_dim,...), weights, indices u32, out
+  registry.register(
+    CORE_KERNEL_EMBEDDING_GATHER,
+    make(loadEmbeddingGatherWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+
+  // embedding_scatter_accum: grad_tokens + indices readonly; grad_weights_atomic read-write
+  registry.register(
+    CORE_KERNEL_EMBEDDING_SCATTER_ACCUM,
+    make(loadEmbeddingScatterAccumWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+
+  // cross_entropy_forward: logits, targets(u32), per-row losses
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
+    make(loadCrossEntropyFromLogitsWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+
+  // cross_entropy logits grad: probs, targets, upstream_per_row, grad_logits
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
+    make(loadCrossEntropyLogitsGradWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+
+  registry.register(
+    CORE_KERNEL_BROADCAST_FILL_SCALAR,
+    make(loadBroadcastFillScalarWgsl(), ['uniform', 'read-only-storage', 'storage']),
   );
 }
 
@@ -525,6 +603,163 @@ export function dispatchRmsNorm(
     registry.get(CORE_KERNEL_RMSNORM),
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
     rows,
+  );
+  u.destroy();
+}
+
+/**
+ * Embedding gather: reads weight table **`[vocab, embed]`** row-major (`weights`),
+ * gathers rows indicated by **`indices`** (length `numTokens`). Writes **`out`** of
+ * length `numTokens * embedDim` (**`[numTokens, embed]`** contiguous).
+ */
+export function dispatchEmbeddingGather(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  weights: GPUBuffer,
+  indices: GPUBuffer,
+  out: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingGather: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(`dispatchEmbeddingGather: embedDim must be positive (got ${String(embedDim)})`);
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_GATHER),
+    [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
+/**
+ * Scatter **`[tokens, embed]`** token gradients into **`[vocab, embed]`**. The **`gradWeights`**
+ * buffer MUST start zero‑filled (CAS float atomics).
+ */
+export function dispatchEmbeddingScatterAccum(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradTokens: GPUBuffer,
+  indices: GPUBuffer,
+  gradWeights: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccum: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccum: embedDim must be positive (got ${String(embedDim)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_SCATTER_ACCUM),
+    [bg(0, u), bg(1, gradTokens), bg(2, indices), bg(3, gradWeights)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
+/** Per‑row softmax cross‑entropy losses from logits and u32 targets. */
+export function dispatchCrossEntropyFromLogits(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  logits: GPUBuffer,
+  targets: GPUBuffer,
+  lossesOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyFromLogits', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS),
+    [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
+    rows,
+  );
+  u.destroy();
+}
+
+/**
+ * ∂Σ_k upstream_row[k] · CE(logits_row_k, target_k) / ∂logits given row‑wise **`probs`**
+ * (**softmax logits**) per row.
+ */
+export function dispatchCrossEntropyLogitsGrad(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  probs: GPUBuffer,
+  targets: GPUBuffer,
+  upstreamPerRow: GPUBuffer,
+  gradLogitsOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyLogitsGrad', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD),
+    [bg(0, u), bg(1, probs), bg(2, targets), bg(3, upstreamPerRow), bg(4, gradLogitsOut)],
+    rows * cols,
+  );
+  u.destroy();
+}
+
+/** Writes **`out[i] = scalar[0]`** for `i ∈ [0, n)`. */
+export function dispatchBroadcastFillScalar(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  scalar: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+): void {
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`dispatchBroadcastFillScalar: n must be positive (got ${String(n)})`);
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, n, true);
+    v.setUint32(4, 0, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_BROADCAST_FILL_SCALAR),
+    [bg(0, u), bg(1, scalar), bg(2, out)],
+    n,
   );
   u.destroy();
 }

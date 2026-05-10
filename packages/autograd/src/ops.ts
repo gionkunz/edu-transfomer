@@ -1,13 +1,19 @@
 import {
   add as tensorAdd,
+  broadcastFillFromScalar as tensorBroadcastFillFromScalar,
+  crossEntropyLogitsGrad as tensorCrossEntropyLogitsGrad,
+  crossEntropyRowsFromLogits as tensorCrossEntropyRowsFromLogits,
+  embedding as tensorEmbedding,
   gelu as tensorGelu,
   geluBackward as tensorGeluBackward,
   matmul as tensorMatmul,
   mul as tensorMul,
   reshape as tensorReshape,
   scale as tensorScale,
+  scatterEmbeddingAccum as tensorScatterEmbeddingAccum,
   softmax as tensorSoftmax,
   softmaxBackward as tensorSoftmaxBackward,
+  sumFlat as tensorSumFlat,
   transpose as tensorTranspose,
 } from '@llm-transformer-diy/tensor';
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
@@ -166,4 +172,98 @@ export function reshape(a: Variable, newShape: readonly number[]): Variable {
       a.requiresGrad ? tensorReshape(gradOutput, originalShape) : null,
     ],
   }));
+}
+
+/**
+ * Embedding gather (**`weights: [vocab, embed]`**, **`indices: [tokens]`** `u32`) with grads on **`weights`**.
+ */
+export function embedding(rt: TensorRuntime, weights: Variable, indices: Variable): Variable {
+  if (indices.requiresGrad) {
+    throw new Error('embedding: integer indices cannot require gradients');
+  }
+  if (indices.tensor.dtype !== 'u32') {
+    throw new Error('embedding: indices tensor dtype must be u32 (use tensor.createIndices)');
+  }
+  const out = tensorEmbedding(rt, weights.tensor, indices.tensor);
+  const vocabDim = weights.tensor.shape[0];
+  if (vocabDim === undefined) {
+    throw new Error('embedding: weight tensor must expose `shape[0]` (vocabulary size)');
+  }
+  const vocab = vocabDim;
+  return liftOp(out, [weights, indices], () => ({
+    name: 'embedding',
+    inputs: [weights, indices],
+    backward: (rtBackward, gradOutput) => [
+      weights.requiresGrad
+        ? tensorScatterEmbeddingAccum(rtBackward, indices.tensor, gradOutput, vocab)
+        : null,
+      null,
+    ],
+  }));
+}
+
+/**
+ * Per‑row softmax cross‑entropy (**`targets`** **[rows]** `u32`). Saves **`tensor.softmax(logits)`** for logits gradients.
+ */
+export function crossEntropyRowsFromLogits(
+  rt: TensorRuntime,
+  logits: Variable,
+  targets: Variable,
+): Variable {
+  if (targets.requiresGrad) {
+    throw new Error('crossEntropyRowsFromLogits: class indices cannot require gradients');
+  }
+  if (targets.tensor.dtype !== 'u32') {
+    throw new Error('crossEntropyRowsFromLogits: targets dtype must be u32');
+  }
+  const probsTensor = tensorSoftmax(rt, logits.tensor);
+  const losses = tensorCrossEntropyRowsFromLogits(rt, logits.tensor, targets.tensor);
+  return liftOp(losses, [logits, targets], () => ({
+    name: 'cross_entropy_rows_logits',
+    inputs: [logits, targets],
+    backward: (rtBackward, gradOutput) => [
+      logits.requiresGrad
+        ? tensorCrossEntropyLogitsGrad(rtBackward, probsTensor, targets.tensor, gradOutput)
+        : null,
+      null,
+    ],
+  }));
+}
+
+/**
+ * Sum **`rank‑1`** axis into **`[1]`**. Backward spreads the **`[1]`** upstream gradient uniformly.
+ */
+export function sumFlat(rt: TensorRuntime, x: Variable): Variable {
+  const out = tensorSumFlat(rt, x.tensor);
+  const len = x.tensor.shape[0];
+  if (len === undefined) {
+    throw new Error('sumFlat: rank-1 tensors must expose `shape[0]`');
+  }
+  const length = len;
+  return liftOp(out, [x], () => ({
+    name: 'sum_flat',
+    inputs: [x],
+    backward: (rtBackward, gradOutput) => [
+      x.requiresGrad ? tensorBroadcastFillFromScalar(rtBackward, gradOutput, length) : null,
+    ],
+  }));
+}
+
+/** Mean softmax cross‑entropy (**`Σ rowLoss / rows`**) built from **`crossEntropyRowsFromLogits` + **`sum_flat`**. */
+export function crossEntropyMeanFromLogits(
+  rt: TensorRuntime,
+  logits: Variable,
+  targets: Variable,
+): Variable {
+  const rowCount = logits.tensor.shape[0];
+  if (rowCount === undefined) {
+    throw new Error('crossEntropyMeanFromLogits: logits must expose `shape[0]` row count');
+  }
+  const rows = rowCount;
+  if (!(rows > 0)) {
+    throw new Error('crossEntropyMeanFromLogits: logits.rows must be positive');
+  }
+  const rowsLoss = crossEntropyRowsFromLogits(rt, logits, targets);
+  const pooled = sumFlat(rt, rowsLoss);
+  return scale(rt, pooled, 1 / rows);
 }

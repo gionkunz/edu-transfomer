@@ -5,9 +5,13 @@ export const GPU_LAYER_MARKER = Symbol.for('@llm-transformer-diy/gpu');
 
 export {
   createFloat32StorageBuffer,
+  createUint32StorageBuffer,
   float32ByteLength,
   readFloat32Buffer,
+  readUint32Buffer,
+  uint32ByteLength,
   writeFloat32Buffer,
+  writeUint32Buffer,
 } from './buffer';
 export {
   BOOTSTRAP_KERNEL_FILL_PI,
@@ -17,6 +21,11 @@ export {
 } from './bootstrap-kernels';
 export {
   CORE_KERNEL_ADD,
+  CORE_KERNEL_BROADCAST_FILL_SCALAR,
+  CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
+  CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
+  CORE_KERNEL_EMBEDDING_GATHER,
+  CORE_KERNEL_EMBEDDING_SCATTER_ACCUM,
   CORE_KERNEL_GELU,
   CORE_KERNEL_GELU_BACKWARD,
   CORE_KERNEL_IDS,
@@ -30,6 +39,11 @@ export {
   CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_TRANSPOSE,
   dispatchAdd,
+  dispatchBroadcastFillScalar,
+  dispatchCrossEntropyFromLogits,
+  dispatchCrossEntropyLogitsGrad,
+  dispatchEmbeddingGather,
+  dispatchEmbeddingScatterAccum,
   dispatchGelu,
   dispatchGeluBackward,
   dispatchMatMul,
@@ -45,6 +59,10 @@ export {
 } from './core-kernels';
 export {
   cpuAdd,
+  cpuCrossEntropyFromLogits,
+  cpuCrossEntropyLogitsGradFromProbs,
+  cpuEmbeddingGather,
+  cpuEmbeddingScatterAccum,
   cpuGelu,
   cpuGeluBackward,
   cpuMatMul,

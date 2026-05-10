@@ -5,10 +5,16 @@
 
 import {
   dispatchAdd,
+  dispatchBroadcastFillScalar,
+  dispatchCrossEntropyFromLogits,
+  dispatchCrossEntropyLogitsGrad,
+  dispatchEmbeddingGather,
+  dispatchEmbeddingScatterAccum,
   dispatchGelu,
   dispatchGeluBackward,
   dispatchMatMul,
   dispatchMul,
+  dispatchReduceSum,
   dispatchScale,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
@@ -16,13 +22,14 @@ import {
 } from '@llm-transformer-diy/gpu';
 
 import {
+  assertDtype,
   assertRank,
   assertSameShape,
   computeContiguousStrides,
   isContiguous,
   productOfShape,
 } from './shape';
-import { allocateContiguousBuffer, makeContiguousTensor } from './tensor';
+import { allocateContiguousBuffer, createZeros, makeContiguousTensor } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
 
 /**
@@ -146,6 +153,154 @@ export function transpose(rt: TensorRuntime, a: Tensor): Tensor {
 }
 
 /**
+ * Embedding gather: lookup **`weights[vocab × embed]`** rows at **`indices[tokens]`** (**`dtype: 'u32'`**).
+ */
+export function embedding(rt: TensorRuntime, weights: Tensor, indices: Tensor): Tensor {
+  assertDtype(weights, 'f32');
+  assertDtype(indices, 'u32');
+  assertRank(weights, 2);
+  assertRank(indices, 1);
+  const embedDim = weights.shape[1]!;
+  const tokens = indices.shape[0]!;
+  const outBuf = allocateContiguousBuffer(rt, tokens * embedDim);
+  dispatchEmbeddingGather(
+    rt.ctx,
+    rt.registry,
+    weights.buffer,
+    indices.buffer,
+    outBuf,
+    tokens,
+    embedDim,
+  );
+  return makeContiguousTensor([tokens, embedDim], outBuf);
+}
+
+/**
+ * Atomic scatter-add **`gradTokens[token×embed]`** into a fresh dense **`gradWeights[vocab×embed]`** buffer
+ * (**must start zeros** — this helper allocates **`createZeros`** before dispatch).
+ */
+export function scatterEmbeddingAccum(
+  rt: TensorRuntime,
+  indices: Tensor,
+  gradTokens: Tensor,
+  vocabSize: number,
+): Tensor {
+  assertDtype(indices, 'u32');
+  assertDtype(gradTokens, 'f32');
+  assertRank(indices, 1);
+  assertRank(gradTokens, 2);
+  const tokens = indices.shape[0]!;
+  const embedDim = gradTokens.shape[1]!;
+  if (gradTokens.shape[0] !== tokens) {
+    throw new Error(
+      `scatterEmbeddingAccum: gradTokens shape[0] (${String(gradTokens.shape[0] ?? '')}) must equal ` +
+        `indices length (${String(tokens)})`,
+    );
+  }
+  const accumulator = createZeros(rt, [vocabSize, embedDim]);
+  dispatchEmbeddingScatterAccum(
+    rt.ctx,
+    rt.registry,
+    gradTokens.buffer,
+    indices.buffer,
+    accumulator.buffer,
+    tokens,
+    embedDim,
+  );
+  return accumulator;
+}
+
+/** Per‑row softmax cross‑entropy (**`targets`** length must match **`logits`** rows). */
+export function crossEntropyRowsFromLogits(
+  rt: TensorRuntime,
+  logits: Tensor,
+  targets: Tensor,
+): Tensor {
+  assertDtype(logits, 'f32');
+  assertDtype(targets, 'u32');
+  assertRank(logits, 2);
+  assertRank(targets, 1);
+  const rows = logits.shape[0]!;
+  const cols = logits.shape[1]!;
+  if (targets.shape[0] !== rows) {
+    throw new Error(
+      `crossEntropyRowsFromLogits: logits rows (${String(rows)}) must match targets (${String(targets.shape[0] ?? '')})`,
+    );
+  }
+  const outBuf = allocateContiguousBuffer(rt, rows);
+  dispatchCrossEntropyFromLogits(
+    rt.ctx,
+    rt.registry,
+    logits.buffer,
+    targets.buffer,
+    outBuf,
+    rows,
+    cols,
+  );
+  return makeContiguousTensor([rows], outBuf);
+}
+
+/**
+ * ∂Σ_k **`upstream`**[k]·CE_softmax(...) / ∂logits from row‑wise **`probs`** (softmax of logits).
+ */
+export function crossEntropyLogitsGrad(
+  rt: TensorRuntime,
+  probs: Tensor,
+  targets: Tensor,
+  upstreamPerRow: Tensor,
+): Tensor {
+  assertDtype(probs, 'f32');
+  assertDtype(targets, 'u32');
+  assertDtype(upstreamPerRow, 'f32');
+  assertRank(probs, 2);
+  assertRank(targets, 1);
+  assertRank(upstreamPerRow, 1);
+  const rows = probs.shape[0]!;
+  const cols = probs.shape[1]!;
+  if (targets.shape[0] !== rows || upstreamPerRow.shape[0] !== rows) {
+    throw new Error('crossEntropyLogitsGrad: shapes rows mismatch');
+  }
+  const outBuf = allocateContiguousBuffer(rt, rows * cols);
+  dispatchCrossEntropyLogitsGrad(
+    rt.ctx,
+    rt.registry,
+    probs.buffer,
+    targets.buffer,
+    upstreamPerRow.buffer,
+    outBuf,
+    rows,
+    cols,
+  );
+  return makeContiguousTensor([rows, cols], outBuf);
+}
+
+/** Sum **`[length]`** into a **`[1]`** buffer ( **`dispatchReduceSum`** with one row ). */
+export function sumFlat(rt: TensorRuntime, a: Tensor): Tensor {
+  assertDtype(a, 'f32');
+  assertRank(a, 1);
+  const n = a.shape[0]!;
+  const collapsed = reshape(a, [1, n]);
+  const outBuf = allocateContiguousBuffer(rt, 1);
+  dispatchReduceSum(rt.ctx, rt.registry, collapsed.buffer, outBuf, 1, n);
+  return makeContiguousTensor([1], outBuf);
+}
+
+/** Writes **`scalar[0]`** into **`length`** elements — used by **`sumFlat`** autograd broadcasts. */
+export function broadcastFillFromScalar(rt: TensorRuntime, scalar: Tensor, length: number): Tensor {
+  assertDtype(scalar, 'f32');
+  assertRank(scalar, 1);
+  if (scalar.shape[0] !== 1) {
+    throw new Error('broadcastFillFromScalar: expects scalar tensor [1]');
+  }
+  if (!Number.isInteger(length) || length <= 0) {
+    throw new Error(`broadcastFillFromScalar: length must be positive (got ${String(length)})`);
+  }
+  const outBuf = allocateContiguousBuffer(rt, length);
+  dispatchBroadcastFillScalar(rt.ctx, rt.registry, scalar.buffer, outBuf, length);
+  return makeContiguousTensor([length], outBuf);
+}
+
+/**
  * Pure metadata reshape: the returned tensor **shares** `a.buffer`. No GPU
  * runtime needed — this neither allocates nor dispatches.
  *
@@ -155,6 +310,7 @@ export function transpose(rt: TensorRuntime, a: Tensor): Tensor {
  * {@link import('./tensor').destroy} on either tensor invalidates both.
  */
 export function reshape(a: Tensor, newShape: readonly number[]): Tensor {
+  assertDtype(a, 'f32');
   const newLength = productOfShape(newShape);
   if (newLength !== a.length) {
     throw new Error(

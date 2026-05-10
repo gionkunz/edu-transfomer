@@ -3,7 +3,7 @@
  * `noUncheckedIndexedAccess`, so the assertions are safe.
  */
 
-import type { Tensor } from './types';
+import type { DType, Tensor } from './types';
 
 /**
  * Row-major contiguous strides for `shape`. For `shape = [a, b, c]` returns
@@ -70,6 +70,15 @@ export function assertSameShape(a: Tensor, b: Tensor): void {
   if (!sameShape(a, b)) {
     throw new Error(
       `assertSameShape: shapes differ (a=[${a.shape.join(',')}], b=[${b.shape.join(',')}])`,
+    );
+  }
+}
+
+/** Throws unless `t.dtype === expected`. */
+export function assertDtype(t: Tensor, expected: DType): void {
+  if (t.dtype !== expected) {
+    throw new Error(
+      `assertDtype: expected '${expected}', got '${t.dtype}' (shape=[${t.shape.join(',')}])`,
     );
   }
 }

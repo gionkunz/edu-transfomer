@@ -1,11 +1,15 @@
 import {
   createFloat32StorageBuffer,
+  createUint32StorageBuffer,
   float32ByteLength,
   readFloat32Buffer,
+  readUint32Buffer,
+  uint32ByteLength,
   writeFloat32Buffer,
+  writeUint32Buffer,
 } from '@llm-transformer-diy/gpu';
 
-import { computeContiguousStrides, productOfShape } from './shape';
+import { assertDtype, computeContiguousStrides, productOfShape } from './shape';
 import type { Tensor, TensorRuntime } from './types';
 
 /**
@@ -18,6 +22,18 @@ export function makeContiguousTensor(shape: readonly number[], buffer: GPUBuffer
     shape,
     strides: computeContiguousStrides(shape),
     dtype: 'f32',
+    device: 'gpu',
+    buffer,
+    length: productOfShape(shape),
+  };
+}
+
+/** Internal contiguous builder for **`dtype: 'u32'`** tensors. */
+export function makeIndicesTensor(shape: readonly number[], buffer: GPUBuffer): Tensor {
+  return {
+    shape,
+    strides: computeContiguousStrides(shape),
+    dtype: 'u32',
     device: 'gpu',
     buffer,
     length: productOfShape(shape),
@@ -67,15 +83,45 @@ export function createFromArray(
 }
 
 /**
+ * Immutable u32 tensor for discrete indices (**embedding lookup**, softmax targets, …).
+ *
+ * WGSL binds it as readonly **`array<u32>`** (`STORAGE` buffer backed by **`createIndices`** upload).
+ */
+export function createIndices(
+  rt: TensorRuntime,
+  data: Uint32Array,
+  shape: readonly number[],
+): Tensor {
+  const length = productOfShape(shape);
+  if (data.length !== length) {
+    throw new Error(
+      `createIndices: data.length=${String(data.length)} does not match ` +
+        `productOfShape([${shape.join(',')}])=${String(length)}`,
+    );
+  }
+  const buf = createUint32StorageBuffer(rt.ctx.device, length);
+  writeUint32Buffer(rt.ctx.queue, buf, data);
+  return makeIndicesTensor(shape, buf);
+}
+
+/**
  * Read tensor contents back to host as a fresh {@link Float32Array}.
  *
  * `async` because WebGPU's `mapAsync` is async; this is the only async surface
  * in the package. Use sparingly in hot paths.
  */
 export async function toArray(rt: TensorRuntime, t: Tensor): Promise<Float32Array> {
+  assertDtype(t, 'f32');
   return readFloat32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, float32ByteLength(t.length));
 }
 
+/**
+ * Pull u32 indices (**`dtype: 'u32'`**) back into a {@link Uint32Array}.
+ */
+export async function readIndices(rt: TensorRuntime, t: Tensor): Promise<Uint32Array> {
+  assertDtype(t, 'u32');
+  return readUint32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, uint32ByteLength(t.length));
+}
 /**
  * Release the GPU buffer backing this tensor.
  *
