@@ -10,6 +10,11 @@ export {
   AdamW,
 } from './adamw';
 export type { AdamWHyperparams, AdamWOptions } from './adamw';
+export type { SaveGptCheckpointOptions } from './checkpoint';
+export { loadGptCheckpointTensors, saveGptCheckpoint } from './checkpoint';
+export { createLmBatch } from './lm-batch';
+export { getCosineLr, type CosineLrSchedule } from './scheduler';
+export { registerModelParameters, Trainer, type TrainerOptions } from './trainer';
 
 /** Training loop scaffolding */
 export const TRAINING_LAYER_MARKER = Symbol.for('@llm-transformer-diy/training');

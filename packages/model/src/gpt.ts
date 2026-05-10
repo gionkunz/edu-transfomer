@@ -12,7 +12,12 @@ import {
   type Parameter,
   type Variable,
 } from '@llm-transformer-diy/autograd';
-import { createFromArray, createIndices, type Tensor, type TensorRuntime } from '@llm-transformer-diy/tensor';
+import {
+  createFromArray,
+  createIndices,
+  type Tensor,
+  type TensorRuntime,
+} from '@llm-transformer-diy/tensor';
 
 import { assertValidGptConfig, type GptConfig } from './config';
 
@@ -87,8 +92,12 @@ export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
 
   const blocks: TransformerBlockParams[] = [];
   for (let l = 0; l < nLayers; l++) {
-    const attnNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
-    const ffnNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
+    const attnNormGamma = createParameter(
+      createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
+    );
+    const ffnNormGamma = createParameter(
+      createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
+    );
     const wq: Parameter[] = [];
     const wk: Parameter[] = [];
     const wv: Parameter[] = [];
@@ -97,7 +106,9 @@ export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
       wk.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
       wv.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
     }
-    const wo = createParameter(createFromArray(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel]));
+    const wo = createParameter(
+      createFromArray(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel]),
+    );
     const w1 = createParameter(createFromArray(rt, smallInitRows(dModel, dFf, 1.0), [dModel, dFf]));
     const w2 = createParameter(createFromArray(rt, smallInitRows(dFf, dModel, 1.0), [dFf, dModel]));
     blocks.push({
@@ -112,7 +123,9 @@ export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
     });
   }
 
-  const finalNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
+  const finalNormGamma = createParameter(
+    createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
+  );
   const lmHeadData = smallInitRows(dModel, vocabSize, 1 / Math.sqrt(dModel));
   const lmHead = createParameter(createFromArray(rt, lmHeadData, [dModel, vocabSize]));
 
@@ -232,15 +245,33 @@ export function forwardGpt(rt: TensorRuntime, model: GptModel, tokenIds: Tensor)
 
 /** All trainable parameters for **`registerParameter`** / optimizers. */
 export function collectGptParameters(model: GptModel): Parameter[] {
-  const out: Parameter[] = [
-    model.tokenEmbed,
-    model.posEmbed,
-    model.finalNormGamma,
-    model.lmHead,
-  ];
+  const out: Parameter[] = [model.tokenEmbed, model.posEmbed, model.finalNormGamma, model.lmHead];
   for (const b of model.blocks) {
     out.push(b.attnNormGamma, b.ffnNormGamma, b.wo, b.w1, b.w2);
     out.push(...b.wq, ...b.wk, ...b.wv);
   }
   return out;
+}
+
+/**
+ * Lexically stable tensor keys matching **{@link collectGptParameters}** order for checkpoints.
+ */
+export function gptParameterTensorNames(model: GptModel): string[] {
+  const names: string[] = ['token_embed', 'pos_embed', 'final_norm_gamma', 'lm_head'];
+  let L = 0;
+  for (const b of model.blocks) {
+    const p = `L${String(L)}`;
+    names.push(`${p}_attn_norm_gamma`, `${p}_ffn_norm_gamma`, `${p}_wo`, `${p}_w1`, `${p}_w2`);
+    for (let h = 0; h < b.wq.length; h++) {
+      names.push(`${p}_wq_${String(h)}`);
+    }
+    for (let h = 0; h < b.wk.length; h++) {
+      names.push(`${p}_wk_${String(h)}`);
+    }
+    for (let h = 0; h < b.wv.length; h++) {
+      names.push(`${p}_wv_${String(h)}`);
+    }
+    L += 1;
+  }
+  return names;
 }

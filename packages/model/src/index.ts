@@ -13,6 +13,7 @@ export {
   collectGptParameters,
   createGptModel,
   forwardGpt,
+  gptParameterTensorNames,
   type GptModel,
   type TransformerBlockParams,
 } from './gpt';
