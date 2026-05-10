@@ -1,0 +1,246 @@
+import {
+  add,
+  createLeafVariable,
+  createParameter,
+  embedding,
+  gelu,
+  matmul,
+  rmsnorm,
+  scale,
+  softmax,
+  transpose,
+  type Parameter,
+  type Variable,
+} from '@llm-transformer-diy/autograd';
+import { createFromArray, createIndices, type Tensor, type TensorRuntime } from '@llm-transformer-diy/tensor';
+
+import { assertValidGptConfig, type GptConfig } from './config';
+
+/** One transformer block (Pre-LN): MHA + FFN, separate RMSNorm γ vectors. */
+export type TransformerBlockParams = {
+  readonly attnNormGamma: Parameter;
+  readonly ffnNormGamma: Parameter;
+  readonly wq: readonly Parameter[];
+  readonly wk: readonly Parameter[];
+  readonly wv: readonly Parameter[];
+  readonly wo: Parameter;
+  readonly w1: Parameter;
+  readonly w2: Parameter;
+};
+
+export type GptModel = {
+  readonly config: GptConfig;
+  readonly tokenEmbed: Parameter;
+  readonly posEmbed: Parameter;
+  readonly blocks: readonly TransformerBlockParams[];
+  readonly finalNormGamma: Parameter;
+  readonly lmHead: Parameter;
+  /** Constant `{@link Variable}`s: per-head `[d_k, d_model]` gather matrices (see design notes). */
+  readonly headExpand: readonly Variable[];
+};
+
+function smallInitRows(rows: number, cols: number, scale: number): Float32Array {
+  const a = new Float32Array(rows * cols);
+  for (let i = 0; i < a.length; i++) {
+    a[i] = (Math.sin(i * 0.13) * scale) / Math.sqrt(cols);
+  }
+  return a;
+}
+
+function headExpandMatrix(h: number, _nHeads: number, dK: number, dModel: number): Float32Array {
+  const data = new Float32Array(dK * dModel);
+  const col0 = h * dK;
+  for (let i = 0; i < dK; i++) {
+    data[i * dModel + col0 + i] = 1;
+  }
+  return data;
+}
+
+/** Strict upper triangle = **`maskValue`**, else **0** (for causal attention bias). */
+export function buildCausalBiasTensor(rt: TensorRuntime, seqLen: number, maskValue = -1e4): Tensor {
+  const data = new Float32Array(seqLen * seqLen);
+  for (let i = 0; i < seqLen; i++) {
+    for (let j = 0; j < seqLen; j++) {
+      data[i * seqLen + j] = j > i ? maskValue : 0;
+    }
+  }
+  return createFromArray(rt, data, [seqLen, seqLen]);
+}
+
+export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
+  assertValidGptConfig(config);
+  const { vocabSize, maxSeqLen, dModel, nHeads, dFf, nLayers } = config;
+  const dK = dModel / nHeads;
+
+  const tokenEmbed = createParameter(
+    createFromArray(rt, smallInitRows(vocabSize, dModel, 1.0), [vocabSize, dModel]),
+  );
+  const posEmbed = createParameter(
+    createFromArray(rt, smallInitRows(maxSeqLen, dModel, 0.5), [maxSeqLen, dModel]),
+  );
+
+  const headExpand: Variable[] = [];
+  for (let h = 0; h < nHeads; h++) {
+    const t = createFromArray(rt, headExpandMatrix(h, nHeads, dK, dModel), [dK, dModel]);
+    headExpand.push(createLeafVariable(t, false));
+  }
+
+  const blocks: TransformerBlockParams[] = [];
+  for (let l = 0; l < nLayers; l++) {
+    const attnNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
+    const ffnNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
+    const wq: Parameter[] = [];
+    const wk: Parameter[] = [];
+    const wv: Parameter[] = [];
+    for (let h = 0; h < nHeads; h++) {
+      wq.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
+      wk.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
+      wv.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
+    }
+    const wo = createParameter(createFromArray(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel]));
+    const w1 = createParameter(createFromArray(rt, smallInitRows(dModel, dFf, 1.0), [dModel, dFf]));
+    const w2 = createParameter(createFromArray(rt, smallInitRows(dFf, dModel, 1.0), [dFf, dModel]));
+    blocks.push({
+      attnNormGamma,
+      ffnNormGamma,
+      wq,
+      wk,
+      wv,
+      wo,
+      w1,
+      w2,
+    });
+  }
+
+  const finalNormGamma = createParameter(createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]));
+  const lmHeadData = smallInitRows(dModel, vocabSize, 1 / Math.sqrt(dModel));
+  const lmHead = createParameter(createFromArray(rt, lmHeadData, [dModel, vocabSize]));
+
+  return {
+    config,
+    tokenEmbed,
+    posEmbed,
+    blocks,
+    finalNormGamma,
+    lmHead,
+    headExpand,
+  };
+}
+
+function mhaForward(
+  rt: TensorRuntime,
+  blk: TransformerBlockParams,
+  x: Variable,
+  maskVar: Variable,
+  invSqrtDk: number,
+  headExpand: readonly Variable[],
+): Variable {
+  const H = blk.wq.length;
+  let acc: Variable | null = null;
+  for (let h = 0; h < H; h++) {
+    const wqh = blk.wq[h];
+    const wkh = blk.wk[h];
+    const wvh = blk.wv[h];
+    const he = headExpand[h];
+    if (!wqh || !wkh || !wvh || !he) {
+      throw new Error('mhaForward: missing head tensors');
+    }
+    const q = matmul(rt, x, wqh);
+    const k = matmul(rt, x, wkh);
+    const vMat = matmul(rt, x, wvh);
+    const kt = transpose(rt, k);
+    let scores = matmul(rt, q, kt);
+    scores = scale(rt, scores, invSqrtDk);
+    scores = add(rt, scores, maskVar);
+    const prob = softmax(rt, scores);
+    const mixed = matmul(rt, prob, vMat);
+    const contrib = matmul(rt, mixed, he);
+    acc = acc === null ? contrib : add(rt, acc, contrib);
+  }
+  if (acc === null) {
+    throw new Error('mhaForward: nHeads must be >= 1');
+  }
+  return matmul(rt, acc, blk.wo);
+}
+
+function ffnForward(rt: TensorRuntime, blk: TransformerBlockParams, x: Variable): Variable {
+  let h = matmul(rt, x, blk.w1);
+  h = gelu(rt, h);
+  return matmul(rt, h, blk.w2);
+}
+
+function blockForward(
+  rt: TensorRuntime,
+  blk: TransformerBlockParams,
+  x: Variable,
+  maskVar: Variable,
+  invSqrtDk: number,
+  headExpand: readonly Variable[],
+): Variable {
+  let y = rmsnorm(rt, x, blk.attnNormGamma);
+  const attn = mhaForward(rt, blk, y, maskVar, invSqrtDk, headExpand);
+  x = add(rt, x, attn);
+  y = rmsnorm(rt, x, blk.ffnNormGamma);
+  const ff = ffnForward(rt, blk, y);
+  return add(rt, x, ff);
+}
+
+/**
+ * Decoder-only GPT forward: **`tokenIds`** shape **`[seqLen]`** (`u32`).
+ * Position indices are **`0 … seqLen-1`** (must be `< config.maxSeqLen`).
+ */
+export function forwardGpt(rt: TensorRuntime, model: GptModel, tokenIds: Tensor): Variable {
+  if (tokenIds.dtype !== 'u32' || tokenIds.shape.length !== 1) {
+    throw new Error('forwardGpt: tokenIds must be a rank-1 u32 tensor');
+  }
+  const T = tokenIds.shape[0];
+  if (T === undefined) {
+    throw new Error('forwardGpt: tokenIds must be non-empty');
+  }
+  if (T > model.config.maxSeqLen) {
+    throw new Error(
+      `forwardGpt: sequence length ${String(T)} exceeds maxSeqLen ${String(model.config.maxSeqLen)}`,
+    );
+  }
+
+  const tokIdxVar = createLeafVariable(tokenIds, false);
+  const posHost = new Uint32Array(T);
+  for (let i = 0; i < T; i++) {
+    posHost[i] = i;
+  }
+  const posTensor = createIndices(rt, posHost, [T]);
+  const posVar = createLeafVariable(posTensor, false);
+
+  let h = add(
+    rt,
+    embedding(rt, model.tokenEmbed, tokIdxVar),
+    embedding(rt, model.posEmbed, posVar),
+  );
+
+  const maskTensor = buildCausalBiasTensor(rt, T);
+  const maskVar = createLeafVariable(maskTensor, false);
+  const dK = model.config.dModel / model.config.nHeads;
+  const invSqrtDk = 1 / Math.sqrt(dK);
+
+  for (const blk of model.blocks) {
+    h = blockForward(rt, blk, h, maskVar, invSqrtDk, model.headExpand);
+  }
+
+  h = rmsnorm(rt, h, model.finalNormGamma);
+  return matmul(rt, h, model.lmHead);
+}
+
+/** All trainable parameters for **`registerParameter`** / optimizers. */
+export function collectGptParameters(model: GptModel): Parameter[] {
+  const out: Parameter[] = [
+    model.tokenEmbed,
+    model.posEmbed,
+    model.finalNormGamma,
+    model.lmHead,
+  ];
+  for (const b of model.blocks) {
+    out.push(b.attnNormGamma, b.ffnNormGamma, b.wo, b.w1, b.w2);
+    out.push(...b.wq, ...b.wk, ...b.wv);
+  }
+  return out;
+}

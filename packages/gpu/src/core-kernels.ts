@@ -15,6 +15,8 @@ import {
   loadMatMulWgsl,
   loadReduceMaxWgsl,
   loadReduceSumWgsl,
+  loadRmsNormGradGammaWgsl,
+  loadRmsNormGradInputWgsl,
   loadRmsNormWgsl,
   loadSoftmaxBackwardWgsl,
   loadSoftmaxWgsl,
@@ -58,6 +60,12 @@ export const CORE_KERNEL_SOFTMAX_BACKWARD = 'core.softmax_backward';
 /** Row-wise RMSNorm of [rows, cols] f32 matrix with learned `gamma: [cols]`. */
 export const CORE_KERNEL_RMSNORM = 'core.rmsnorm';
 
+/** ∂L/∂x for RMSNorm (reads γ, grad_out; writes grad_input). */
+export const CORE_KERNEL_RMSNORM_GRAD_INPUT = 'core.rmsnorm_grad_input';
+
+/** ∂L/∂γ for RMSNorm (column reductions). */
+export const CORE_KERNEL_RMSNORM_GRAD_GAMMA = 'core.rmsnorm_grad_gamma';
+
 /** Row-major gather of `[vocab, embed]` by u32 indices → `[tokens, embed]`. */
 export const CORE_KERNEL_EMBEDDING_GATHER = 'core.embedding_gather';
 
@@ -93,6 +101,8 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_SOFTMAX,
   CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_RMSNORM,
+  CORE_KERNEL_RMSNORM_GRAD_INPUT,
+  CORE_KERNEL_RMSNORM_GRAD_GAMMA,
   CORE_KERNEL_EMBEDDING_GATHER,
   CORE_KERNEL_EMBEDDING_SCATTER_ACCUM,
   CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
@@ -192,6 +202,23 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   registry.register(
     CORE_KERNEL_RMSNORM,
     make(loadRmsNormWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
+
+  const rmsNormBackwardKinds: Kind[] = [
+    'uniform',
+    'read-only-storage',
+    'read-only-storage',
+    'read-only-storage',
+    'storage',
+  ];
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_INPUT,
+    make(loadRmsNormGradInputWgsl(), rmsNormBackwardKinds),
+  );
+
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_GAMMA,
+    make(loadRmsNormGradGammaWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
   );
 
   // embedding_gather: uniform(num_tokens, embed_dim,...), weights, indices u32, out
@@ -660,6 +687,65 @@ export function dispatchRmsNorm(
     registry.get(CORE_KERNEL_RMSNORM),
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
     rows,
+  );
+  u.destroy();
+}
+
+/** ∂L/∂input for RMSNorm; writes **`gradInput`** (same shape as **`input`**). */
+export function dispatchRmsNormGradInput(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  gradOut: GPUBuffer,
+  gradInput: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradInput', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNormGradInput: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_INPUT),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, gradOut), bg(4, gradInput)],
+    rows,
+  );
+  u.destroy();
+}
+
+/** ∂L/∂γ (`[cols]`); **`gradGamma`** must be zero-initialized or overwritten entirely. */
+export function dispatchRmsNormGradGamma(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gradOut: GPUBuffer,
+  gradGamma: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradGamma', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_GAMMA),
+    [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
+    cols,
   );
   u.destroy();
 }

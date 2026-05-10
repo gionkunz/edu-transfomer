@@ -9,6 +9,9 @@ import {
   matmul as tensorMatmul,
   mul as tensorMul,
   reshape as tensorReshape,
+  rmsnorm as tensorRmsnorm,
+  rmsnormGradGamma as tensorRmsnormGradGamma,
+  rmsnormGradInput as tensorRmsnormGradInput,
   scale as tensorScale,
   scatterEmbeddingAccum as tensorScatterEmbeddingAccum,
   softmax as tensorSoftmax,
@@ -121,6 +124,28 @@ export function gelu(rt: TensorRuntime, x: Variable): Variable {
     inputs: [x],
     backward: (rtBackward, gradOutput) => [
       x.requiresGrad ? tensorGeluBackward(rtBackward, gradOutput, x.tensor) : null,
+    ],
+  }));
+}
+
+/**
+ * Row-wise RMSNorm (`gamma: [cols]`) with autograd. Uses dedicated backward kernels.
+ */
+export function rmsnorm(
+  rt: TensorRuntime,
+  x: Variable,
+  gamma: Variable,
+  epsilon = 1e-6,
+): Variable {
+  const out = tensorRmsnorm(rt, x.tensor, gamma.tensor, epsilon);
+  return liftOp(out, [x, gamma], () => ({
+    name: 'rmsnorm',
+    inputs: [x, gamma],
+    backward: (rtBackward, gradOutput) => [
+      x.requiresGrad ? tensorRmsnormGradInput(rtBackward, gradOutput, x.tensor, gamma.tensor, epsilon) : null,
+      gamma.requiresGrad
+        ? tensorRmsnormGradGamma(rtBackward, gradOutput, x.tensor, epsilon)
+        : null,
     ],
   }));
 }

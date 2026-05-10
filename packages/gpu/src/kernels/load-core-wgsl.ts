@@ -54,6 +54,14 @@ export function loadRmsNormWgsl(): string {
   return loadWgsl('./rmsnorm.wgsl');
 }
 
+export function loadRmsNormGradInputWgsl(): string {
+  return loadWgsl('./rmsnorm-grad-input.wgsl');
+}
+
+export function loadRmsNormGradGammaWgsl(): string {
+  return loadWgsl('./rmsnorm-grad-gamma.wgsl');
+}
+
 export function loadEmbeddingGatherWgsl(): string {
   return loadWgsl('./embedding-gather.wgsl');
 }

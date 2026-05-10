@@ -219,6 +219,65 @@ export function cpuRmsNorm(
   return out;
 }
 
+export function cpuRmsNormGradInput(
+  data: Float32Array,
+  gamma: Float32Array,
+  gradOut: Float32Array,
+  rows: number,
+  cols: number,
+  epsilon: number,
+): Float32Array {
+  if (gamma.length !== cols) {
+    throw new Error('cpuRmsNormGradInput: gamma length mismatch');
+  }
+  const gradIn = new Float32Array(rows * cols);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let sumSq = 0;
+    for (let j = 0; j < cols; j++) {
+      const v = data[base + j]!;
+      sumSq += v * v;
+    }
+    const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
+    let sumTerm = 0;
+    for (let j = 0; j < cols; j++) {
+      const xv = data[base + j]!;
+      sumTerm += xv * gamma[j]! * gradOut[base + j]!;
+    }
+    const coeff = (inv * inv * inv) / cols;
+    for (let j = 0; j < cols; j++) {
+      const xv = data[base + j]!;
+      gradIn[base + j] = inv * gamma[j]! * gradOut[base + j]! - xv * coeff * sumTerm;
+    }
+  }
+  return gradIn;
+}
+
+export function cpuRmsNormGradGamma(
+  data: Float32Array,
+  gradOut: Float32Array,
+  rows: number,
+  cols: number,
+  epsilon: number,
+): Float32Array {
+  const gradGamma = new Float32Array(cols);
+  for (let j = 0; j < cols; j++) {
+    let acc = 0;
+    for (let i = 0; i < rows; i++) {
+      const base = i * cols;
+      let sumSq = 0;
+      for (let k = 0; k < cols; k++) {
+        const v = data[base + k]!;
+        sumSq += v * v;
+      }
+      const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
+      acc += gradOut[base + j]! * data[base + j]! * inv;
+    }
+    gradGamma[j] = acc;
+  }
+  return gradGamma;
+}
+
 /** Gather rows from weight matrix [vocab, embed_dim] flat using u32 indices. */
 export function cpuEmbeddingGather(
   weights: Float32Array,

@@ -10,6 +10,8 @@ import {
   dispatchReduceMax,
   dispatchReduceSum,
   dispatchRmsNorm,
+  dispatchRmsNormGradGamma,
+  dispatchRmsNormGradInput,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
   registerCoreKernels,
@@ -25,9 +27,12 @@ import {
   cpuReduceMax,
   cpuReduceSum,
   cpuRmsNorm,
+  cpuRmsNormGradGamma,
+  cpuRmsNormGradInput,
   cpuSoftmax,
   cpuSoftmaxBackward,
 } from './cpu-reference';
+import { createFloat32StorageBuffer, readFloat32Buffer, writeFloat32Buffer } from './buffer';
 import { GpuContext, probeWebGpu } from './device';
 import { KernelRegistry } from './kernel-registry';
 
@@ -104,6 +109,41 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       await smokeRmsNorm(ctx, registry, data, gamma, 2, 4, epsilon),
       cpuRmsNorm(data, gamma, 2, 4, epsilon),
     );
+  });
+
+  it('rmsnorm backward matches CPU for [2, 4]', async () => {
+    const rows = 2;
+    const cols = 4;
+    const epsilon = 1e-6;
+    const data = Float32Array.from({ length: rows * cols }, (_, i) => (i + 1) * 0.2 - 1);
+    const gamma = Float32Array.from({ length: cols }, (_, j) => 0.8 + j * 0.1);
+    const gradOut = Float32Array.from({ length: rows * cols }, (_, i) => Math.sin(i * 0.31));
+
+    const gxi = cpuRmsNormGradInput(data, gamma, gradOut, rows, cols, epsilon);
+
+    const bIn = createFloat32StorageBuffer(ctx.device, rows * cols);
+    const bGam = createFloat32StorageBuffer(ctx.device, cols);
+    const bGradOut = createFloat32StorageBuffer(ctx.device, rows * cols);
+    const bGxi = createFloat32StorageBuffer(ctx.device, rows * cols);
+    const bGgm = createFloat32StorageBuffer(ctx.device, cols);
+    writeFloat32Buffer(ctx.queue, bIn, data);
+    writeFloat32Buffer(ctx.queue, bGam, gamma);
+    writeFloat32Buffer(ctx.queue, bGradOut, gradOut);
+
+    dispatchRmsNormGradInput(ctx, registry, bIn, bGam, cols, bGradOut, bGxi, rows, cols, epsilon);
+    const gpuGxi = await readFloat32Buffer(ctx.device, ctx.queue, bGxi, rows * cols * 4);
+    expectCloseVec(gpuGxi, gxi);
+
+    const ggc = cpuRmsNormGradGamma(data, gradOut, rows, cols, epsilon);
+    dispatchRmsNormGradGamma(ctx, registry, bIn, bGradOut, bGgm, rows, cols, epsilon);
+    const gpuGgc = await readFloat32Buffer(ctx.device, ctx.queue, bGgm, cols * 4);
+    expectCloseVec(gpuGgc, ggc);
+
+    bIn.destroy();
+    bGam.destroy();
+    bGradOut.destroy();
+    bGxi.destroy();
+    bGgm.destroy();
   });
 });
 

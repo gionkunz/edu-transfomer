@@ -16,6 +16,9 @@ import {
   dispatchMatMul,
   dispatchMul,
   dispatchReduceSum,
+  dispatchRmsNorm,
+  dispatchRmsNormGradGamma,
+  dispatchRmsNormGradInput,
   dispatchScale,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
@@ -138,6 +141,84 @@ export function geluBackward(rt: TensorRuntime, gradOutput: Tensor, input: Tenso
   const out = allocateContiguousBuffer(rt, input.length);
   dispatchGeluBackward(rt.ctx, rt.registry, gradOutput.buffer, input.buffer, out, input.length);
   return makeContiguousTensor(input.shape, out);
+}
+
+/** Row-wise **RMSNorm** on rank-2 **`[rows, cols]`** with **`gamma: [cols]`**. */
+export function rmsnorm(
+  rt: TensorRuntime,
+  x: Tensor,
+  gamma: Tensor,
+  epsilon = 1e-6,
+): Tensor {
+  assertDtype(x, 'f32');
+  assertDtype(gamma, 'f32');
+  assertRank(x, 2);
+  assertRank(gamma, 1);
+  const rows = x.shape[0]!;
+  const cols = x.shape[1]!;
+  if (gamma.shape[0] !== cols) {
+    throw new Error(
+      `rmsnorm: gamma length ${String(gamma.shape[0])} != d_model ${String(cols)}`,
+    );
+  }
+  if (!isContiguous(x) || !isContiguous(gamma)) {
+    throw new Error('rmsnorm: non-contiguous tensors not supported');
+  }
+  const out = allocateContiguousBuffer(rt, rows * cols);
+  dispatchRmsNorm(rt.ctx, rt.registry, x.buffer, gamma.buffer, cols, out, rows, cols, epsilon);
+  return makeContiguousTensor([rows, cols], out);
+}
+
+/** ∂L/∂x for {@link rmsnorm}. */
+export function rmsnormGradInput(
+  rt: TensorRuntime,
+  gradOutput: Tensor,
+  x: Tensor,
+  gamma: Tensor,
+  epsilon = 1e-6,
+): Tensor {
+  assertSameShape(gradOutput, x);
+  assertDtype(gamma, 'f32');
+  assertRank(x, 2);
+  assertRank(gamma, 1);
+  const rows = x.shape[0]!;
+  const cols = x.shape[1]!;
+  if (gamma.shape[0] !== cols || !isContiguous(x) || !isContiguous(gamma) || !isContiguous(gradOutput)) {
+    throw new Error('rmsnormGradInput: shape or stride mismatch');
+  }
+  const out = allocateContiguousBuffer(rt, rows * cols);
+  dispatchRmsNormGradInput(
+    rt.ctx,
+    rt.registry,
+    x.buffer,
+    gamma.buffer,
+    cols,
+    gradOutput.buffer,
+    out,
+    rows,
+    cols,
+    epsilon,
+  );
+  return makeContiguousTensor([rows, cols], out);
+}
+
+/** ∂L/∂γ (`[cols]`) for {@link rmsnorm}. */
+export function rmsnormGradGamma(
+  rt: TensorRuntime,
+  gradOutput: Tensor,
+  x: Tensor,
+  epsilon = 1e-6,
+): Tensor {
+  assertSameShape(gradOutput, x);
+  assertRank(x, 2);
+  const rows = x.shape[0]!;
+  const cols = x.shape[1]!;
+  if (!isContiguous(x) || !isContiguous(gradOutput)) {
+    throw new Error('rmsnormGradGamma: non-contiguous tensors not supported');
+  }
+  const out = allocateContiguousBuffer(rt, cols);
+  dispatchRmsNormGradGamma(rt.ctx, rt.registry, x.buffer, gradOutput.buffer, out, rows, cols, epsilon);
+  return makeContiguousTensor([cols], out);
 }
 
 /**

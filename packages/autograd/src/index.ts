@@ -50,6 +50,7 @@ export {
   matmul,
   mul,
   reshape,
+  rmsnorm,
   scale,
   softmax,
   sumFlat,
