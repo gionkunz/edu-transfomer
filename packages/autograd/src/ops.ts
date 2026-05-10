@@ -1,5 +1,6 @@
 import {
   add as tensorAdd,
+  matmul as tensorMatmul,
   mul as tensorMul,
   reshape as tensorReshape,
   scale as tensorScale,
@@ -26,6 +27,27 @@ function liftOp(
     return createLeafVariable(forwardOutput, false);
   }
   return createInternalVariable(forwardOutput, buildOp(), true);
+}
+
+/**
+ * Rank-2 matrix multiply with autograd. Forward `[M, K] @ [K, N] → [M, N]`;
+ * backward emits `dA = dC @ B^T` and `dB = A^T @ dC`, composed from
+ * `tensor.matmul` + `tensor.transpose`.
+ */
+export function matmul(rt: TensorRuntime, a: Variable, b: Variable): Variable {
+  const out = tensorMatmul(rt, a.tensor, b.tensor);
+  return liftOp(out, [a, b], () => ({
+    name: 'matmul',
+    inputs: [a, b],
+    backward: (rtBackward, gradOutput) => [
+      a.requiresGrad
+        ? tensorMatmul(rtBackward, gradOutput, tensorTranspose(rtBackward, b.tensor))
+        : null,
+      b.requiresGrad
+        ? tensorMatmul(rtBackward, tensorTranspose(rtBackward, a.tensor), gradOutput)
+        : null,
+    ],
+  }));
 }
 
 /**

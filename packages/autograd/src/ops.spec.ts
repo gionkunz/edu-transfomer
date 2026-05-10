@@ -12,6 +12,7 @@ import {
   add as tensorAdd,
   createFromArray,
   destroy,
+  matmul as tensorMatmul,
   mul as tensorMul,
   scale as tensorScale,
   toArray,
@@ -20,7 +21,7 @@ import {
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { add, mul, reshape, scale, transpose } from './ops';
+import { add, matmul, mul, reshape, scale, transpose } from './ops';
 import type { Variable } from './types';
 import { createLeafVariable, createParameter } from './variable';
 
@@ -224,5 +225,67 @@ describe.skipIf(!webgpuAvailable)('autograd ops (GPU-backed)', () => {
     // Even on the leaf branch, the underlying buffer is shared (tensor.reshape
     // semantics) — destroying `a` invalidates `out`.
     expect(out.tensor.buffer).toBe(a.tensor.buffer);
+  });
+
+  it('matmul forward matches tensor.matmul for non-square shapes', async () => {
+    const aData = new Float32Array([1, 2, 3, 4, 5, 6]);
+    const bData = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const a = trackV(createParameter(track(createFromArray(rt, aData, [2, 3]))));
+    const b = trackV(createParameter(track(createFromArray(rt, bData, [3, 4]))));
+
+    const out = trackV(matmul(rt, a, b));
+    expect(out.requiresGrad).toBe(true);
+    expect(out.creator?.name).toBe('matmul');
+    expect(out.tensor.shape).toEqual([2, 4]);
+
+    const expected = track(tensorMatmul(rt, a.tensor, b.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
+  });
+
+  it('matmul backward emits dA = dC @ B^T and dB = A^T @ dC', async () => {
+    const aData = new Float32Array([1, 2, 3, 4, 5, 6]);
+    const bData = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const a = trackV(createParameter(track(createFromArray(rt, aData, [2, 3]))));
+    const b = trackV(createParameter(track(createFromArray(rt, bData, [3, 4]))));
+
+    const out = trackV(matmul(rt, a, b));
+
+    const dCData = Float32Array.from({ length: 2 * 4 }, (_, i) => (i + 1) * 0.1);
+    const dC = track(createFromArray(rt, dCData, [2, 4]));
+    const grads = out.creator!.backward(rt, dC);
+    expect(grads).toHaveLength(2);
+
+    const gradA = grads[0];
+    const gradB = grads[1];
+    expect(gradA).not.toBeNull();
+    expect(gradB).not.toBeNull();
+    track(gradA as Tensor);
+    track(gradB as Tensor);
+
+    expect((gradA as Tensor).shape).toEqual([2, 3]);
+    expect((gradB as Tensor).shape).toEqual([3, 4]);
+
+    const bT = track(tensorTranspose(rt, b.tensor));
+    const expectedGradA = track(tensorMatmul(rt, dC, bT));
+    expectCloseVec(await toArray(rt, gradA as Tensor), await toArray(rt, expectedGradA));
+
+    const aT = track(tensorTranspose(rt, a.tensor));
+    const expectedGradB = track(tensorMatmul(rt, aT, dC));
+    expectCloseVec(await toArray(rt, gradB as Tensor), await toArray(rt, expectedGradB));
+  });
+
+  it('matmul does not record Operation when no input requires grad', async () => {
+    const aData = new Float32Array([1, 2, 3, 4, 5, 6]);
+    const bData = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const a = trackV(createLeafVariable(track(createFromArray(rt, aData, [2, 3])), false));
+    const b = trackV(createLeafVariable(track(createFromArray(rt, bData, [3, 4])), false));
+
+    const out = trackV(matmul(rt, a, b));
+    expect(out.requiresGrad).toBe(false);
+    expect(out.creator).toBeNull();
+    expect(out.parents).toHaveLength(0);
+
+    const expected = track(tensorMatmul(rt, a.tensor, b.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
   });
 });
