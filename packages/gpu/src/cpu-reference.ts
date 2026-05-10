@@ -78,3 +78,101 @@ export function cpuGelu(a: Float32Array, n: number): Float32Array {
   }
   return out;
 }
+
+/** Row-wise sum of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
+export function cpuReduceSum(data: Float32Array, rows: number, cols: number): Float32Array {
+  const out = new Float32Array(rows);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let acc = 0;
+    for (let j = 0; j < cols; j++) {
+      acc += data[base + j]!;
+    }
+    out[i] = acc;
+  }
+  return out;
+}
+
+/**
+ * Row-wise max of row-major [rows, cols] f32 matrix → [rows] f32 vector.
+ * Each row's accumulator is initialized to `Number.NEGATIVE_INFINITY`,
+ * matching the WGSL kernel's `bitcast<f32>(0xff800000u)` initialization.
+ */
+export function cpuReduceMax(data: Float32Array, rows: number, cols: number): Float32Array {
+  const out = new Float32Array(rows);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let acc = Number.NEGATIVE_INFINITY;
+    for (let j = 0; j < cols; j++) {
+      const v = data[base + j]!;
+      if (v > acc) acc = v;
+    }
+    out[i] = acc;
+  }
+  return out;
+}
+
+/**
+ * Numerically stable row-wise softmax of row-major [rows, cols] f32 matrix.
+ * Two-pass per row: subtract row max before exp(), then divide by row sum.
+ * Same algorithm the WGSL `softmax.wgsl` kernel implements.
+ */
+export function cpuSoftmax(data: Float32Array, rows: number, cols: number): Float32Array {
+  const out = new Float32Array(rows * cols);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let m = Number.NEGATIVE_INFINITY;
+    for (let j = 0; j < cols; j++) {
+      const v = data[base + j]!;
+      if (v > m) m = v;
+    }
+    let s = 0;
+    for (let j = 0; j < cols; j++) {
+      const e = Math.exp(data[base + j]! - m);
+      out[base + j] = e;
+      s += e;
+    }
+    for (let j = 0; j < cols; j++) {
+      out[base + j] = out[base + j]! / s;
+    }
+  }
+  return out;
+}
+
+/**
+ * Row-wise RMSNorm of row-major [rows, cols] f32 matrix with learned scale
+ * `gamma` of length `cols`. For each row i:
+ *   meanSq = Σ_j input[i,j]^2 / cols
+ *   inv    = 1 / sqrt(meanSq + epsilon)
+ *   out[i,j] = input[i,j] * inv * gamma[j]
+ * Throws if `gamma.length !== cols`. `epsilon` is required (no default) — the
+ * dispatch helper carries the `1e-6` default; this CPU reference is shape-
+ * agnostic and accepts any positive `epsilon`.
+ */
+export function cpuRmsNorm(
+  data: Float32Array,
+  gamma: Float32Array,
+  rows: number,
+  cols: number,
+  epsilon: number,
+): Float32Array {
+  if (gamma.length !== cols) {
+    throw new Error(
+      `cpuRmsNorm: gamma length (${String(gamma.length)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const out = new Float32Array(rows * cols);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let sumSq = 0;
+    for (let j = 0; j < cols; j++) {
+      const v = data[base + j]!;
+      sumSq += v * v;
+    }
+    const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
+    for (let j = 0; j < cols; j++) {
+      out[base + j] = data[base + j]! * inv * gamma[j]!;
+    }
+  }
+  return out;
+}

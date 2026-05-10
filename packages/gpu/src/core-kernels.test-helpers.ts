@@ -9,7 +9,11 @@ import {
   dispatchGelu,
   dispatchMatMul,
   dispatchMul,
+  dispatchReduceMax,
+  dispatchReduceSum,
+  dispatchRmsNorm,
   dispatchScale,
+  dispatchSoftmax,
   dispatchTranspose,
 } from './core-kernels';
 import type { GpuContext } from './device';
@@ -169,5 +173,97 @@ export async function smokeGelu(
       dispatchGelu(ctx, registry, bufIn, bufOut, n);
     },
     [bufIn, bufOut],
+  );
+}
+
+async function smokeRowwiseReduce(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  data: Float32Array,
+  rows: number,
+  cols: number,
+  dispatch: (input: GPUBuffer, out: GPUBuffer) => void,
+): Promise<Float32Array> {
+  const bufIn = createFloat32StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createFloat32StorageBuffer(ctx.device, rows);
+  writeFloat32Buffer(ctx.queue, bufIn, data);
+  return runAndRead(
+    ctx,
+    bufOut,
+    rows,
+    () => {
+      dispatch(bufIn, bufOut);
+    },
+    [bufIn, bufOut],
+  );
+}
+
+export async function smokeReduceSum(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  data: Float32Array,
+  rows: number,
+  cols: number,
+): Promise<Float32Array> {
+  return smokeRowwiseReduce(ctx, registry, data, rows, cols, (input, out) => {
+    dispatchReduceSum(ctx, registry, input, out, rows, cols);
+  });
+}
+
+export async function smokeReduceMax(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  data: Float32Array,
+  rows: number,
+  cols: number,
+): Promise<Float32Array> {
+  return smokeRowwiseReduce(ctx, registry, data, rows, cols, (input, out) => {
+    dispatchReduceMax(ctx, registry, input, out, rows, cols);
+  });
+}
+
+export async function smokeSoftmax(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  data: Float32Array,
+  rows: number,
+  cols: number,
+): Promise<Float32Array> {
+  const bufIn = createFloat32StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createFloat32StorageBuffer(ctx.device, rows * cols);
+  writeFloat32Buffer(ctx.queue, bufIn, data);
+  return runAndRead(
+    ctx,
+    bufOut,
+    rows * cols,
+    () => {
+      dispatchSoftmax(ctx, registry, bufIn, bufOut, rows, cols);
+    },
+    [bufIn, bufOut],
+  );
+}
+
+export async function smokeRmsNorm(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  data: Float32Array,
+  gamma: Float32Array,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): Promise<Float32Array> {
+  const bufIn = createFloat32StorageBuffer(ctx.device, rows * cols);
+  const bufGamma = createFloat32StorageBuffer(ctx.device, gamma.length);
+  const bufOut = createFloat32StorageBuffer(ctx.device, rows * cols);
+  writeFloat32Buffer(ctx.queue, bufIn, data);
+  writeFloat32Buffer(ctx.queue, bufGamma, gamma);
+  return runAndRead(
+    ctx,
+    bufOut,
+    rows * cols,
+    () => {
+      dispatchRmsNorm(ctx, registry, bufIn, bufGamma, gamma.length, bufOut, rows, cols, epsilon);
+    },
+    [bufIn, bufGamma, bufOut],
   );
 }

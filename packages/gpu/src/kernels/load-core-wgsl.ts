@@ -29,3 +29,19 @@ export function loadElementwiseScaleWgsl(): string {
 export function loadElementwiseGeluWgsl(): string {
   return loadWgsl('./elementwise-gelu.wgsl');
 }
+
+export function loadReduceSumWgsl(): string {
+  return loadWgsl('./reduce-sum.wgsl');
+}
+
+export function loadReduceMaxWgsl(): string {
+  return loadWgsl('./reduce-max.wgsl');
+}
+
+export function loadSoftmaxWgsl(): string {
+  return loadWgsl('./softmax.wgsl');
+}
+
+export function loadRmsNormWgsl(): string {
+  return loadWgsl('./rmsnorm.wgsl');
+}

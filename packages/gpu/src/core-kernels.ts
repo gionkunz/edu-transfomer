@@ -6,6 +6,10 @@ import {
   loadElementwiseMulWgsl,
   loadElementwiseScaleWgsl,
   loadMatMulWgsl,
+  loadReduceMaxWgsl,
+  loadReduceSumWgsl,
+  loadRmsNormWgsl,
+  loadSoftmaxWgsl,
   loadTransposeWgsl,
 } from './kernels/load-core-wgsl';
 import { type ComputeBindingDesc, createSimpleComputePipeline } from './pipeline';
@@ -28,6 +32,18 @@ export const CORE_KERNEL_SCALE = 'core.scale';
 /** GELU activation per element (tanh formulation; see cpu-reference.ts). */
 export const CORE_KERNEL_GELU = 'core.gelu';
 
+/** Row-wise sum of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
+export const CORE_KERNEL_REDUCE_SUM = 'core.reduce_sum';
+
+/** Row-wise max of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
+export const CORE_KERNEL_REDUCE_MAX = 'core.reduce_max';
+
+/** Numerically-stable row-wise softmax of [rows, cols] f32 matrix (two-pass per row). */
+export const CORE_KERNEL_SOFTMAX = 'core.softmax';
+
+/** Row-wise RMSNorm of [rows, cols] f32 matrix with learned `gamma: [cols]`. */
+export const CORE_KERNEL_RMSNORM = 'core.rmsnorm';
+
 /** All core numeric kernels registered by {@link registerCoreKernels}. */
 export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MATMUL,
@@ -36,6 +52,10 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MUL,
   CORE_KERNEL_SCALE,
   CORE_KERNEL_GELU,
+  CORE_KERNEL_REDUCE_SUM,
+  CORE_KERNEL_REDUCE_MAX,
+  CORE_KERNEL_SOFTMAX,
+  CORE_KERNEL_RMSNORM,
 ] as const;
 
 const WGSL_MAIN = 'main';
@@ -91,6 +111,18 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   const ewUnaryKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
   registry.register(CORE_KERNEL_SCALE, make(loadElementwiseScaleWgsl(), ewUnaryKinds));
   registry.register(CORE_KERNEL_GELU, make(loadElementwiseGeluWgsl(), ewUnaryKinds));
+
+  // row-wise reductions / softmax: uniform(rows,cols), readonly input, storage out
+  const reduceKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
+  registry.register(CORE_KERNEL_REDUCE_SUM, make(loadReduceSumWgsl(), reduceKinds));
+  registry.register(CORE_KERNEL_REDUCE_MAX, make(loadReduceMaxWgsl(), reduceKinds));
+  registry.register(CORE_KERNEL_SOFTMAX, make(loadSoftmaxWgsl(), reduceKinds));
+
+  // rmsnorm: uniform(rows,cols,epsilon), readonly input, readonly gamma, storage out
+  registry.register(
+    CORE_KERNEL_RMSNORM,
+    make(loadRmsNormWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
 }
 
 /**
@@ -276,6 +308,137 @@ export function dispatchGelu(
     registry.get(CORE_KERNEL_GELU),
     [bg(0, u), bg(1, inp), bg(2, out)],
     elementCount,
+  );
+  u.destroy();
+}
+
+function assertPositiveDims(label: string, rows: number, cols: number): void {
+  if (!Number.isInteger(rows) || rows <= 0) {
+    throw new Error(`${label}: rows must be a positive integer (got ${String(rows)})`);
+  }
+  if (!Number.isInteger(cols) || cols <= 0) {
+    throw new Error(`${label}: cols must be a positive integer (got ${String(cols)})`);
+  }
+}
+
+function dispatchRowwiseReduce(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  kernelId: typeof CORE_KERNEL_REDUCE_SUM | typeof CORE_KERNEL_REDUCE_MAX,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(ctx, registry.get(kernelId), [bg(0, u), bg(1, input), bg(2, out)], rows);
+  u.destroy();
+}
+
+/**
+ * Row-wise sum: `out[i] = Σ_j input[i*cols + j]`. `input` is row-major
+ * `[rows, cols]` (length `rows*cols`); `out` has length `rows`. One thread per
+ * row; throws synchronously if either dimension is non-positive before any GPU
+ * work is queued.
+ */
+export function dispatchReduceSum(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceSum', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_SUM, input, out, rows, cols);
+}
+
+/**
+ * Row-wise max: `out[i] = max_j input[i*cols + j]`. Same shape contract as
+ * {@link dispatchReduceSum}. The kernel initializes its per-row accumulator to
+ * `-Infinity` so that an empty-cols row would yield `-Infinity` rather than a
+ * stale value (the dispatch helper rejects `cols <= 0` regardless).
+ */
+export function dispatchReduceMax(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceMax', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_MAX, input, out, rows, cols);
+}
+
+/**
+ * Numerically stable row-wise softmax of `[rows, cols]`. The kernel runs the
+ * textbook two-pass per row (subtract row max, exp, normalize) so rows with
+ * large-magnitude values stay finite. `out` has the same shape as `input`.
+ */
+export function dispatchSoftmax(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmax', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX),
+    [bg(0, u), bg(1, input), bg(2, out)],
+    rows,
+  );
+  u.destroy();
+}
+
+/**
+ * Row-wise RMSNorm of `[rows, cols]` with learned scale `gamma` of length
+ * `cols`. Computes `out[i,j] = input[i,j] * gamma[j] / sqrt(mean(input[i,*]²) + epsilon)`.
+ * Default `epsilon` matches `docs/project.md` (`1e-6`). Passing `epsilon === 0`
+ * will divide by zero on a zero-norm row and is the caller's responsibility.
+ *
+ * `gammaLength` is the declared length of the `gamma` buffer in `f32`
+ * elements; it is required so this helper can reject `gamma.length !== cols`
+ * synchronously, before any GPU dispatch (the raw `GPUBuffer` does not carry
+ * an element count).
+ */
+export function dispatchRmsNorm(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNorm', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNorm: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
+    rows,
   );
   u.destroy();
 }
