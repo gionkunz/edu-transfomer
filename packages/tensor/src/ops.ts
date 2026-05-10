@@ -5,6 +5,7 @@
 
 import {
   dispatchAdd,
+  dispatchAdamWStep,
   dispatchBroadcastFillScalar,
   dispatchCrossEntropyFromLogits,
   dispatchCrossEntropyLogitsGrad,
@@ -283,6 +284,51 @@ export function sumFlat(rt: TensorRuntime, a: Tensor): Tensor {
   const outBuf = allocateContiguousBuffer(rt, 1);
   dispatchReduceSum(rt.ctx, rt.registry, collapsed.buffer, outBuf, 1, n);
   return makeContiguousTensor([1], outBuf);
+}
+
+/** Host-supplied AdamW scalars including bias corrections `1 - β₁ᵗ` and `1 - β₂ᵗ`. */
+export type AdamWStepHyperparams = {
+  lr: number;
+  beta1: number;
+  beta2: number;
+  eps: number;
+  weightDecay: number;
+  biasCorrection1: number;
+  biasCorrection2: number;
+};
+
+/**
+ * Fused AdamW step: **`param`**, **`moment1`**, **`moment2`** updated in place; **`grad`** read-only.
+ * All tensors must be contiguous **`f32`** with identical shape.
+ */
+export function adamWStepInPlace(
+  rt: TensorRuntime,
+  param: Tensor,
+  grad: Tensor,
+  moment1: Tensor,
+  moment2: Tensor,
+  hyper: AdamWStepHyperparams,
+): void {
+  assertDtype(param, 'f32');
+  assertDtype(grad, 'f32');
+  assertDtype(moment1, 'f32');
+  assertDtype(moment2, 'f32');
+  assertSameShape(param, grad);
+  assertSameShape(param, moment1);
+  assertSameShape(param, moment2);
+  if (!isContiguous(param) || !isContiguous(grad) || !isContiguous(moment1) || !isContiguous(moment2)) {
+    throw new Error('adamWStepInPlace: non-contiguous tensors not supported');
+  }
+  dispatchAdamWStep(
+    rt.ctx,
+    rt.registry,
+    param.buffer,
+    grad.buffer,
+    moment1.buffer,
+    moment2.buffer,
+    param.length,
+    hyper,
+  );
 }
 
 /** Writes **`scalar[0]`** into **`length`** elements — used by **`sumFlat`** autograd broadcasts. */

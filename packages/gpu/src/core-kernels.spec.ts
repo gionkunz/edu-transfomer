@@ -6,7 +6,8 @@ import './webgpu-globals';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { CORE_KERNEL_IDS, registerCoreKernels } from './core-kernels';
+import { createFloat32StorageBuffer, readFloat32Buffer, writeFloat32Buffer } from './buffer';
+import { CORE_KERNEL_IDS, dispatchAdamWStep, registerCoreKernels } from './core-kernels';
 import {
   smokeAdd,
   smokeGelu,
@@ -16,15 +17,7 @@ import {
   smokeScale,
   smokeTranspose,
 } from './core-kernels.test-helpers';
-import {
-  cpuAdd,
-  cpuGelu,
-  cpuGeluBackward,
-  cpuMatMul,
-  cpuMul,
-  cpuScale,
-  cpuTranspose,
-} from './cpu-reference';
+import { cpuAdamWStep, cpuAdd, cpuGelu, cpuGeluBackward, cpuMatMul, cpuMul, cpuScale, cpuTranspose } from './cpu-reference';
 import { GpuContext, probeWebGpu } from './device';
 import { KernelRegistry } from './kernel-registry';
 
@@ -105,5 +98,70 @@ describe.skipIf(!webgpuAvailable)('core-kernels', () => {
       await smokeGeluBackward(ctx, registry, gradOut, inp, n),
       cpuGeluBackward(gradOut, inp, n),
     );
+  });
+
+  it('adamw step matches CPU reference', async () => {
+    const n = 111;
+    const theta0 = Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.03));
+    const grad0 = Float32Array.from({ length: n }, (_, i) => (i % 7) * 0.01 - 0.02);
+    const m0 = new Float32Array(n);
+    const v0 = new Float32Array(n);
+
+    const thetaCpu = new Float32Array(theta0);
+    const gradCpu = new Float32Array(grad0);
+    const mCpu = new Float32Array(m0);
+    const vCpu = new Float32Array(v0);
+
+    const t = 3;
+    const beta1 = 0.9;
+    const beta2 = 0.95;
+    const hyper = {
+      lr: 0.01,
+      beta1,
+      beta2,
+      eps: 1e-8,
+      weightDecay: 0.01,
+      biasCorrection1: 1 - beta1 ** t,
+      biasCorrection2: 1 - beta2 ** t,
+    };
+
+    cpuAdamWStep(
+      thetaCpu,
+      gradCpu,
+      mCpu,
+      vCpu,
+      n,
+      hyper.lr,
+      hyper.beta1,
+      hyper.beta2,
+      hyper.eps,
+      hyper.weightDecay,
+      hyper.biasCorrection1,
+      hyper.biasCorrection2,
+    );
+
+    const bTheta = createFloat32StorageBuffer(ctx.device, n);
+    const bGrad = createFloat32StorageBuffer(ctx.device, n);
+    const bM = createFloat32StorageBuffer(ctx.device, n);
+    const bV = createFloat32StorageBuffer(ctx.device, n);
+    writeFloat32Buffer(ctx.queue, bTheta, new Float32Array(theta0));
+    writeFloat32Buffer(ctx.queue, bGrad, new Float32Array(grad0));
+    writeFloat32Buffer(ctx.queue, bM, new Float32Array(m0));
+    writeFloat32Buffer(ctx.queue, bV, new Float32Array(v0));
+
+    dispatchAdamWStep(ctx, registry, bTheta, bGrad, bM, bV, n, hyper);
+
+    const thetaGpu = await readFloat32Buffer(ctx.device, ctx.queue, bTheta, n * 4);
+    const mGpu = await readFloat32Buffer(ctx.device, ctx.queue, bM, n * 4);
+    const vGpu = await readFloat32Buffer(ctx.device, ctx.queue, bV, n * 4);
+
+    expectCloseVec(thetaGpu, thetaCpu);
+    expectCloseVec(mGpu, mCpu);
+    expectCloseVec(vGpu, vCpu);
+
+    bTheta.destroy();
+    bGrad.destroy();
+    bM.destroy();
+    bV.destroy();
   });
 });

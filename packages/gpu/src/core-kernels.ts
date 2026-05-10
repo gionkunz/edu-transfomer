@@ -1,6 +1,7 @@
 import type { GpuContext } from './device';
 import type { KernelRegistry } from './kernel-registry';
 import {
+  loadAdamWStepWgsl,
   loadBroadcastFillScalarWgsl,
   loadCrossEntropyFromLogitsWgsl,
   loadCrossEntropyLogitsGradWgsl,
@@ -75,6 +76,9 @@ export const CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD = 'core.cross_entropy_logits_
 /** `out[i] = scalar[0]` for length `n` (broadcast from a `[1]` buffer). */
 export const CORE_KERNEL_BROADCAST_FILL_SCALAR = 'core.broadcast_fill_scalar';
 
+/** Fused AdamW: in-place θ, m, v; read-only gradient buffer. */
+export const CORE_KERNEL_ADAMW_STEP = 'core.adamw_step';
+
 /** All core numeric kernels registered by {@link registerCoreKernels}. */
 export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MATMUL,
@@ -94,12 +98,16 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
   CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
   CORE_KERNEL_BROADCAST_FILL_SCALAR,
+  CORE_KERNEL_ADAMW_STEP,
 ] as const;
 
 const WGSL_MAIN = 'main';
 const WORKGROUP_SIZE = 256;
 /** All core kernel uniforms fit in a 16-byte block (vec4-sized). */
 const UNIFORM_BYTES = 16;
+
+/** `adamw-step.wgsl` — two vec4<u32> + two vec4<f32> blocks. */
+const ADAM_UNIFORM_BYTES = 48;
 
 type Kind = 'uniform' | 'read-only-storage' | 'storage';
 
@@ -235,6 +243,17 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
     CORE_KERNEL_BROADCAST_FILL_SCALAR,
     make(loadBroadcastFillScalarWgsl(), ['uniform', 'read-only-storage', 'storage']),
   );
+
+  registry.register(
+    CORE_KERNEL_ADAMW_STEP,
+    make(loadAdamWStepWgsl(), [
+      'uniform',
+      'storage',
+      'read-only-storage',
+      'storage',
+      'storage',
+    ]),
+  );
 }
 
 /**
@@ -248,6 +267,44 @@ function makeUniform(ctx: GpuContext, fill: (view: DataView) => void): GPUBuffer
   fill(new DataView(ab));
   const buf = ctx.device.createBuffer({
     size: UNIFORM_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  ctx.queue.writeBuffer(buf, 0, ab);
+  return buf;
+}
+
+function makeAdamUniform(
+  ctx: GpuContext,
+  elementCount: number,
+  hyper: {
+    lr: number;
+    beta1: number;
+    beta2: number;
+    eps: number;
+    weightDecay: number;
+    biasCorrection1: number;
+    biasCorrection2: number;
+  },
+): GPUBuffer {
+  if (!Number.isInteger(elementCount) || elementCount <= 0) {
+    throw new Error(`dispatchAdamWStep: elementCount must be positive (got ${String(elementCount)})`);
+  }
+  const ab = new ArrayBuffer(ADAM_UNIFORM_BYTES);
+  const v = new DataView(ab);
+  v.setUint32(0, elementCount, true);
+  v.setUint32(4, 0, true);
+  v.setUint32(8, 0, true);
+  v.setUint32(12, 0, true);
+  v.setFloat32(16, hyper.lr, true);
+  v.setFloat32(20, hyper.beta1, true);
+  v.setFloat32(24, hyper.beta2, true);
+  v.setFloat32(28, hyper.eps, true);
+  v.setFloat32(32, hyper.weightDecay, true);
+  v.setFloat32(36, hyper.biasCorrection1, true);
+  v.setFloat32(40, hyper.biasCorrection2, true);
+  v.setFloat32(44, 0, true);
+  const buf = ctx.device.createBuffer({
+    size: ADAM_UNIFORM_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   ctx.queue.writeBuffer(buf, 0, ab);
@@ -760,6 +817,38 @@ export function dispatchBroadcastFillScalar(
     registry.get(CORE_KERNEL_BROADCAST_FILL_SCALAR),
     [bg(0, u), bg(1, scalar), bg(2, out)],
     n,
+  );
+  u.destroy();
+}
+
+/**
+ * One fused AdamW step: updates **`theta`**, **`m`**, **`v`** in place; **`grad`** is read-only.
+ * Host supplies bias corrections `1 - β₁ᵗ` and `1 - β₂ᵗ` in **`hyper.biasCorrection1/2`**.
+ */
+export function dispatchAdamWStep(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  theta: GPUBuffer,
+  grad: GPUBuffer,
+  m: GPUBuffer,
+  v: GPUBuffer,
+  elementCount: number,
+  hyper: {
+    lr: number;
+    beta1: number;
+    beta2: number;
+    eps: number;
+    weightDecay: number;
+    biasCorrection1: number;
+    biasCorrection2: number;
+  },
+): void {
+  const u = makeAdamUniform(ctx, elementCount, hyper);
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_ADAMW_STEP),
+    [bg(0, u), bg(1, theta), bg(2, grad), bg(3, m), bg(4, v)],
+    elementCount,
   );
   u.destroy();
 }

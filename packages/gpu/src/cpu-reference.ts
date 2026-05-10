@@ -314,3 +314,33 @@ export function cpuCrossEntropyLogitsGradFromProbs(
   }
   return out;
 }
+
+/**
+ * Reference fused AdamW (matches `adamw-step.wgsl`): updates `theta`, `m`, and `v` in place.
+ */
+export function cpuAdamWStep(
+  theta: Float32Array,
+  grad: Float32Array,
+  m: Float32Array,
+  v: Float32Array,
+  n: number,
+  lr: number,
+  beta1: number,
+  beta2: number,
+  eps: number,
+  weightDecay: number,
+  biasCorrection1: number,
+  biasCorrection2: number,
+): void {
+  for (let i = 0; i < n; i++) {
+    const g = grad[i]!;
+    const mNew = beta1 * m[i]! + (1 - beta1) * g;
+    const vNew = beta2 * v[i]! + (1 - beta2) * g * g;
+    const mHat = mNew / biasCorrection1;
+    const vHat = vNew / biasCorrection2;
+    const denom = Math.sqrt(vHat) + eps;
+    theta[i] = theta[i]! - (lr * mHat) / denom - lr * weightDecay * theta[i]!;
+    m[i] = mNew;
+    v[i] = vNew;
+  }
+}

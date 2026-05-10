@@ -34,6 +34,7 @@ export {
 } from './tensor';
 export {
   add,
+  adamWStepInPlace,
   broadcastFillFromScalar,
   crossEntropyLogitsGrad,
   crossEntropyRowsFromLogits,
@@ -50,3 +51,4 @@ export {
   sumFlat,
   transpose,
 } from './ops';
+export type { AdamWStepHyperparams } from './ops';

@@ -73,3 +73,7 @@ export function loadCrossEntropyLogitsGradWgsl(): string {
 export function loadBroadcastFillScalarWgsl(): string {
   return loadWgsl('./broadcast-fill-scalar.wgsl');
 }
+
+export function loadAdamWStepWgsl(): string {
+  return loadWgsl('./adamw-step.wgsl');
+}

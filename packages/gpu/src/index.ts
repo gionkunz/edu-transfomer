@@ -21,6 +21,7 @@ export {
 } from './bootstrap-kernels';
 export {
   CORE_KERNEL_ADD,
+  CORE_KERNEL_ADAMW_STEP,
   CORE_KERNEL_BROADCAST_FILL_SCALAR,
   CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
   CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
@@ -39,6 +40,7 @@ export {
   CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_TRANSPOSE,
   dispatchAdd,
+  dispatchAdamWStep,
   dispatchBroadcastFillScalar,
   dispatchCrossEntropyFromLogits,
   dispatchCrossEntropyLogitsGrad,
@@ -59,6 +61,7 @@ export {
 } from './core-kernels';
 export {
   cpuAdd,
+  cpuAdamWStep,
   cpuCrossEntropyFromLogits,
   cpuCrossEntropyLogitsGradFromProbs,
   cpuEmbeddingGather,
