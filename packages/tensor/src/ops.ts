@@ -6,6 +6,7 @@
 import {
   dispatchAdd,
   dispatchGelu,
+  dispatchGeluBackward,
   dispatchMatMul,
   dispatchMul,
   dispatchScale,
@@ -70,6 +71,17 @@ export function gelu(rt: TensorRuntime, a: Tensor): Tensor {
   const out = allocateContiguousBuffer(rt, a.length);
   dispatchGelu(rt.ctx, rt.registry, a.buffer, out, a.length);
   return makeContiguousTensor(a.shape, out);
+}
+
+/**
+ * GELU backward: `grad_in[i] = grad_out[i] * gelu′(input[i])`. Shapes must
+ * match elementwise (no broadcasting).
+ */
+export function geluBackward(rt: TensorRuntime, gradOutput: Tensor, input: Tensor): Tensor {
+  assertSameShape(gradOutput, input);
+  const out = allocateContiguousBuffer(rt, input.length);
+  dispatchGeluBackward(rt.ctx, rt.registry, gradOutput.buffer, input.buffer, out, input.length);
+  return makeContiguousTensor(input.shape, out);
 }
 
 /**

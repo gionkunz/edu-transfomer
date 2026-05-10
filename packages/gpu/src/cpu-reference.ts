@@ -16,6 +16,15 @@ export function geluScalar(x: number): number {
   return 0.5 * x * (1 + t);
 }
 
+/** Derivative of {@link geluScalar} — keep identical to WGSL `gelu_grad_f32`. */
+export function geluDerivativeScalar(x: number): number {
+  const u = GELU_TANH_COEF * (x + GELU_CUBE_COEF * x * x * x);
+  const t = Math.tanh(u);
+  const dtanh = 1 - t * t;
+  const dudx = GELU_TANH_COEF * (1 + 3 * GELU_CUBE_COEF * x * x);
+  return 0.5 * (1 + t) + 0.5 * x * dtanh * dudx;
+}
+
 /** Row-major M×K × K×N → M×N. */
 export function cpuMatMul(
   a: Float32Array,
@@ -75,6 +84,15 @@ export function cpuGelu(a: Float32Array, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     out[i] = geluScalar(a[i]!);
+  }
+  return out;
+}
+
+/** Elementwise `grad_out ⊙ gelu′(inp)` — matches `core.gelu_backward`. */
+export function cpuGeluBackward(gradOut: Float32Array, inp: Float32Array, n: number): Float32Array {
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = gradOut[i]! * geluDerivativeScalar(inp[i]!);
   }
   return out;
 }

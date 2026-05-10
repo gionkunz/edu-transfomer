@@ -13,7 +13,7 @@ import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { backward } from './backward';
-import { add, matmul, mul, reshape, scale } from './ops';
+import { add, gelu, matmul, mul, reshape, scale } from './ops';
 import { createParameter } from './variable';
 
 const webgpuAvailable = await probeWebGpu();
@@ -250,6 +250,91 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
 
         const fPlus = sum((await runMatmulGraph(rt, xP, wP, false)).output);
         const fMinus = sum((await runMatmulGraph(rt, xM, wM, false)).output);
+        const numerical = (fPlus - fMinus) / (2 * epsilon);
+
+        expect(
+          Math.abs((analytic[i] as number) - numerical),
+          `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
+        ).toBeLessThanOrEqual(tolerance);
+      }
+    }
+  }, 30000);
+
+  it('gelu in a composed graph: analytic grads match central-difference', async () => {
+    const aBase = new Float32Array([0.15, -0.4, 0.7, -0.2, 0.55, -0.35]);
+    const bBase = new Float32Array([0.2, 0.3, -0.5, 0.1, -0.25, 0.45]);
+
+    interface GeluGraphResult {
+      readonly output: Float32Array;
+      readonly grads: { readonly a: Float32Array; readonly b: Float32Array } | null;
+    }
+
+    async function runGeluGraph(
+      rtInner: TensorRuntime,
+      aData: Float32Array,
+      bData: Float32Array,
+      computeGrads: boolean,
+    ): Promise<GeluGraphResult> {
+      const shape = [2, 3] as const;
+      const aT = createFromArray(rtInner, aData, shape);
+      const bT = createFromArray(rtInner, bData, shape);
+
+      const a = createParameter(aT);
+      const b = createParameter(bT);
+
+      const s = add(rtInner, a, b);
+      const g = gelu(rtInner, s);
+      const out = scale(rtInner, g, 2.0);
+
+      const outputArray = await toArray(rtInner, out.tensor);
+
+      let grads: GeluGraphResult['grads'] = null;
+      if (computeGrads) {
+        backward(rtInner, out);
+        const gradA = await toArray(rtInner, a.grad as Tensor);
+        const gradB = await toArray(rtInner, b.grad as Tensor);
+        grads = { a: gradA, b: gradB };
+      }
+
+      destroy(aT);
+      destroy(bT);
+      destroy(s.tensor);
+      destroy(g.tensor);
+      destroy(out.tensor);
+
+      if (computeGrads) {
+        if (out.grad !== null) destroy(out.grad);
+        if (a.grad !== null) destroy(a.grad);
+        if (b.grad !== null) destroy(b.grad);
+      }
+
+      return { output: outputArray, grads };
+    }
+
+    const { grads } = await runGeluGraph(rt, aBase, bBase, true);
+    expect(grads).not.toBeNull();
+
+    const epsilon = 1e-3;
+    const tolerance = 5e-3;
+
+    for (const slot of [
+      { name: 'a' as const, base: aBase },
+      { name: 'b' as const, base: bBase },
+    ]) {
+      const analytic = grads![slot.name];
+      for (let i = 0; i < slot.base.length; i++) {
+        const plus = new Float32Array(slot.base);
+        plus[i] = (slot.base[i] as number) + epsilon;
+        const minus = new Float32Array(slot.base);
+        minus[i] = (slot.base[i] as number) - epsilon;
+
+        const aP = slot.name === 'a' ? plus : aBase;
+        const bP = slot.name === 'b' ? plus : bBase;
+        const aM = slot.name === 'a' ? minus : aBase;
+        const bM = slot.name === 'b' ? minus : bBase;
+
+        const fPlus = sum((await runGeluGraph(rt, aP, bP, false)).output);
+        const fMinus = sum((await runGeluGraph(rt, aM, bM, false)).output);
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(

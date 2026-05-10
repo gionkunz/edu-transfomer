@@ -12,6 +12,8 @@ import {
   add as tensorAdd,
   createFromArray,
   destroy,
+  gelu as tensorGelu,
+  geluBackward as tensorGeluBackward,
   matmul as tensorMatmul,
   mul as tensorMul,
   scale as tensorScale,
@@ -21,7 +23,7 @@ import {
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { add, matmul, mul, reshape, scale, transpose } from './ops';
+import { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
 import type { Variable } from './types';
 import { createLeafVariable, createParameter } from './variable';
 
@@ -88,6 +90,39 @@ describe.skipIf(!webgpuAvailable)('autograd ops (GPU-backed)', () => {
     // For add, both grads are the upstream itself (reference equal).
     expect(grads[0]).toBe(upstream);
     expect(grads[1]).toBe(upstream);
+  });
+
+  it('gelu forward matches tensor.gelu and backward matches tensor.geluBackward', async () => {
+    const data = new Float32Array([0.3, -0.7, 1.2, 0.05]);
+    const x = trackV(createParameter(track(createFromArray(rt, data, [4]))));
+
+    const out = trackV(gelu(rt, x));
+    expect(out.requiresGrad).toBe(true);
+    expect(out.creator?.name).toBe('gelu');
+
+    const expected = track(tensorGelu(rt, x.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
+
+    const upstreamData = new Float32Array([1, 2, 3, 4]);
+    const upstream = track(createFromArray(rt, upstreamData, [4]));
+    const grads = out.creator!.backward(rt, upstream);
+    expect(grads).toHaveLength(1);
+    const gradX = grads[0];
+    expect(gradX).not.toBeNull();
+    track(gradX as Tensor);
+
+    const expectedGrad = track(tensorGeluBackward(rt, upstream, x.tensor));
+    expectCloseVec(await toArray(rt, gradX as Tensor), await toArray(rt, expectedGrad));
+  });
+
+  it('gelu does not record Operation when input does not require grad', async () => {
+    const data = new Float32Array([0.3, -0.7, 1.2, 0.05]);
+    const x = trackV(createLeafVariable(track(createFromArray(rt, data, [4])), false));
+    const out = trackV(gelu(rt, x));
+    expect(out.requiresGrad).toBe(false);
+    expect(out.creator).toBeNull();
+    const expected = track(tensorGelu(rt, x.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
   });
 
   it('mul forward matches tensor.mul and backward emits gradOutput * other-input', async () => {

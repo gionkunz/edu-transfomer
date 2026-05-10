@@ -30,6 +30,10 @@ export function loadElementwiseGeluWgsl(): string {
   return loadWgsl('./elementwise-gelu.wgsl');
 }
 
+export function loadElementwiseGeluBackwardWgsl(): string {
+  return loadWgsl('./elementwise-gelu-backward.wgsl');
+}
+
 export function loadReduceSumWgsl(): string {
   return loadWgsl('./reduce-sum.wgsl');
 }

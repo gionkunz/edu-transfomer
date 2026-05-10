@@ -10,12 +10,21 @@ import { CORE_KERNEL_IDS, registerCoreKernels } from './core-kernels';
 import {
   smokeAdd,
   smokeGelu,
+  smokeGeluBackward,
   smokeMatMul,
   smokeMul,
   smokeScale,
   smokeTranspose,
 } from './core-kernels.test-helpers';
-import { cpuAdd, cpuGelu, cpuMatMul, cpuMul, cpuScale, cpuTranspose } from './cpu-reference';
+import {
+  cpuAdd,
+  cpuGelu,
+  cpuGeluBackward,
+  cpuMatMul,
+  cpuMul,
+  cpuScale,
+  cpuTranspose,
+} from './cpu-reference';
 import { GpuContext, probeWebGpu } from './device';
 import { KernelRegistry } from './kernel-registry';
 
@@ -86,5 +95,15 @@ describe.skipIf(!webgpuAvailable)('core-kernels', () => {
     const n = 64;
     const a = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
     expectCloseVec(await smokeGelu(ctx, registry, a, n), cpuGelu(a, n));
+  });
+
+  it('gelu backward matches CPU reference', async () => {
+    const n = 64;
+    const inp = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
+    const gradOut = Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.13) + 0.5);
+    expectCloseVec(
+      await smokeGeluBackward(ctx, registry, gradOut, inp, n),
+      cpuGeluBackward(gradOut, inp, n),
+    );
   });
 });

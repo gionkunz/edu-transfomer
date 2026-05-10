@@ -5,6 +5,7 @@
 import {
   cpuAdd,
   cpuGelu,
+  cpuGeluBackward,
   cpuMatMul,
   cpuMul,
   cpuScale,
@@ -16,7 +17,7 @@ import {
 } from '@llm-transformer-diy/gpu';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
+import { add, gelu, geluBackward, matmul, mul, reshape, scale, transpose } from './ops';
 import { createFromArray, createZeros, destroy, toArray } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
 
@@ -112,6 +113,16 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
     const t = track(createFromArray(rt, data, [n]));
     const out = track(gelu(rt, t));
     expectCloseVec(await toArray(rt, out), cpuGelu(data, n));
+  });
+
+  it('geluBackward matches the CPU reference', async () => {
+    const n = 32;
+    const inp = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
+    const gradOutData = Float32Array.from({ length: n }, (_, i) => Math.cos(i * 0.11));
+    const gradT = track(createFromArray(rt, gradOutData, [n]));
+    const inpT = track(createFromArray(rt, inp, [n]));
+    const out = track(geluBackward(rt, gradT, inpT));
+    expectCloseVec(await toArray(rt, out), cpuGeluBackward(gradOutData, inp, n));
   });
 
   it('transpose matches the CPU reference for a non-square matrix', async () => {

@@ -23,4 +23,4 @@ export {
   sameShape,
 } from './shape';
 export { createFromArray, createZeros, destroy, toArray } from './tensor';
-export { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
+export { add, gelu, geluBackward, matmul, mul, reshape, scale, transpose } from './ops';

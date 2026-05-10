@@ -18,6 +18,7 @@ export {
 export {
   CORE_KERNEL_ADD,
   CORE_KERNEL_GELU,
+  CORE_KERNEL_GELU_BACKWARD,
   CORE_KERNEL_IDS,
   CORE_KERNEL_MATMUL,
   CORE_KERNEL_MUL,
@@ -29,6 +30,7 @@ export {
   CORE_KERNEL_TRANSPOSE,
   dispatchAdd,
   dispatchGelu,
+  dispatchGeluBackward,
   dispatchMatMul,
   dispatchMul,
   dispatchReduceMax,
@@ -42,6 +44,7 @@ export {
 export {
   cpuAdd,
   cpuGelu,
+  cpuGeluBackward,
   cpuMatMul,
   cpuMul,
   cpuReduceMax,
@@ -50,6 +53,7 @@ export {
   cpuScale,
   cpuSoftmax,
   cpuTranspose,
+  geluDerivativeScalar,
   geluScalar,
   GELU_CUBE_COEF,
   GELU_TANH_COEF,

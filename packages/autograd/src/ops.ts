@@ -1,5 +1,7 @@
 import {
   add as tensorAdd,
+  gelu as tensorGelu,
+  geluBackward as tensorGeluBackward,
   matmul as tensorMatmul,
   mul as tensorMul,
   reshape as tensorReshape,
@@ -95,6 +97,22 @@ export function scale(rt: TensorRuntime, a: Variable, k: number): Variable {
     inputs: [a],
     backward: (rtBackward, gradOutput) => [
       a.requiresGrad ? tensorScale(rtBackward, gradOutput, k) : null,
+    ],
+  }));
+}
+
+/**
+ * Elementwise GELU with autograd (tanh approximation). Forward routes to
+ * `tensor.gelu`; backward uses `tensor.geluBackward` with the saved pre-
+ * activation input.
+ */
+export function gelu(rt: TensorRuntime, x: Variable): Variable {
+  const out = tensorGelu(rt, x.tensor);
+  return liftOp(out, [x], () => ({
+    name: 'gelu',
+    inputs: [x],
+    backward: (rtBackward, gradOutput) => [
+      x.requiresGrad ? tensorGeluBackward(rtBackward, gradOutput, x.tensor) : null,
     ],
   }));
 }

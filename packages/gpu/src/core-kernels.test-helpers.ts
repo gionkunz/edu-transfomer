@@ -7,6 +7,7 @@ import {
 import {
   dispatchAdd,
   dispatchGelu,
+  dispatchGeluBackward,
   dispatchMatMul,
   dispatchMul,
   dispatchReduceMax,
@@ -173,6 +174,29 @@ export async function smokeGelu(
       dispatchGelu(ctx, registry, bufIn, bufOut, n);
     },
     [bufIn, bufOut],
+  );
+}
+
+export async function smokeGeluBackward(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: Float32Array,
+  inp: Float32Array,
+  n: number,
+): Promise<Float32Array> {
+  const bufGradOut = createFloat32StorageBuffer(ctx.device, n);
+  const bufInp = createFloat32StorageBuffer(ctx.device, n);
+  const bufGradIn = createFloat32StorageBuffer(ctx.device, n);
+  writeFloat32Buffer(ctx.queue, bufGradOut, gradOut);
+  writeFloat32Buffer(ctx.queue, bufInp, inp);
+  return runAndRead(
+    ctx,
+    bufGradIn,
+    n,
+    () => {
+      dispatchGeluBackward(ctx, registry, bufGradOut, bufInp, bufGradIn, n);
+    },
+    [bufGradOut, bufInp, bufGradIn],
   );
 }
 

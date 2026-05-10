@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define requirements for the core numeric WGSL kernels in **`packages/gpu`**: matmul, elementwise (`add`, `mul`, `scale`, `gelu`), and 2D transpose — registered under stable IDs and validated against CPU references for small shapes. This builds on `gpu-bootstrap` and unlocks the tensor layer without owning tensor types or autograd.
+Define requirements for the core numeric WGSL kernels in **`packages/gpu`**: matmul, elementwise (`add`, `mul`, `scale`, `gelu`, `gelu_backward`), and 2D transpose — registered under stable IDs and validated against CPU references for small shapes. This builds on `gpu-bootstrap` and unlocks the tensor layer without owning tensor types or autograd.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ The implementation SHALL provide a WGSL compute kernel that computes the matrix 
 
 ### Requirement: Core elementwise kernels cover add, multiply, scale, and GELU
 
-The implementation SHALL provide WGSL compute kernels registered under stable identifiers `core.add`, `core.mul`, `core.scale`, and `core.gelu`. Each kernel SHALL consume and produce `f32` data in equal-length 1D buffers (pairwise inputs for `add` and `mul`; single input plus scalar scale factor for `scale`; single in-place-style input/output buffers for `gelu` as defined by the implementation’s documented layout). The scalar formula used for GELU SHALL be identical between WGSL and the CPU reference used in tests.
+The implementation SHALL provide WGSL compute kernels registered under stable identifiers `core.add`, `core.mul`, `core.scale`, `core.gelu`, and `core.gelu_backward`. Each kernel SHALL consume and produce `f32` data in equal-length 1D buffers (pairwise inputs for `add` and `mul`; single input plus scalar scale factor for `scale`; single input buffer plus output buffer for `gelu` as defined by the implementation’s documented layout; upstream-gradient buffer plus forward-input buffer plus output buffer for `gelu_backward`, computing elementwise `grad_in[i] = grad_out[i] * gelu′(x[i])` for the same GELU scalar as `core.gelu`). The scalar formula used for GELU SHALL be identical between WGSL and the CPU reference used in tests.
 
 #### Scenario: Pairwise add matches CPU reference
 
@@ -45,6 +45,11 @@ The implementation SHALL provide WGSL compute kernels registered under stable id
 
 - **WHEN** tests dispatch `core.gelu` on a length-`n` input buffer with WebGPU available
 - **THEN** the output buffer matches the CPU reference GELU evaluated per element within floating-point tolerance
+
+#### Scenario: GELU backward matches CPU reference
+
+- **WHEN** tests dispatch `core.gelu_backward` on length-`n` upstream-gradient and forward-input buffers with WebGPU available
+- **THEN** the output buffer matches the CPU reference for elementwise `grad_out ⊙ gelu′(input)` within floating-point tolerance
 
 ---
 

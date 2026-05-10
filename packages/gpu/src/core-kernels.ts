@@ -2,6 +2,7 @@ import type { GpuContext } from './device';
 import type { KernelRegistry } from './kernel-registry';
 import {
   loadElementwiseAddWgsl,
+  loadElementwiseGeluBackwardWgsl,
   loadElementwiseGeluWgsl,
   loadElementwiseMulWgsl,
   loadElementwiseScaleWgsl,
@@ -32,6 +33,9 @@ export const CORE_KERNEL_SCALE = 'core.scale';
 /** GELU activation per element (tanh formulation; see cpu-reference.ts). */
 export const CORE_KERNEL_GELU = 'core.gelu';
 
+/** Upstream gradient times GELU derivative w.r.t. forward input (elementwise). */
+export const CORE_KERNEL_GELU_BACKWARD = 'core.gelu_backward';
+
 /** Row-wise sum of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
 export const CORE_KERNEL_REDUCE_SUM = 'core.reduce_sum';
 
@@ -52,6 +56,7 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MUL,
   CORE_KERNEL_SCALE,
   CORE_KERNEL_GELU,
+  CORE_KERNEL_GELU_BACKWARD,
   CORE_KERNEL_REDUCE_SUM,
   CORE_KERNEL_REDUCE_MAX,
   CORE_KERNEL_SOFTMAX,
@@ -111,6 +116,18 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   const ewUnaryKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
   registry.register(CORE_KERNEL_SCALE, make(loadElementwiseScaleWgsl(), ewUnaryKinds));
   registry.register(CORE_KERNEL_GELU, make(loadElementwiseGeluWgsl(), ewUnaryKinds));
+
+  // elementwise gelu backward: uniform(n), readonly grad_out, readonly inp, storage grad_in
+  const ewGeluBackwardKinds: Kind[] = [
+    'uniform',
+    'read-only-storage',
+    'read-only-storage',
+    'storage',
+  ];
+  registry.register(
+    CORE_KERNEL_GELU_BACKWARD,
+    make(loadElementwiseGeluBackwardWgsl(), ewGeluBackwardKinds),
+  );
 
   // row-wise reductions / softmax: uniform(rows,cols), readonly input, storage out
   const reduceKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
@@ -307,6 +324,30 @@ export function dispatchGelu(
     ctx,
     registry.get(CORE_KERNEL_GELU),
     [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+/**
+ * GELU backward: `grad_in[i] = grad_out[i] * gelu′(inp[i])` (same tanh
+ * formulation as {@link dispatchGelu}).
+ */
+export function dispatchGeluBackward(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  inp: GPUBuffer,
+  gradIn: GPUBuffer,
+  elementCount: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_GELU_BACKWARD),
+    [bg(0, u), bg(1, gradOut), bg(2, inp), bg(3, gradIn)],
     elementCount,
   );
   u.destroy();
