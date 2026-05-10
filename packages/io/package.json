@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "glob": "^13.0.6"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -11,5 +14,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"]
+  "files": [
+    "dist"
+  ]
 }
