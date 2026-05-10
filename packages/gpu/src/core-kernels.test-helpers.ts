@@ -15,6 +15,7 @@ import {
   dispatchRmsNorm,
   dispatchScale,
   dispatchSoftmax,
+  dispatchSoftmaxBackward,
   dispatchTranspose,
 } from './core-kernels';
 import type { GpuContext } from './device';
@@ -264,6 +265,30 @@ export async function smokeSoftmax(
       dispatchSoftmax(ctx, registry, bufIn, bufOut, rows, cols);
     },
     [bufIn, bufOut],
+  );
+}
+
+export async function smokeSoftmaxBackward(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: Float32Array,
+  y: Float32Array,
+  rows: number,
+  cols: number,
+): Promise<Float32Array> {
+  const bufG = createFloat32StorageBuffer(ctx.device, rows * cols);
+  const bufY = createFloat32StorageBuffer(ctx.device, rows * cols);
+  const bufIn = createFloat32StorageBuffer(ctx.device, rows * cols);
+  writeFloat32Buffer(ctx.queue, bufG, gradOut);
+  writeFloat32Buffer(ctx.queue, bufY, y);
+  return runAndRead(
+    ctx,
+    bufIn,
+    rows * cols,
+    () => {
+      dispatchSoftmaxBackward(ctx, registry, bufG, bufY, bufIn, rows, cols);
+    },
+    [bufG, bufY, bufIn],
   );
 }
 

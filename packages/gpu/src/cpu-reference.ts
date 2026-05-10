@@ -158,6 +158,30 @@ export function cpuSoftmax(data: Float32Array, rows: number, cols: number): Floa
 }
 
 /**
+ * Jacobian–vector product for row-wise softmax: gradients w.r.t. logits given
+ * upstream grad w.r.t. probabilities `y` (matching `core.softmax_backward`).
+ */
+export function cpuSoftmaxBackward(
+  gradOut: Float32Array,
+  y: Float32Array,
+  rows: number,
+  cols: number,
+): Float32Array {
+  const out = new Float32Array(rows * cols);
+  for (let i = 0; i < rows; i++) {
+    const base = i * cols;
+    let dot = 0;
+    for (let j = 0; j < cols; j++) {
+      dot += y[base + j]! * gradOut[base + j]!;
+    }
+    for (let j = 0; j < cols; j++) {
+      out[base + j] = y[base + j]! * (gradOut[base + j]! - dot);
+    }
+  }
+  return out;
+}
+
+/**
  * Row-wise RMSNorm of row-major [rows, cols] f32 matrix with learned scale
  * `gamma` of length `cols`. For each row i:
  *   meanSq = Σ_j input[i,j]^2 / cols

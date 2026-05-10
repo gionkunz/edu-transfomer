@@ -40,5 +40,5 @@ export {
   totalParams,
   zeroGrad,
 } from './parameter-registry';
-export { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
+export { add, gelu, matmul, mul, reshape, scale, softmax, transpose } from './ops';
 export { backward, topologicalOrder } from './backward';

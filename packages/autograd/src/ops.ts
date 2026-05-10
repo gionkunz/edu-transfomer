@@ -6,6 +6,8 @@ import {
   mul as tensorMul,
   reshape as tensorReshape,
   scale as tensorScale,
+  softmax as tensorSoftmax,
+  softmaxBackward as tensorSoftmaxBackward,
   transpose as tensorTranspose,
 } from '@llm-transformer-diy/tensor';
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
@@ -113,6 +115,21 @@ export function gelu(rt: TensorRuntime, x: Variable): Variable {
     inputs: [x],
     backward: (rtBackward, gradOutput) => [
       x.requiresGrad ? tensorGeluBackward(rtBackward, gradOutput, x.tensor) : null,
+    ],
+  }));
+}
+
+/**
+ * Row-wise softmax on **rank-2** logits. Forward uses `tensor.softmax`;
+ * backward uses `tensor.softmaxBackward` with the saved probability tensor `y`.
+ */
+export function softmax(rt: TensorRuntime, x: Variable): Variable {
+  const y = tensorSoftmax(rt, x.tensor);
+  return liftOp(y, [x], () => ({
+    name: 'softmax',
+    inputs: [x],
+    backward: (rtBackward, gradOutput) => [
+      x.requiresGrad ? tensorSoftmaxBackward(rtBackward, gradOutput, y) : null,
     ],
   }));
 }

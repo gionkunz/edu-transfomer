@@ -10,6 +10,7 @@ import {
   loadReduceMaxWgsl,
   loadReduceSumWgsl,
   loadRmsNormWgsl,
+  loadSoftmaxBackwardWgsl,
   loadSoftmaxWgsl,
   loadTransposeWgsl,
 } from './kernels/load-core-wgsl';
@@ -45,6 +46,9 @@ export const CORE_KERNEL_REDUCE_MAX = 'core.reduce_max';
 /** Numerically-stable row-wise softmax of [rows, cols] f32 matrix (two-pass per row). */
 export const CORE_KERNEL_SOFTMAX = 'core.softmax';
 
+/** Jacobian–vector product for row-wise softmax (grad w.r.t. logits). */
+export const CORE_KERNEL_SOFTMAX_BACKWARD = 'core.softmax_backward';
+
 /** Row-wise RMSNorm of [rows, cols] f32 matrix with learned `gamma: [cols]`. */
 export const CORE_KERNEL_RMSNORM = 'core.rmsnorm';
 
@@ -60,6 +64,7 @@ export const CORE_KERNEL_IDS = [
   CORE_KERNEL_REDUCE_SUM,
   CORE_KERNEL_REDUCE_MAX,
   CORE_KERNEL_SOFTMAX,
+  CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_RMSNORM,
 ] as const;
 
@@ -134,6 +139,18 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   registry.register(CORE_KERNEL_REDUCE_SUM, make(loadReduceSumWgsl(), reduceKinds));
   registry.register(CORE_KERNEL_REDUCE_MAX, make(loadReduceMaxWgsl(), reduceKinds));
   registry.register(CORE_KERNEL_SOFTMAX, make(loadSoftmaxWgsl(), reduceKinds));
+
+  // softmax backward: uniform(rows,cols), readonly grad_out, readonly y, storage grad_in
+  const softmaxBackwardKinds: Kind[] = [
+    'uniform',
+    'read-only-storage',
+    'read-only-storage',
+    'storage',
+  ];
+  registry.register(
+    CORE_KERNEL_SOFTMAX_BACKWARD,
+    make(loadSoftmaxBackwardWgsl(), softmaxBackwardKinds),
+  );
 
   // rmsnorm: uniform(rows,cols,epsilon), readonly input, readonly gamma, storage out
   registry.register(
@@ -437,6 +454,34 @@ export function dispatchSoftmax(
     ctx,
     registry.get(CORE_KERNEL_SOFTMAX),
     [bg(0, u), bg(1, input), bg(2, out)],
+    rows,
+  );
+  u.destroy();
+}
+
+/**
+ * Softmax backward: given upstream gradient w.r.t. softmax probabilities
+ * `grad_out` and forward output `y` (same shape `[rows, cols]`), writes the
+ * gradient w.r.t. logits into `grad_in`.
+ */
+export function dispatchSoftmaxBackward(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  y: GPUBuffer,
+  gradIn: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmaxBackward', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX_BACKWARD),
+    [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
     rows,
   );
   u.destroy();

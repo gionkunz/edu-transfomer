@@ -9,6 +9,8 @@ import {
   cpuMatMul,
   cpuMul,
   cpuScale,
+  cpuSoftmax,
+  cpuSoftmaxBackward,
   cpuTranspose,
   GpuContext,
   KernelRegistry,
@@ -17,7 +19,18 @@ import {
 } from '@llm-transformer-diy/gpu';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { add, gelu, geluBackward, matmul, mul, reshape, scale, transpose } from './ops';
+import {
+  add,
+  gelu,
+  geluBackward,
+  matmul,
+  mul,
+  reshape,
+  scale,
+  softmax,
+  softmaxBackward,
+  transpose,
+} from './ops';
 import { createFromArray, createZeros, destroy, toArray } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
 
@@ -125,6 +138,27 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
     expectCloseVec(await toArray(rt, out), cpuGeluBackward(gradOutData, inp, n));
   });
 
+  it('softmax matches the CPU reference for [2, 4]', async () => {
+    const rows = 2;
+    const cols = 4;
+    const data = Float32Array.from({ length: rows * cols }, (_, i) => Math.sin(i * 0.4));
+    const t = track(createFromArray(rt, data, [rows, cols]));
+    const out = track(softmax(rt, t));
+    expectCloseVec(await toArray(rt, out), cpuSoftmax(data, rows, cols));
+  });
+
+  it('softmaxBackward matches the CPU reference for [2, 4]', async () => {
+    const rows = 2;
+    const cols = 4;
+    const logits = Float32Array.from({ length: rows * cols }, (_, i) => Math.cos(i * 0.3));
+    const y = cpuSoftmax(logits, rows, cols);
+    const gradOutData = Float32Array.from({ length: rows * cols }, (_, i) => (i % 4) * 0.1 - 0.15);
+    const gradT = track(createFromArray(rt, gradOutData, [rows, cols]));
+    const yT = track(createFromArray(rt, y, [rows, cols]));
+    const out = track(softmaxBackward(rt, gradT, yT));
+    expectCloseVec(await toArray(rt, out), cpuSoftmaxBackward(gradOutData, y, rows, cols));
+  });
+
   it('transpose matches the CPU reference for a non-square matrix', async () => {
     const rows = 3;
     const cols = 5;
@@ -160,5 +194,10 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
   it('transpose throws on rank ≠ 2 before any dispatch', () => {
     const a = track(createFromArray(rt, new Float32Array(8), [2, 2, 2]));
     expect(() => transpose(rt, a)).toThrow(/expected rank 2/);
+  });
+
+  it('softmax throws on rank ≠ 2 before any dispatch', () => {
+    const a = track(createFromArray(rt, new Float32Array(4), [4]));
+    expect(() => softmax(rt, a)).toThrow(/expected rank 2/);
   });
 });

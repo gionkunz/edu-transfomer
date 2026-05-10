@@ -10,6 +10,8 @@ import {
   dispatchMatMul,
   dispatchMul,
   dispatchScale,
+  dispatchSoftmax,
+  dispatchSoftmaxBackward,
   dispatchTranspose,
 } from '@llm-transformer-diy/gpu';
 
@@ -64,6 +66,52 @@ export function scale(rt: TensorRuntime, a: Tensor, k: number): Tensor {
   const out = allocateContiguousBuffer(rt, a.length);
   dispatchScale(rt.ctx, rt.registry, a.buffer, out, a.length, k);
   return makeContiguousTensor(a.shape, out);
+}
+
+/**
+ * Row-wise softmax for **rank-2** row-major `[rows, cols]` (numerically stable;
+ * matches `core.softmax`).
+ */
+export function softmax(rt: TensorRuntime, a: Tensor): Tensor {
+  assertRank(a, 2);
+  if (!isContiguous(a)) {
+    throw new Error('softmax: non-contiguous strides not supported');
+  }
+  const rows = a.shape[0]!;
+  const cols = a.shape[1]!;
+  const out = allocateContiguousBuffer(rt, rows * cols);
+  dispatchSoftmax(rt.ctx, rt.registry, a.buffer, out, rows, cols);
+  return makeContiguousTensor([rows, cols], out);
+}
+
+/**
+ * Softmax backward: `gradOut` and `softmaxOutput` (`y`) must match shapes
+ * `[rows, cols]` from the forward softmax.
+ */
+export function softmaxBackward(
+  rt: TensorRuntime,
+  gradOutput: Tensor,
+  softmaxOutput: Tensor,
+): Tensor {
+  assertRank(gradOutput, 2);
+  assertRank(softmaxOutput, 2);
+  assertSameShape(gradOutput, softmaxOutput);
+  if (!isContiguous(gradOutput) || !isContiguous(softmaxOutput)) {
+    throw new Error('softmaxBackward: non-contiguous strides not supported');
+  }
+  const rows = gradOutput.shape[0]!;
+  const cols = gradOutput.shape[1]!;
+  const out = allocateContiguousBuffer(rt, rows * cols);
+  dispatchSoftmaxBackward(
+    rt.ctx,
+    rt.registry,
+    gradOutput.buffer,
+    softmaxOutput.buffer,
+    out,
+    rows,
+    cols,
+  );
+  return makeContiguousTensor([rows, cols], out);
 }
 
 /** Elementwise GELU activation (tanh formulation; matches `geluScalar` in `@llm-transformer-diy/gpu`). */

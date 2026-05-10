@@ -11,6 +11,7 @@ import {
   dispatchReduceSum,
   dispatchRmsNorm,
   dispatchSoftmax,
+  dispatchSoftmaxBackward,
   registerCoreKernels,
 } from './core-kernels';
 import {
@@ -18,8 +19,15 @@ import {
   smokeReduceSum,
   smokeRmsNorm,
   smokeSoftmax,
+  smokeSoftmaxBackward,
 } from './core-kernels.test-helpers';
-import { cpuReduceMax, cpuReduceSum, cpuRmsNorm, cpuSoftmax } from './cpu-reference';
+import {
+  cpuReduceMax,
+  cpuReduceSum,
+  cpuRmsNorm,
+  cpuSoftmax,
+  cpuSoftmaxBackward,
+} from './cpu-reference';
 import { GpuContext, probeWebGpu } from './device';
 import { KernelRegistry } from './kernel-registry';
 
@@ -78,6 +86,16 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
     expectCloseVec(got, cpuSoftmax(data, 1, 3));
   });
 
+  it('softmax_backward matches CPU for [2, 4]', async () => {
+    const rows = 2;
+    const cols = 4;
+    const logits = Float32Array.from({ length: rows * cols }, (_, i) => Math.sin(i * 0.5));
+    const y = cpuSoftmax(logits, rows, cols);
+    const gradOut = Float32Array.from({ length: rows * cols }, (_, i) => (i % 3) * 0.25 - 0.12);
+    const got = await smokeSoftmaxBackward(ctx, registry, gradOut, y, rows, cols);
+    expectCloseVec(got, cpuSoftmaxBackward(gradOut, y, rows, cols));
+  });
+
   it('rmsnorm matches CPU for [2, 4] with non-trivial gamma', async () => {
     const data = Float32Array.from({ length: 2 * 4 }, (_, i) => (i + 1) * 0.25);
     const gamma = new Float32Array([0.5, 1, 1.5, 2]);
@@ -124,6 +142,15 @@ describe('reduction-norm-kernels argument validation (no GPU required)', () => {
     }).toThrow(/rows/);
     expect(() => {
       dispatchSoftmax(ctx, registry, buf, buf, 2, 0);
+    }).toThrow(/cols/);
+  });
+
+  it('dispatchSoftmaxBackward rejects non-positive dims', () => {
+    expect(() => {
+      dispatchSoftmaxBackward(ctx, registry, buf, buf, buf, 0, 4);
+    }).toThrow(/rows/);
+    expect(() => {
+      dispatchSoftmaxBackward(ctx, registry, buf, buf, buf, 2, 0);
     }).toThrow(/cols/);
   });
 

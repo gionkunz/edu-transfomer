@@ -46,6 +46,10 @@ export function loadSoftmaxWgsl(): string {
   return loadWgsl('./softmax.wgsl');
 }
 
+export function loadSoftmaxBackwardWgsl(): string {
+  return loadWgsl('./softmax-backward.wgsl');
+}
+
 export function loadRmsNormWgsl(): string {
   return loadWgsl('./rmsnorm.wgsl');
 }

@@ -27,6 +27,7 @@ export {
   CORE_KERNEL_RMSNORM,
   CORE_KERNEL_SCALE,
   CORE_KERNEL_SOFTMAX,
+  CORE_KERNEL_SOFTMAX_BACKWARD,
   CORE_KERNEL_TRANSPOSE,
   dispatchAdd,
   dispatchGelu,
@@ -38,6 +39,7 @@ export {
   dispatchRmsNorm,
   dispatchScale,
   dispatchSoftmax,
+  dispatchSoftmaxBackward,
   dispatchTranspose,
   registerCoreKernels,
 } from './core-kernels';
@@ -52,6 +54,7 @@ export {
   cpuRmsNorm,
   cpuScale,
   cpuSoftmax,
+  cpuSoftmaxBackward,
   cpuTranspose,
   geluDerivativeScalar,
   geluScalar,

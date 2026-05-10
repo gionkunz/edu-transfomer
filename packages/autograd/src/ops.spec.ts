@@ -17,13 +17,15 @@ import {
   matmul as tensorMatmul,
   mul as tensorMul,
   scale as tensorScale,
+  softmax as tensorSoftmax,
+  softmaxBackward as tensorSoftmaxBackward,
   toArray,
   transpose as tensorTranspose,
 } from '@llm-transformer-diy/tensor';
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { add, gelu, matmul, mul, reshape, scale, transpose } from './ops';
+import { add, gelu, matmul, mul, reshape, scale, softmax, transpose } from './ops';
 import type { Variable } from './types';
 import { createLeafVariable, createParameter } from './variable';
 
@@ -122,6 +124,41 @@ describe.skipIf(!webgpuAvailable)('autograd ops (GPU-backed)', () => {
     expect(out.requiresGrad).toBe(false);
     expect(out.creator).toBeNull();
     const expected = track(tensorGelu(rt, x.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
+  });
+
+  it('softmax forward matches tensor.softmax and backward matches tensor.softmaxBackward', async () => {
+    const rows = 2;
+    const cols = 3;
+    const data = Float32Array.from({ length: rows * cols }, (_, i) => (i - 2) * 0.25);
+    const x = trackV(createParameter(track(createFromArray(rt, data, [rows, cols]))));
+
+    const out = trackV(softmax(rt, x));
+    expect(out.requiresGrad).toBe(true);
+    expect(out.creator?.name).toBe('softmax');
+
+    const expected = track(tensorSoftmax(rt, x.tensor));
+    expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
+
+    const upstreamData = Float32Array.from({ length: rows * cols }, (_, i) => i * 0.2 - 0.3);
+    const upstream = track(createFromArray(rt, upstreamData, [rows, cols]));
+    const grads = out.creator!.backward(rt, upstream);
+    expect(grads).toHaveLength(1);
+    const gradX = grads[0];
+    expect(gradX).not.toBeNull();
+    track(gradX as Tensor);
+
+    const expectedGrad = track(tensorSoftmaxBackward(rt, upstream, out.tensor));
+    expectCloseVec(await toArray(rt, gradX as Tensor), await toArray(rt, expectedGrad));
+  });
+
+  it('softmax does not record Operation when input does not require grad', async () => {
+    const data = Float32Array.from({ length: 6 }, (_, i) => i * 0.1);
+    const x = trackV(createLeafVariable(track(createFromArray(rt, data, [2, 3])), false));
+    const out = trackV(softmax(rt, x));
+    expect(out.requiresGrad).toBe(false);
+    expect(out.creator).toBeNull();
+    const expected = track(tensorSoftmax(rt, x.tensor));
     expectCloseVec(await toArray(rt, out.tensor), await toArray(rt, expected));
   });
 
