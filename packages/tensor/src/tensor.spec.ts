@@ -21,6 +21,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   add,
+  copyF32Elems,
   gelu,
   geluBackward,
   matmul,
@@ -30,6 +31,7 @@ import {
   softmax,
   softmaxBackward,
   transpose,
+  view2dRowPrefix,
 } from './ops';
 import { createFromArray, createZeros, destroy, toArray } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
@@ -194,6 +196,21 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
   it('transpose throws on rank ≠ 2 before any dispatch', () => {
     const a = track(createFromArray(rt, new Float32Array(8), [2, 2, 2]));
     expect(() => transpose(rt, a)).toThrow(/expected rank 2/);
+  });
+
+  it('copyF32Elems copies a prefix between tensors', async () => {
+    const a = track(createFromArray(rt, new Float32Array([1, 2, 3, 4, 5, 6]), [2, 3]));
+    const b = track(createZeros(rt, [2, 3]));
+    copyF32Elems(rt, a, 0, b, 0, 4);
+    expectCloseVec(await toArray(rt, b), new Float32Array([1, 2, 3, 4, 0, 0]));
+  });
+
+  it('view2dRowPrefix + matmul uses only the prefix rows', async () => {
+    const full = track(createFromArray(rt, new Float32Array([1, 2, 3, 4, 9, 9]), [3, 2]));
+    const pref = view2dRowPrefix(full, 2);
+    const rhs = track(createFromArray(rt, new Float32Array([1, 0, 0, 1]), [2, 2]));
+    const out = track(matmul(rt, pref, rhs));
+    expectCloseVec(await toArray(rt, out), new Float32Array([1, 2, 3, 4]));
   });
 
   it('softmax throws on rank ≠ 2 before any dispatch', () => {

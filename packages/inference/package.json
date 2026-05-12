@@ -11,8 +11,16 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "@llm-transformer-diy/model": "workspace:*"
+    "@llm-transformer-diy/autograd": "workspace:*",
+    "@llm-transformer-diy/model": "workspace:*",
+    "@llm-transformer-diy/tensor": "workspace:*"
+  },
+  "devDependencies": {
+    "@llm-transformer-diy/gpu": "workspace:*",
+    "@webgpu/types": "^0.1.69"
   }
 }

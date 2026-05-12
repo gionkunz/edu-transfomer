@@ -36,6 +36,7 @@ export {
   add,
   adamWStepInPlace,
   broadcastFillFromScalar,
+  copyF32Elems,
   crossEntropyLogitsGrad,
   crossEntropyRowsFromLogits,
   embedding,
@@ -53,5 +54,6 @@ export {
   softmaxBackward,
   sumFlat,
   transpose,
+  view2dRowPrefix,
 } from './ops';
 export type { AdamWStepHyperparams } from './ops';

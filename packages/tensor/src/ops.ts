@@ -144,12 +144,7 @@ export function geluBackward(rt: TensorRuntime, gradOutput: Tensor, input: Tenso
 }
 
 /** Row-wise **RMSNorm** on rank-2 **`[rows, cols]`** with **`gamma: [cols]`**. */
-export function rmsnorm(
-  rt: TensorRuntime,
-  x: Tensor,
-  gamma: Tensor,
-  epsilon = 1e-6,
-): Tensor {
+export function rmsnorm(rt: TensorRuntime, x: Tensor, gamma: Tensor, epsilon = 1e-6): Tensor {
   assertDtype(x, 'f32');
   assertDtype(gamma, 'f32');
   assertRank(x, 2);
@@ -157,9 +152,7 @@ export function rmsnorm(
   const rows = x.shape[0]!;
   const cols = x.shape[1]!;
   if (gamma.shape[0] !== cols) {
-    throw new Error(
-      `rmsnorm: gamma length ${String(gamma.shape[0])} != d_model ${String(cols)}`,
-    );
+    throw new Error(`rmsnorm: gamma length ${String(gamma.shape[0])} != d_model ${String(cols)}`);
   }
   if (!isContiguous(x) || !isContiguous(gamma)) {
     throw new Error('rmsnorm: non-contiguous tensors not supported');
@@ -183,7 +176,12 @@ export function rmsnormGradInput(
   assertRank(gamma, 1);
   const rows = x.shape[0]!;
   const cols = x.shape[1]!;
-  if (gamma.shape[0] !== cols || !isContiguous(x) || !isContiguous(gamma) || !isContiguous(gradOutput)) {
+  if (
+    gamma.shape[0] !== cols ||
+    !isContiguous(x) ||
+    !isContiguous(gamma) ||
+    !isContiguous(gradOutput)
+  ) {
     throw new Error('rmsnormGradInput: shape or stride mismatch');
   }
   const out = allocateContiguousBuffer(rt, rows * cols);
@@ -217,7 +215,16 @@ export function rmsnormGradGamma(
     throw new Error('rmsnormGradGamma: non-contiguous tensors not supported');
   }
   const out = allocateContiguousBuffer(rt, cols);
-  dispatchRmsNormGradGamma(rt.ctx, rt.registry, x.buffer, gradOutput.buffer, out, rows, cols, epsilon);
+  dispatchRmsNormGradGamma(
+    rt.ctx,
+    rt.registry,
+    x.buffer,
+    gradOutput.buffer,
+    out,
+    rows,
+    cols,
+    epsilon,
+  );
   return makeContiguousTensor([cols], out);
 }
 
@@ -397,7 +404,12 @@ export function adamWStepInPlace(
   assertSameShape(param, grad);
   assertSameShape(param, moment1);
   assertSameShape(param, moment2);
-  if (!isContiguous(param) || !isContiguous(grad) || !isContiguous(moment1) || !isContiguous(moment2)) {
+  if (
+    !isContiguous(param) ||
+    !isContiguous(grad) ||
+    !isContiguous(moment1) ||
+    !isContiguous(moment2)
+  ) {
     throw new Error('adamWStepInPlace: non-contiguous tensors not supported');
   }
   dispatchAdamWStep(
@@ -410,6 +422,81 @@ export function adamWStepInPlace(
     param.length,
     hyper,
   );
+}
+
+/**
+ * GPU copy of a contiguous **f32** span. **Both** tensors must use storage buffers with
+ * **`COPY_SRC` / `COPY_DST`** (the usual **`createZeros`** / **`createFromArray`** allocation).
+ */
+export function copyF32Elems(
+  rt: TensorRuntime,
+  src: Tensor,
+  srcElemOffset: number,
+  dst: Tensor,
+  dstElemOffset: number,
+  elemCount: number,
+): void {
+  assertDtype(src, 'f32');
+  assertDtype(dst, 'f32');
+  if (!Number.isInteger(elemCount) || elemCount < 0) {
+    throw new Error(
+      `copyF32Elems: elemCount must be a non-negative integer (got ${String(elemCount)})`,
+    );
+  }
+  if (
+    !Number.isInteger(srcElemOffset) ||
+    !Number.isInteger(dstElemOffset) ||
+    srcElemOffset < 0 ||
+    dstElemOffset < 0
+  ) {
+    throw new Error('copyF32Elems: offsets must be non-negative integers');
+  }
+  if (srcElemOffset + elemCount > src.length || dstElemOffset + elemCount > dst.length) {
+    throw new Error(
+      `copyF32Elems: range out of bounds (src ${String(srcElemOffset)}+${String(elemCount)} > ${String(
+        src.length,
+      )}, dst ${String(dstElemOffset)}+${String(elemCount)} > ${String(dst.length)})`,
+    );
+  }
+  if (elemCount === 0) {
+    return;
+  }
+  const encoder = rt.ctx.device.createCommandEncoder();
+  encoder.copyBufferToBuffer(
+    src.buffer,
+    srcElemOffset * 4,
+    dst.buffer,
+    dstElemOffset * 4,
+    elemCount * 4,
+  );
+  rt.ctx.queue.submit([encoder.finish()]);
+}
+
+/**
+ * Row-major **view** of the first **`prefixRows`** rows of **`t`** (**`[rows, cols]` → `[prefixRows, cols]`**).
+ * Shares **`t.buffer`**; destroying either tensor invalidates both (same contract as {@link reshape}).
+ */
+export function view2dRowPrefix(t: Tensor, prefixRows: number): Tensor {
+  assertDtype(t, 'f32');
+  assertRank(t, 2);
+  const rows = t.shape[0]!;
+  const cols = t.shape[1]!;
+  if (!Number.isInteger(prefixRows) || prefixRows < 0 || prefixRows > rows) {
+    throw new Error(
+      `view2dRowPrefix: prefixRows must be in [0, ${String(rows)}] (got ${String(prefixRows)})`,
+    );
+  }
+  if (!isContiguous(t)) {
+    throw new Error('view2dRowPrefix: non-contiguous tensor');
+  }
+  return {
+    shape: [prefixRows, cols],
+    strides: computeContiguousStrides([prefixRows, cols]),
+    dtype: t.dtype,
+    device: t.device,
+    buffer: t.buffer,
+    length: prefixRows * cols,
+  };
 }
 
 /** Writes **`scalar[0]`** into **`length`** elements — used by **`sumFlat`** autograd broadcasts. */

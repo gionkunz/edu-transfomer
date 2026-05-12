@@ -17,3 +17,12 @@ export {
   type GptModel,
   type TransformerBlockParams,
 } from './gpt';
+export {
+  createGptKvCache,
+  destroyGptKvCache,
+  forwardGptDecodeStep,
+  forwardGptPrefill,
+  type GptKVCache,
+  type GptKVHeadCache,
+  type GptKVLayerCache,
+} from './gpt-kv';
