@@ -24,13 +24,21 @@ describe('packPackedCheckpoint / unpackPackedCheckpoint', () => {
     });
 
     expect(Object.keys(sidecar.tensors)).toEqual(expect.arrayContaining(['aa_first', 'z_last']));
-    expect(sidecar.tensors['aa_first']!.offset).toBe(0);
-    expect(sidecar.tensors['z_last']!.offset).toBe(16);
+    const aaFirst = sidecar.tensors['aa_first'];
+    const zLast = sidecar.tensors['z_last'];
+    expect(aaFirst).toBeDefined();
+    expect(zLast).toBeDefined();
+    expect(aaFirst.offset).toBe(0);
+    expect(zLast.offset).toBe(16);
     expect(bin.byteLength).toBe(32);
 
     const back = unpackPackedCheckpoint(bin, sidecar);
-    expect(Array.from(back['aa_first']!)).toEqual([1, 2, 3, 4]);
-    expect(Array.from(back['z_last']!)).toEqual([9, 8, 7, 6]);
+    const backAaFirst = back['aa_first'];
+    const backZLast = back['z_last'];
+    expect(backAaFirst).toBeDefined();
+    expect(backZLast).toBeDefined();
+    expect(Array.from(backAaFirst)).toEqual([1, 2, 3, 4]);
+    expect(Array.from(backZLast)).toEqual([9, 8, 7, 6]);
   });
 
   it('requires at least one tensor when packing', () => {
@@ -112,7 +120,9 @@ describe('readPackedCheckpointFiles / writePackedCheckpointFiles', () => {
 
       const { sidecar, tensors } = await readPackedCheckpointFiles(binPath, jsonPath);
       expect(sidecar.config).toEqual({ d_model: 4 });
-      expect(Array.from(tensors['weight']!)).toEqual([-1, 1]);
+      const weight = tensors['weight'];
+      expect(weight).toBeDefined();
+      expect(Array.from(weight)).toEqual([-1, 1]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

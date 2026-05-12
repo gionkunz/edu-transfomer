@@ -51,7 +51,7 @@ function assertSortedUniqueChars(chars: readonly string[], label: string): void 
   for (let i = 0; i < chars.length; i++) {
     const c = chars[i];
     if (c === undefined) {
-      throw new Error(`${label}: chars[${i}] is undefined`);
+      throw new Error(`${label}: chars[${String(i)}] is undefined`);
     }
     if (seen.has(c)) {
       throw new Error(`${label}: duplicate entry ${JSON.stringify(c)} in chars`);

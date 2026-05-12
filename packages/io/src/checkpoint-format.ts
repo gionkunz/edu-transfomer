@@ -212,10 +212,6 @@ function validatePackedSidecarAgainstBinary(
     const entry = sidecar.tensors[name];
     assert(entry !== undefined, `checkpoint manifest: tensor "${name}" missing`);
     assert(
-      entry.dtype === 'f32',
-      `checkpoint manifest: unsupported dtype "${String(entry.dtype)}"`,
-    );
-    assert(
       Number.isFinite(entry.offset) && Number.isInteger(entry.offset),
       `checkpoint manifest: offset for "${name}" must be finite integer`,
     );

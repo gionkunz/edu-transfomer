@@ -14,7 +14,9 @@ describe('CharTokenizer', () => {
 
   it('throws when train vocabSize is below required minimum', () => {
     const tok = new CharTokenizer();
-    expect(() => tok.train('aab', 3)).toThrow(/less than required vocabulary size/);
+    expect(() => {
+      tok.train('aab', 3);
+    }).toThrow(/less than required vocabulary size/);
   });
 
   it('train accepts vocabSize larger than required', () => {
