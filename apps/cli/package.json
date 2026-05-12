@@ -3,13 +3,29 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "`llm` entrypoint placeholder — scaffold only until CLI/TUI proposals land",
+  "description": "`llm` CLI — tokenizer, train, generate, inspect",
   "main": "./dist/main.js",
   "types": "./dist/main.d.ts",
-  "dependencies": {
-    "@llm-transformer-diy/inference": "workspace:*",
-    "@llm-transformer-diy/tokenizer": "workspace:*",
-    "@llm-transformer-diy/training": "workspace:*"
+  "bin": {
+    "llm": "./dist/main.js"
   },
-  "files": ["dist"]
+  "dependencies": {
+    "@llm-transformer-diy/autograd": "workspace:*",
+    "@llm-transformer-diy/gpu": "workspace:*",
+    "@llm-transformer-diy/inference": "workspace:*",
+    "@llm-transformer-diy/io": "workspace:*",
+    "@llm-transformer-diy/model": "workspace:*",
+    "@llm-transformer-diy/tensor": "workspace:*",
+    "@llm-transformer-diy/tokenizer": "workspace:*",
+    "@llm-transformer-diy/training": "workspace:*",
+    "@wolf-tui/react": "^1.9.0",
+    "commander": "^14.0.3",
+    "react": "^19.2.6"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/react": "^19.2.14"
+  }
 }

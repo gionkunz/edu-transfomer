@@ -115,4 +115,31 @@ describe.skipIf(!webgpuAvailable)('Trainer (GPU)', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('Trainer calls onStep after trainStep', async () => {
+    const reg = createParameterRegistry();
+    const params = collectGptParameters(model);
+    registerModelParameters(reg, params);
+    const opt = new AdamW(rt, reg, { lr: 1e-2, weightDecay: 0 });
+    const recorded: { loss: number; lr: number }[] = [];
+    const trainer = new Trainer(rt, model, reg, opt, {
+      maxGradNorm: 1.0,
+      schedule: {
+        lrMax: 1e-2,
+        lrMin: 1e-3,
+        warmupSteps: 1,
+        totalSteps: 5,
+      },
+      onStep: (info) => {
+        recorded.push({ loss: info.loss, lr: info.lr });
+      },
+    });
+    const { input, targets } = createLmBatch(rt, tokenStream, 0, 8);
+    await trainer.trainStep(input, targets, 0);
+    destroy(input);
+    destroy(targets);
+    expect(recorded.length).toBe(1);
+    expect(Number.isFinite(recorded[0]?.loss)).toBe(true);
+    opt.dispose();
+  });
 });

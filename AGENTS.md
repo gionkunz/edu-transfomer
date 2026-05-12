@@ -39,6 +39,7 @@ Project-specific agent rules (if present) live in **`.cursor/rules/`** as `.mdc`
 
 - Match existing naming, imports, and test style in whichever package you touch.
 - Prefer tests (e.g. Vitest) when behavior is easy to specify; each package/app owns a `vitest.config.ts`, and Nx runs them via `@nx/vitest:test` (`nx run <project>:test` or `nx run-many -t test --all`). Stay aligned with `docs/project.md`.
+- **CLI smoke (local, WebGPU)**: `pnpm exec nx run @llm-transformer-diy/cli:build && node tools/patch-dist-esm-imports.mjs && node apps/cli/dist/main.js --help`; then e.g. `llm tokenizer` / `llm train` / `llm generate` with a GPU-capable Node + Dawn when exercising GPU commands.
 - Avoid new markdown/docs files unless the user asks for documentation deliverables.
 
 When in doubt, re-read **`docs/project.md`** before refactoring or proposing dependencies.

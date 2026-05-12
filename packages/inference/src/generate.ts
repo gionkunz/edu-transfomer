@@ -19,6 +19,8 @@ export type GenerateOptions = {
   readonly eosTokenId?: number;
   readonly sample?: SampleOptions;
   readonly rng?: Random01;
+  /** Called for each **new** sampled token (not prompt positions). */
+  readonly onSampledToken?: (tokenId: number, newTokenIndex: number) => void;
 };
 
 async function lastRowLogits(
@@ -83,6 +85,12 @@ export async function generateAutoregressive(
     const row = await lastRowLogits(rt, logitsVar, V);
     const tid = sampleLogits(rng, row, sample);
     out.push(tid);
+    if (opts.onSampledToken !== undefined) {
+      const genIndex = out.length - promptIds.length - 1;
+      if (genIndex >= 0) {
+        opts.onSampledToken(tid, genIndex);
+      }
+    }
 
     if (opts.eosTokenId !== undefined && tid === opts.eosTokenId) {
       break;

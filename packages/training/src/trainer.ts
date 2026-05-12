@@ -15,10 +15,18 @@ import type { AdamW } from './adamw';
 import type { CosineLrSchedule } from './scheduler';
 import { getCosineLr } from './scheduler';
 
+export type TrainerStepInfo = {
+  readonly trainingStepIndex: number;
+  readonly loss: number;
+  readonly lr: number;
+};
+
 export type TrainerOptions = {
   /** Global L2 gradient clip (`Infinity` disables numerically — prefer large number or skip clip in future). */
   readonly maxGradNorm: number;
   readonly schedule: CosineLrSchedule;
+  /** Optional hook after **`optimizer.step`** (for CLIs / logging). */
+  readonly onStep?: (info: TrainerStepInfo) => void;
 };
 
 /**
@@ -55,10 +63,11 @@ export class Trainer {
     tokenTargets: Tensor,
     trainingStepIndex: number,
   ): Promise<number> {
-    const { maxGradNorm, schedule } = this.options;
+    const { maxGradNorm, schedule, onStep } = this.options;
 
     zeroGrad(this.registry);
-    this.optimizer.setLr(getCosineLr(trainingStepIndex, schedule));
+    const lr = getCosineLr(trainingStepIndex, schedule);
+    this.optimizer.setLr(lr);
 
     const logits = forwardGpt(this.rt, this.model, tokenInput);
     const targetsVar = createLeafVariable(tokenTargets, false);
@@ -77,6 +86,8 @@ export class Trainer {
     }
 
     this.optimizer.step();
+
+    onStep?.({ trainingStepIndex, loss: lossScalar, lr });
 
     return lossScalar;
   }
