@@ -1,3 +1,4 @@
+export { BPETokenizer, type BPETokenizerOptions } from './bpe-tokenizer';
 export { CharTokenizer, type CharTokenizerOptions } from './char-tokenizer';
 export type { Tokenizer } from './types';
 
