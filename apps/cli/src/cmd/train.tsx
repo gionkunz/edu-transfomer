@@ -208,7 +208,7 @@ export async function runTrainCommand(opts: {
     let mergesPerSecEma: number | null = null;
     let mergeRateSamples = 0;
 
-    const tokenIdList = await tokenizer.encodeAsync(corpus, {
+    tokenIds = await tokenizer.encodeUint32Async(corpus, {
       onYield: () => {
         dashThrottle.schedule();
       },
@@ -272,7 +272,6 @@ export async function runTrainCommand(opts: {
     dashThrottle.flush();
 
     draft.encodeProgress = null;
-    tokenIds = Uint32Array.from(tokenIdList);
     corpusUtf16Units = corpus.length;
 
     if (

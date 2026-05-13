@@ -19,16 +19,28 @@ export type BpeEncodeProgressEvent =
     }
   | {
       readonly phase: 'merge';
+      /** Outer best-rank passes completed (each pass may collapse many pair occurrences). */
       readonly mergeIteration: number;
       readonly tokenCount: number;
     };
 
 /** Instrumentation callbacks for **`encode`** (beyond the **`Tokenizer`** contract). */
 export type BpeEncodeHooks = {
+  /**
+   * Progress callbacks during encoding.
+   *
+   * For **`phase: 'merge'`**, **`mergeIteration`** counts **outer best-rank passes**: each pass picks
+   * the minimum-rank applicable adjacent pair and collapses **all** of its non-overlapping
+   * left-to-right occurrences in one in-place walk (not a single pair merge).
+   *
+   * A valid pessimistic upper bound remains **`max(1, initialTokenCount - 1)`** from the preceding
+   * **`expand`** event: each pass removes at least one token slot in the worst case.
+   */
   readonly onProgress?: (event: BpeEncodeProgressEvent) => void;
   /**
-   * After **`encodeAsync`** yields to the event loop (~50ms slices or after a merge progress emit).
-   * Use for repaint / elapsed-time refresh without implying a semantic merge milestone.
+   * After **`encodeAsync`** / **`encodeUint32Async`** yields to the event loop (~50ms wall-clock
+   * slices and/or after merge progress emit). Use for repaint / elapsed-time refresh without
+   * implying a semantic merge milestone.
    */
   readonly onYield?: () => void;
 };
@@ -42,9 +54,13 @@ export type BpeDecodeOptions = {
   readonly utf8?: 'fatal' | 'replace';
 };
 
-const EMIT_MERGE_EVERY = 2048;
-/** Progress hook cadence for **`encodeAsync`** (host repaints more often than sync **`encode`**). */
-const EMIT_MERGE_EVERY_ASYNC = 512;
+/** Emit merge **`onProgress`** during sync encode every this many outer passes. */
+const EMIT_PASS_EVERY = 2048;
+/**
+ * Secondary progress cadence for async encode: emit every this many outer passes (primary trigger
+ * is wall-time via **`TIME_SLICE_ENCODE_ASYNC_MS`**).
+ */
+const EMIT_PASS_EVERY_ASYNC = 8;
 
 /** Max wall time between event-loop yields during **`encodeAsync`** (input, spinners, repaints). */
 const TIME_SLICE_ENCODE_ASYNC_MS = 50;
@@ -233,10 +249,12 @@ export class BPETokenizer implements Tokenizer {
   }
 
   /**
-   * One greedy ranked merge (**BPE**) step on a dense prefix **`buf[0..len)`**.
-   * Mutates **`buf`** in-place; returns new logical length or **`null`** if no merge occurred.
+   * One greedy ranked **BPE** pass on **`buf[0..len)`**: pick the minimum-rank applicable pair
+   * (tie-break: smaller **`L`**, then smaller **`R`**), then replace all non-overlapping
+   * left-to-right occurrences in a single read/write walk. Mutates **`buf`** in place; returns
+   * the new logical length, or **`null`** when no learned pair applies.
    */
-  private performSingleGreedyMergeUint32(buf: Uint32Array, len: number): number | null {
+  private performGreedyMergePassUint32(buf: Uint32Array, len: number): number | null {
     if (len < 2) return null;
 
     let minRank = Infinity;
@@ -260,31 +278,34 @@ export class BPETokenizer implements Tokenizer {
       return null;
     }
 
-    let jAt = -1;
-    for (let k = 0; k < len - 1; k++) {
-      if (buf[k] === chosenL && buf[k + 1] === chosenR) {
-        jAt = k;
-        break;
-      }
-    }
-    if (jAt < 0) {
-      return null;
-    }
-
     const mergedId = nestedNumberGet(this.mergeOutputIdByPair, chosenL, chosenR);
     if (mergedId === undefined) {
       return null;
     }
 
-    buf[jAt] = mergedId;
-    if (jAt + 2 < len) {
-      buf.copyWithin(jAt + 1, jAt + 2, len);
+    let w = 0;
+    let r = 0;
+    while (r < len) {
+      if (r + 1 < len && buf[r] === chosenL && buf[r + 1] === chosenR) {
+        buf[w] = mergedId;
+        w += 1;
+        r += 2;
+      } else {
+        buf[w] = buf[r];
+        w += 1;
+        r += 1;
+      }
     }
-    return len - 1;
+    return w;
   }
 
-  /** CPU-bound; progress hooks run but TUIs/timer paints stall until **`encode`** returns. */
-  encode(text: string, hooks?: BpeEncodeHooks): number[] {
+  /**
+   * Encode to a freshly allocated **`Uint32Array`** (length = logical token count; not a
+   * subarray view into shared working storage).
+   *
+   * CPU-bound; progress hooks run but TUIs/timer paints stall until this returns.
+   */
+  encodeUint32(text: string, hooks?: BpeEncodeHooks): Uint32Array {
     this.assertTrained();
     const emit = hooks?.onProgress;
     const S = this.specialTokens.length;
@@ -305,13 +326,13 @@ export class BPETokenizer implements Tokenizer {
 
     let mergeIteration = 0;
     while (true) {
-      const nextLen = this.performSingleGreedyMergeUint32(buf, len);
+      const nextLen = this.performGreedyMergePassUint32(buf, len);
       if (nextLen === null) break;
       len = nextLen;
       mergeIteration += 1;
       if (
         emit !== undefined &&
-        (mergeIteration % EMIT_MERGE_EVERY === 0 || len <= 2 || mergeIteration <= 4)
+        (mergeIteration % EMIT_PASS_EVERY === 0 || len <= 2 || mergeIteration <= 4)
       ) {
         emit({ phase: 'merge', mergeIteration, tokenCount: len });
       }
@@ -323,14 +344,14 @@ export class BPETokenizer implements Tokenizer {
       tokenCount: len,
     });
 
-    return Array.from(buf.subarray(0, len));
+    return Uint32Array.from(buf.subarray(0, len));
   }
 
   /**
-   * Same as **`encode`**, but periodically yields (~50ms wall clock and after merge progress)
-   * so hosts can repaint and handle **`Ctrl+C`** while merges run.
+   * Async **`encodeUint32`**: yields on the same wall-time / progress cadence as **`encodeAsync`**
+   * so hosts stay responsive during long encodes.
    */
-  async encodeAsync(text: string, hooks?: BpeEncodeHooks): Promise<number[]> {
+  async encodeUint32Async(text: string, hooks?: BpeEncodeHooks): Promise<Uint32Array> {
     this.assertTrained();
     const emit = hooks?.onProgress;
     const onYieldCb = hooks?.onYield;
@@ -358,14 +379,14 @@ export class BPETokenizer implements Tokenizer {
     let mergeIteration = 0;
     let lastYieldWallMs = Date.now();
     while (true) {
-      const nextLen = this.performSingleGreedyMergeUint32(buf, len);
+      const nextLen = this.performGreedyMergePassUint32(buf, len);
       if (nextLen === null) break;
       len = nextLen;
       mergeIteration += 1;
       let emittedThisRound = false;
       if (
         emit !== undefined &&
-        (mergeIteration % EMIT_MERGE_EVERY_ASYNC === 0 || len <= 2 || mergeIteration <= 4)
+        (mergeIteration % EMIT_PASS_EVERY_ASYNC === 0 || len <= 2 || mergeIteration <= 4)
       ) {
         emit({ phase: 'merge', mergeIteration, tokenCount: len });
         emittedThisRound = true;
@@ -385,7 +406,20 @@ export class BPETokenizer implements Tokenizer {
     });
     await sliceYield();
 
-    return Array.from(buf.subarray(0, len));
+    return Uint32Array.from(buf.subarray(0, len));
+  }
+
+  /** CPU-bound; progress hooks run but TUIs/timer paints stall until **`encode`** returns. */
+  encode(text: string, hooks?: BpeEncodeHooks): number[] {
+    return Array.from(this.encodeUint32(text, hooks));
+  }
+
+  /**
+   * Same as **`encode`**, but periodically yields (~50ms wall clock and after merge progress)
+   * so hosts can repaint and handle **`Ctrl+C`** while merges run.
+   */
+  async encodeAsync(text: string, hooks?: BpeEncodeHooks): Promise<number[]> {
+    return Array.from(await this.encodeUint32Async(text, hooks));
   }
 
   decode(ids: number[], options?: BpeDecodeOptions): string {

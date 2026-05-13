@@ -15,7 +15,14 @@
         "bundle": false,
         "main": "apps/cli/src/main.ts",
         "tsConfig": "apps/cli/tsconfig.app.json",
-        "assets": ["apps/cli/src/assets"],
+        "assets": [
+          "apps/cli/src/assets",
+          {
+            "glob": "*.wgsl",
+            "input": "packages/gpu/src/kernels",
+            "output": "packages/gpu/src/kernels"
+          }
+        ],
         "generatePackageJson": true,
         "esbuildOptions": {
           "sourcemap": true,
@@ -72,8 +79,17 @@
         "buildTarget": "@llm-transformer-diy/cli:build"
       }
     },
+    "fix-cli-bootstrap-shebang": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "commands": ["node ./tools/cli-bootstrap-shebang.mjs dist/apps/cli/main.js"],
+        "parallel": false
+      }
+    },
     "prune": {
-      "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
+      "dependsOn": ["prune-lockfile", "copy-workspace-modules", "fix-cli-bootstrap-shebang"],
       "executor": "nx:noop"
     },
     "test": {

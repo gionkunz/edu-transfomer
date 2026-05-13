@@ -18,7 +18,7 @@
           {
             "glob": "*.wgsl",
             "input": "packages/gpu/src/kernels",
-            "output": "kernels"
+            "output": "src/kernels"
           }
         ]
       }

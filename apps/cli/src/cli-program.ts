@@ -1,8 +1,11 @@
 import { Command } from 'commander';
 
 import { exitCliError } from './cli-errors';
+import { runChatCommand } from './cmd/chat';
+import { runGenerateCommand } from './cmd/generate';
 import { runInspect } from './cmd/inspect';
 import { runTokenizerDecode, runTokenizerEncode, runTokenizerTrain } from './cmd/tokenizer';
+import { runTrainCommand } from './cmd/train';
 
 function collectStrings(value: string, prev: string[]): string[] {
   return prev.concat(value);
@@ -88,7 +91,6 @@ export function createCliProgram(): Command {
       if (rebuildTokenCache && !tokenCacheBase) {
         throw new Error('train: --rebuild-token-cache requires --token-cache <base>');
       }
-      const { runTrainCommand } = await import('./cmd/train');
       await runTrainCommand({
         dataGlobs: opts.data as string[],
         outDir: opts.out as string,
@@ -125,7 +127,6 @@ export function createCliProgram(): Command {
       if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
         throw new Error('generate: --repeat-window must be a positive integer');
       }
-      const { runGenerateCommand } = await import('./cmd/generate');
       await runGenerateCommand({
         modelArg: opts.model as string,
         tokenizerPath: opts.tokenizer as string,
@@ -162,7 +163,6 @@ export function createCliProgram(): Command {
       if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
         throw new Error('chat: --repeat-window must be a positive integer');
       }
-      const { runChatCommand } = await import('./cmd/chat');
       await runChatCommand({
         modelArg: opts.model as string,
         tokenizerPath: opts.tokenizer as string,

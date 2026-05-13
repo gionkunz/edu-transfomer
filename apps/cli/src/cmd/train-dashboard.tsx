@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { Badge, Box, ProgressBar, Spinner, Text, useInput } from '@wolf-tui/react';
 
+import { formatDurationSec } from './format-duration';
 import {
   type TrainDashboardSnapshot,
   type TrainPipelinePhase,
@@ -33,18 +34,16 @@ function formatEncodeCountApprox(n: number): string {
   return String(x);
 }
 
-function formatMergeThroughput(mergesPerSec: number | null): string {
-  if (mergesPerSec === null || !Number.isFinite(mergesPerSec)) return '—';
-  if (mergesPerSec >= 1000) return `${(mergesPerSec / 1000).toFixed(1)}k merge/s`;
-  return `${mergesPerSec.toFixed(1)} merge/s`;
+/** Outer BPE passes/sec (each pass may collapse many token pairs). */
+function formatPassThroughput(passesPerSec: number | null): string {
+  if (passesPerSec === null || !Number.isFinite(passesPerSec)) return '—';
+  if (passesPerSec >= 1000) return `${(passesPerSec / 1000).toFixed(1)}k pass/s`;
+  return `${passesPerSec.toFixed(1)} pass/s`;
 }
 
-function formatPessimisticEtaSec(sec: number | null): string {
+function formatPessimisticEta(sec: number | null): string {
   if (sec === null || !Number.isFinite(sec)) return '—';
-  const s = Math.max(0, sec);
-  if (s >= 3600) return `~${(s / 3600).toFixed(1)}h`;
-  if (s >= 60) return `~${Math.max(1, Math.round(s / 60))}m`;
-  return `~${Math.max(1, Math.round(s))}s`;
+  return `~${formatDurationSec(sec)}`;
 }
 
 function LossSparkline({ values }: { readonly values: readonly number[] }): React.ReactElement {
@@ -124,8 +123,7 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
       ? ((snap.totalTrainSteps - snap.trainStepCompleted) * snap.nowElapsedSec) /
         snap.trainStepCompleted
       : null;
-  const etaStr =
-    etaSec !== null && Number.isFinite(etaSec) ? `~${Math.max(0, Math.round(etaSec))}s` : '—';
+  const etaStr = etaSec !== null && Number.isFinite(etaSec) ? `~${formatDurationSec(etaSec)}` : '—';
 
   const inSetupFunnel = TRAIN_SETUP_PIPELINE_ORDER.includes(snap.phase);
   const showEncodeSpinner = snap.phase === 'encode_corpus';
@@ -188,9 +186,9 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
         <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
           <Text style={{ color: 'gray' }}>{'Setup funnel'}</Text>
           <ProgressBar value={setupPct} />
-          <Text style={{ color: 'gray' }}>{`${setupPct.toFixed(0)}% · ${snap.nowElapsedSec.toFixed(
-            1,
-          )}s elapsed`}</Text>
+          <Text
+            style={{ color: 'gray' }}
+          >{`${setupPct.toFixed(0)}% · ${formatDurationSec(snap.nowElapsedSec)} elapsed`}</Text>
           <Box style={{ marginTop: 1 }}>
             <SetupStepperRail phase={snap.phase} />
           </Box>
@@ -228,10 +226,10 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
               <Text>
                 {snap.encodeProgress.mergeSubphase === 'expand'
                   ? `expand · ${String(snap.encodeProgress.textChars)} chars · ${String(snap.encodeProgress.byteLength)} bytes → ${String(snap.encodeProgress.tokenCount)} tok`
-                  : `merge #${formatEncodeCountApprox(snap.encodeProgress.mergeIteration)} · ${formatEncodeCountApprox(snap.encodeProgress.tokenCount)} tok`}
+                  : `pass #${formatEncodeCountApprox(snap.encodeProgress.mergeIteration)} · ${formatEncodeCountApprox(snap.encodeProgress.tokenCount)} tok`}
               </Text>
               <Text style={{ color: 'gray' }}>
-                {`elapsed ${snap.encodeProgress.encodeElapsedSec.toFixed(1)}s · worst-case ≤${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeUpperBound)} merges · rem ${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeRemaining)}`}
+                {`elapsed ${formatDurationSec(snap.encodeProgress.encodeElapsedSec)} · worst-case ≤${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeUpperBound)} passes · rem ${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeRemaining)}`}
               </Text>
               {snap.encodeProgress.mergeSubphase === 'merge' ? (
                 <>
@@ -242,12 +240,12 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
                     >{`${snap.encodeProgress.mergeProgressPct.toFixed(1)}% (worst-case bound; may finish sooner)`}</Text>
                   </Box>
                   <Text style={{ marginTop: 1 }}>
-                    {`${formatMergeThroughput(snap.encodeProgress.mergesPerSec)} · ETA ${formatPessimisticEtaSec(snap.encodeProgress.pessimisticEtaSec)} (pessimistic)`}
+                    {`${formatPassThroughput(snap.encodeProgress.mergesPerSec)} · ETA ${formatPessimisticEta(snap.encodeProgress.pessimisticEtaSec)} (pessimistic)`}
                   </Text>
                 </>
               ) : (
                 <Text style={{ color: 'gray', marginTop: 1 }}>
-                  ETA after merge throughput is measured…
+                  ETA after pass throughput is measured…
                 </Text>
               )}
             </Box>
@@ -277,7 +275,7 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
             <Text style={{ color: 'gray' }}>{'Training progress'}</Text>
             <ProgressBar value={trainProgressPct} />
             <Text style={{ color: 'gray' }}>
-              {`${trainProgressPct.toFixed(0)}% · wall ${snap.nowElapsedSec.toFixed(0)}s · ETA ${etaStr}`}
+              {`${trainProgressPct.toFixed(0)}% · wall ${formatDurationSec(snap.nowElapsedSec)} · ETA ${etaStr}`}
             </Text>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>

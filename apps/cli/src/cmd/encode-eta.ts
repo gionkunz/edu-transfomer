@@ -1,6 +1,7 @@
 /**
- * Heuristics for **train** TUI during **`BPETokenizer.encodeAsync`**: each successful merge removes
- * one slot, so merge iterations are bounded above by **`initialTokenCount - 1`** (worst case).
+ * Heuristics for **train** TUI during **`BPETokenizer.encodeUint32Async`**: each outer
+ * best-rank pass removes at least one token slot, so merge iterations are bounded above by
+ * **`initialTokenCount - 1`** (worst case).
  */
 
 /** At least **`1`** so downstream division/progress avoids zero. */

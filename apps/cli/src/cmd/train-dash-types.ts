@@ -30,9 +30,9 @@ export interface EncodeProgressSnapshot {
   /** Worst-case maximum merge iterations: **`max(1, initialTokenCount − 1)`**. */
   readonly pessimisticMergeUpperBound: number;
   readonly pessimisticMergeRemaining: number;
-  /** Smoothed merge throughput (merge-loop iterations/sec), **`null`** until estimated. */
+  /** Smoothed outer BPE pass throughput (passes/sec), **`null`** until estimated. */
   readonly mergesPerSec: number | null;
-  /** Remaining pessimistic merges ÷ **`mergesPerSec`** when rate is trusted. */
+  /** Remaining pessimistic passes ÷ **`mergesPerSec`** when rate is trusted. */
   readonly pessimisticEtaSec: number | null;
   /** **`0`** in expand; **`0–100`** merge bar vs pessimistic upper bound (may finish sooner). */
   readonly mergeProgressPct: number;
