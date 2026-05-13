@@ -88,7 +88,13 @@ export {
   GELU_CUBE_COEF,
   GELU_TANH_COEF,
 } from './cpu-reference';
-export { GpuContext, probeWebGpu, type GpuBootstrapOptions } from './device';
+export {
+  formatGpuAdapterLabel,
+  gpuAdapterLikelyCpuOnly,
+  GpuContext,
+  probeWebGpu,
+  type GpuBootstrapOptions,
+} from './device';
 export { KernelRegistry } from './kernel-registry';
 export {
   createShaderModule,

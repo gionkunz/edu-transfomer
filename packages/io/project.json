@@ -4,7 +4,7 @@
   "projectType": "library",
   "sourceRoot": "packages/io/src",
   "targets": {
-    "build": {
+    "compile": {
       "executor": "@nx/js:tsc",
       "outputs": ["{options.outputPath}"],
       "options": {
@@ -13,6 +13,15 @@
         "rootDir": "packages/io/src",
         "tsConfig": "packages/io/tsconfig.build.json",
         "generatePackageJson": false
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build", "compile"],
+      "cache": false,
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "node tools/patch-dist-esm-imports.mjs"
       }
     },
     "test": {

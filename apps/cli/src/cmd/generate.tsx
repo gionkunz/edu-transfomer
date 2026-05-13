@@ -8,6 +8,7 @@ import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 
 import { resolvePackedCheckpointPaths } from '../paths.js';
 import { createTensorRuntime } from '../runtime.js';
+import { primeTuiTerminalCanvas } from '../tui-prime.js';
 
 type GenViewProps = {
   readonly text: string;
@@ -43,8 +44,15 @@ export async function runGenerateCommand(opts: {
   readonly maxNewTokens: number;
   readonly temperature: number;
   readonly topK: number;
+  readonly repetitionPenalty?: number;
+  readonly repetitionWindow?: number;
 }): Promise<void> {
   const rt = await createTensorRuntime();
+  if (rt.ctx.isLikelyCpuSoftwareAdapter) {
+    console.error(
+      'generate: WebGPU is using a software adapter (e.g. LLVMpipe). Use a discrete GPU runtime for speed; see train TUI note on Vulkan/ICD.',
+    );
+  }
   const { binPath, jsonPath } = resolvePackedCheckpointPaths(opts.modelArg);
   const { model, config } = await loadGptModelFromCheckpoint(rt, binPath, jsonPath);
 
@@ -56,24 +64,34 @@ export async function runGenerateCommand(opts: {
     );
   }
 
-  const promptIds = Uint32Array.from(tok.encode(opts.prompt));
+  /** BPE merges are tracked in **bytes**; streaming must not call **`decode`** on single ids (often ill‑formed UTF‑8 fragments). */
+  const promptIds = tok.encode(opts.prompt);
+  const promptRendered = tok.decode(promptIds, { utf8: 'replace' });
   const cache = createGptKvCache(rt, model);
 
+  const generatedIds: number[] = [];
   let textOut = '';
   let newTok = 0;
   const tStart = performance.now();
 
+  primeTuiTerminalCanvas();
   const inst = render(<GenView text={textOut} newTokens={0} tokensPerSec={0} />, {
     exitOnCtrlC: true,
     patchConsole: true,
   });
 
   try {
-    await generateAutoregressive(rt, model, promptIds, cache, {
+    await generateAutoregressive(rt, model, Uint32Array.from(promptIds), cache, {
       maxNewTokens: opts.maxNewTokens,
       sample: { temperature: opts.temperature, topK: opts.topK },
+      ...(opts.repetitionPenalty !== undefined
+        ? { repetitionPenalty: opts.repetitionPenalty }
+        : {}),
+      ...(opts.repetitionWindow !== undefined ? { repetitionWindow: opts.repetitionWindow } : {}),
       onSampledToken: (id: number) => {
-        textOut += tok.decode([id]);
+        generatedIds.push(id);
+        const fullDecoded = tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' });
+        textOut = fullDecoded.slice(promptRendered.length);
         newTok += 1;
         const dt = (performance.now() - tStart) / 1000;
         inst.rerender(

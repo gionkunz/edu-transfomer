@@ -9,6 +9,7 @@ export function __inferenceTouchesModel(): typeof MODEL_LAYER_MARKER {
 
 export { generateAutoregressive, type GenerateOptions } from './generate';
 export {
+  applyRepetitionPenalty,
   DEFAULT_SAMPLE_OPTIONS,
   greedyArgmax,
   sampleLogits,

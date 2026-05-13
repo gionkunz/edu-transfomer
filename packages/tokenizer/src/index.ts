@@ -1,4 +1,10 @@
-export { BPETokenizer, type BPETokenizerOptions } from './bpe-tokenizer';
+export {
+  BPETokenizer,
+  type BPETokenizerOptions,
+  type BpeDecodeOptions,
+  type BpeEncodeHooks,
+  type BpeEncodeProgressEvent,
+} from './bpe-tokenizer';
 export { CharTokenizer, type CharTokenizerOptions } from './char-tokenizer';
 export type { Tokenizer } from './types';
 

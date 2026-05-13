@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { BPETokenizer } from './bpe-tokenizer';
+import { BPETokenizer, type BpeEncodeProgressEvent } from './bpe-tokenizer';
 
 function baseVocabMap(specials: readonly string[]): Record<string, number[]> {
   const enc = new TextEncoder();
@@ -117,6 +117,38 @@ describe('BPETokenizer', () => {
     const tok = new BPETokenizer();
     tok.train(corpus, 320);
     expect(tok.decode(tok.encode(corpus))).toBe(corpus);
+  });
+
+  it('decode utf8 replace matches fatal for well-formed merged text', () => {
+    const corpus = 'the quick brown fox\n';
+    const tok = new BPETokenizer();
+    tok.train(corpus, 320);
+    const ids = tok.encode(corpus);
+    expect(tok.decode(ids, { utf8: 'replace' })).toBe(tok.decode(ids));
+  });
+
+  it('encode progress hooks emit expand and a terminal merge event', () => {
+    const corpus = 'the quick brown fox\n';
+    const tok = new BPETokenizer();
+    tok.train(corpus, 320);
+    const events: BpeEncodeProgressEvent[] = [];
+    tok.encode(corpus, {
+      onProgress: (e) => {
+        events.push(e);
+      },
+    });
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events[0]?.phase).toBe('expand');
+    const last = events[events.length - 1];
+    expect(last).toMatchObject({ phase: 'merge' });
+    expect(last && last.phase === 'merge' ? last.tokenCount : 0).toBeGreaterThan(0);
+  });
+
+  it('encodeAsync agrees with encode', async () => {
+    const corpus = 'abababcccdd extra';
+    const tok = new BPETokenizer();
+    tok.train(corpus, 320);
+    await expect(tok.encodeAsync(corpus)).resolves.toEqual(tok.encode(corpus));
   });
 
   it('determinism: identical merges and encode for two trainers', async () => {
@@ -340,6 +372,7 @@ describe('BPETokenizer', () => {
       await tok.load(filePath);
       expect(tok.vocabSize).toBe(S + 256 + 1);
       expect(() => tok.decode([S + 256])).toThrow(/ill-formed UTF-8/);
+      expect(tok.decode([S + 256], { utf8: 'replace' })).toContain('\uFFFD');
     } finally {
       await cleanup();
     }

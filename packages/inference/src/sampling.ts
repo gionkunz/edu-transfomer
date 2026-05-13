@@ -13,6 +13,34 @@ export type SampleOptions = {
 
 export const DEFAULT_SAMPLE_OPTIONS: SampleOptions = { temperature: 0.8, topK: 40 };
 
+/**
+ * GPT-2 style repetition penalty on a **.mutable** logits row: discourages ids that recently
+ * appeared in **`tokenIds`** (positive logits ÷ **`penalty`**, negative logits × **`penalty`**).
+ *
+ * **`penalty`** &gt; **`1`** enables; **`penalty`** ≤ **`1`** is a no-op.
+ */
+export function applyRepetitionPenalty(
+  logits: Float32Array,
+  tokenIds: readonly number[],
+  penalty: number,
+): void {
+  if (penalty <= 1 + 1e-12) {
+    return;
+  }
+  const seen = new Set(tokenIds);
+  for (const id of seen) {
+    if (!Number.isInteger(id) || id < 0 || id >= logits.length) {
+      continue;
+    }
+    const v = logits[id]!;
+    if (v > 0) {
+      logits[id] = v / penalty;
+    } else {
+      logits[id] = v * penalty;
+    }
+  }
+}
+
 export function greedyArgmax(logits: Float32Array): number {
   if (logits.length === 0) {
     throw new Error('greedyArgmax: empty logits');

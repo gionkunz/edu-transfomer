@@ -29,6 +29,12 @@ export type SaveGptCheckpointOptions = {
   /** Stored verbatim as **`sidecar.config`** (e.g. `GptConfig`). */
   readonly config: unknown;
   readonly trainingStep?: number;
+  /** Fires after **`toArray`** for each exported parameter (CPU readback telemetry). */
+  readonly onCheckpointTensor?: (info: {
+    readonly index: number;
+    readonly name: string;
+    readonly total: number;
+  }) => void;
 };
 
 /**
@@ -52,6 +58,7 @@ export async function saveGptCheckpoint(opts: SaveGptCheckpointOptions): Promise
     }
     const data = await toArray(opts.rt, p.tensor);
     tensors[name] = { shape: [...p.tensor.shape], data: new Float32Array(data) };
+    opts.onCheckpointTensor?.({ index: i, name, total: names.length });
   }
 
   await writePackedCheckpointFiles({

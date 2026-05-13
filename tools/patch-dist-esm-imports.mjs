@@ -1,6 +1,8 @@
 /**
- * After `tsc`, Node ESM needs `.js` on relative specifiers. With `moduleResolution: "bundler"`
+ * After `@nx/js:tsc`, Node ESM needs `.js` on relative specifiers. With `moduleResolution: "bundler"`
  * we keep extensionless imports in `.ts` source; this patches emitted `.js` and `.d.ts`.
+ *
+ * Wired to run automatically at the end of every package `nx:build` (see local `compile` target).
  */
 import fs from 'node:fs';
 import path from 'node:path';

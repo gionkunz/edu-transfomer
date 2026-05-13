@@ -3,6 +3,7 @@ import { Command } from 'commander';
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- Commander option bags are untyped */
 
 import { exitCliError } from './cli-errors.js';
+import { runChatCommand } from './cmd/chat.js';
 import { runGenerateCommand } from './cmd/generate.js';
 import { runInspect } from './cmd/inspect.js';
 import { runTokenizerDecode, runTokenizerEncode, runTokenizerTrain } from './cmd/tokenizer.js';
@@ -73,7 +74,25 @@ export function createCliProgram(): Command {
     .requiredOption('--config <name|file>', 'preset (tiny, small) or GptConfig json path')
     .option('--steps <n>', 'optimizer steps', '100')
     .option('--seq-len <n>', 'LM context length', '32')
+    .option(
+      '--token-cache <base>',
+      'cache joined-corpus token ids at <base>.meta.json + little-endian <base>.ids (skip read+BPE on cache hit)',
+    )
+    .option(
+      '--rebuild-token-cache',
+      're-encode and overwrite token cache (requires --token-cache)',
+      false,
+    )
     .action(async (opts) => {
+      const tokenCacheRaw = opts.tokenCache as string | undefined;
+      const tokenCacheBase =
+        tokenCacheRaw !== undefined && String(tokenCacheRaw).trim() !== ''
+          ? String(tokenCacheRaw).trim()
+          : undefined;
+      const rebuildTokenCache = Boolean(opts.rebuildTokenCache);
+      if (rebuildTokenCache && !tokenCacheBase) {
+        throw new Error('train: --rebuild-token-cache requires --token-cache <base>');
+      }
       await runTrainCommand({
         dataGlobs: opts.data as string[],
         outDir: opts.out as string,
@@ -81,6 +100,8 @@ export function createCliProgram(): Command {
         configArg: opts.config as string,
         steps: Number(opts.steps),
         seqLen: Number(opts.seqLen),
+        ...(tokenCacheBase !== undefined ? { tokenCacheBase } : {}),
+        ...(rebuildTokenCache ? { rebuildTokenCache: true } : {}),
       });
     });
 
@@ -93,7 +114,21 @@ export function createCliProgram(): Command {
     .option('--max-new-tokens <n>', 'tokens to sample after prompt', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
+    .option(
+      '--repeat-penalty <p>',
+      'down-weight logits for recent tokens (GPT-2 style; 1 = off)',
+      '1',
+    )
+    .option('--repeat-window <n>', 'tail context length for --repeat-penalty', '64')
     .action(async (opts) => {
+      const repeatPenalty = Number(opts.repeatPenalty as string);
+      const repeatWindow = Number(opts.repeatWindow as string);
+      if (!Number.isFinite(repeatPenalty) || repeatPenalty < 1) {
+        throw new Error('generate: --repeat-penalty must be a finite number ≥ 1');
+      }
+      if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
+        throw new Error('generate: --repeat-window must be a positive integer');
+      }
       await runGenerateCommand({
         modelArg: opts.model as string,
         tokenizerPath: opts.tokenizer as string,
@@ -101,6 +136,44 @@ export function createCliProgram(): Command {
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
+        ...(repeatPenalty > 1
+          ? { repetitionPenalty: repeatPenalty, repetitionWindow: repeatWindow }
+          : {}),
+      });
+    });
+
+  root
+    .command('chat')
+    .description('interactive chat TUI with KV-backed generation (WebGPU)')
+    .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
+    .requiredOption('--tokenizer <path>', 'BPE tokenizer json')
+    .option('--max-new-tokens <n>', 'tokens to sample per assistant reply', '64')
+    .option('--temperature <x>', 'sampling temperature', '0.8')
+    .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
+    .option(
+      '--repeat-penalty <p>',
+      'down-weight logits for recent tokens (GPT-2 style; 1 = off)',
+      '1',
+    )
+    .option('--repeat-window <n>', 'tail context length for --repeat-penalty', '64')
+    .action(async (opts) => {
+      const repeatPenalty = Number(opts.repeatPenalty as string);
+      const repeatWindow = Number(opts.repeatWindow as string);
+      if (!Number.isFinite(repeatPenalty) || repeatPenalty < 1) {
+        throw new Error('chat: --repeat-penalty must be a finite number ≥ 1');
+      }
+      if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
+        throw new Error('chat: --repeat-window must be a positive integer');
+      }
+      await runChatCommand({
+        modelArg: opts.model as string,
+        tokenizerPath: opts.tokenizer as string,
+        maxNewTokens: Number(opts.maxNewTokens),
+        temperature: Number(opts.temperature),
+        topK: Number(opts.topK),
+        ...(repeatPenalty > 1
+          ? { repetitionPenalty: repeatPenalty, repetitionWindow: repeatWindow }
+          : {}),
       });
     });
 

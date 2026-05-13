@@ -10,10 +10,58 @@ export interface BPETokenizerOptions {
   readonly specialTokens?: readonly string[];
 }
 
+export type BpeEncodeProgressEvent =
+  | {
+      readonly phase: 'expand';
+      readonly textChars: number;
+      readonly byteLength: number;
+      readonly initialTokenCount: number;
+    }
+  | {
+      readonly phase: 'merge';
+      readonly mergeIteration: number;
+      readonly tokenCount: number;
+    };
+
+/** Instrumentation callbacks for **`encode`** (beyond the **`Tokenizer`** contract). */
+export type BpeEncodeHooks = {
+  readonly onProgress?: (event: BpeEncodeProgressEvent) => void;
+  /**
+   * After **`encodeAsync`** yields to the event loop (~50ms slices or after a merge progress emit).
+   * Use for repaint / elapsed-time refresh without implying a semantic merge milestone.
+   */
+  readonly onYield?: () => void;
+};
+
+/** Optional **`BPETokenizer.decode`** behavior (narrow **`Tokenizer`** contract remains single‑arg **`decode`**). */
+export type BpeDecodeOptions = {
+  /**
+   * - **`fatal`** (default): ill‑formed UTF‑8 raises (training / strict tooling).
+   * - **`replace`**: **`U+FFFD`** substitutions — weak models sometimes sample invalid UTF‑8 merges.
+   */
+  readonly utf8?: 'fatal' | 'replace';
+};
+
+const EMIT_MERGE_EVERY = 2048;
+/** Progress hook cadence for **`encodeAsync`** (host repaints more often than sync **`encode`**). */
+const EMIT_MERGE_EVERY_ASYNC = 512;
+
+/** Max wall time between event-loop yields during **`encodeAsync`** (input, spinners, repaints). */
+const TIME_SLICE_ENCODE_ASYNC_MS = 50;
+
+function yieldEventLoopForHostUi(): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
 const JSON_KIND = 'llm-transformer-diy/bpe-tokenizer' as const;
 const JSON_VERSION = 1 as const;
 
 const fatalDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/** Loose UTF‑8 (**U+FFFD** substitutions) — for inference when sampled ids concatenate to invalid sequences. */
+const replacingUtf8Decoder = new TextDecoder('utf-8', { fatal: false });
 
 function assertValidSpecials(specials: readonly string[]): void {
   if (specials.length === 0) {
@@ -33,6 +81,22 @@ function assertValidSpecials(specials: readonly string[]): void {
 
 function pairKey(L: number, R: number): string {
   return `${String(L)}\0${String(R)}`;
+}
+
+/** Merge lookup tables use **`outer.get(L).get(R)`** so **`encode`** does not allocate a string per adjacent pair probe. */
+type PairNestedNumberMap = Map<number, Map<number, number>>;
+
+function nestedNumberGet(m: PairNestedNumberMap, a: number, b: number): number | undefined {
+  return m.get(a)?.get(b);
+}
+
+function nestedNumberSet(m: PairNestedNumberMap, a: number, b: number, v: number): void {
+  let row = m.get(a);
+  if (row === undefined) {
+    row = new Map();
+    m.set(a, row);
+  }
+  row.set(b, v);
 }
 
 function concatByteSeq(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -59,8 +123,9 @@ export class BPETokenizer implements Tokenizer {
   private vocabByteRows: Uint8Array[] = [];
   /** Merge creation order (`mergeRank` = index) */
   private mergesRecorded: [number, number][] = [];
-  private pairToMergedId = new Map<string, number>();
-  private pairToRank = new Map<string, number>();
+  /** Merge rank & output id keyed by **`(L,R)`** (nested maps — fast **`encode`** probes). */
+  private mergeRankByPair = new Map<number, Map<number, number>>();
+  private mergeOutputIdByPair = new Map<number, Map<number, number>>();
 
   private activeVocabCount = 0;
 
@@ -149,89 +214,181 @@ export class BPETokenizer implements Tokenizer {
     this.vocabByteRows = rows;
     this.mergesRecorded = mergesList;
 
-    const pairToMerged = new Map<string, number>();
-    const pairRank = new Map<string, number>();
+    const pairToMergedNum = new Map<number, Map<number, number>>();
+    const pairRankNum = new Map<number, Map<number, number>>();
     let mergedIdWalker = floor;
     for (let rank = 0; rank < mergesList.length; rank++) {
       const pair = mergesList[rank];
       if (pair === undefined) throw new Error('BPETokenizer.train: merge hole');
-      const pk = pairKey(pair[0], pair[1]);
-      pairToMerged.set(pk, mergedIdWalker);
-      pairRank.set(pk, rank);
+      const Lm = pair[0];
+      const Rm = pair[1];
+      nestedNumberSet(pairToMergedNum, Lm, Rm, mergedIdWalker);
+      nestedNumberSet(pairRankNum, Lm, Rm, rank);
       mergedIdWalker += 1;
     }
-    this.pairToMergedId = pairToMerged;
-    this.pairToRank = pairRank;
+    this.mergeOutputIdByPair = pairToMergedNum;
+    this.mergeRankByPair = pairRankNum;
 
     this.activeVocabCount = nextId;
   }
 
-  encode(text: string): number[] {
-    this.assertTrained();
-    const S = this.specialTokens.length;
-    const bytes = this.textEncoder.encode(text);
-    const ids: number[] = [];
-    for (let i = 0; i < bytes.length; i++) {
-      const byteValue = bytes[i];
-      if (byteValue === undefined) {
-        break;
+  /**
+   * One greedy ranked merge (**BPE**) step on a dense prefix **`buf[0..len)`**.
+   * Mutates **`buf`** in-place; returns new logical length or **`null`** if no merge occurred.
+   */
+  private performSingleGreedyMergeUint32(buf: Uint32Array, len: number): number | null {
+    if (len < 2) return null;
+
+    let minRank = Infinity;
+    let chosenL = Infinity;
+    let chosenR = Infinity;
+
+    for (let j = 0; j < len - 1; j++) {
+      const L = buf[j] as number;
+      const R = buf[j + 1] as number;
+      const rk = nestedNumberGet(this.mergeRankByPair, L, R);
+      if (rk === undefined) continue;
+
+      if (rk < minRank || (rk === minRank && (L < chosenL || (L === chosenL && R < chosenR)))) {
+        minRank = rk;
+        chosenL = L;
+        chosenR = R;
       }
-      ids.push(S + byteValue);
     }
 
-    while (ids.length >= 2) {
-      let minRank = Infinity;
-      let chosenL = Infinity;
-      let chosenR = Infinity;
-
-      for (let j = 0; j < ids.length - 1; j++) {
-        const Lj = ids[j];
-        const Rj = ids[j + 1];
-        if (Lj === undefined || Rj === undefined) continue;
-        const L = Lj;
-        const R = Rj;
-        const pk = pairKey(L, R);
-        const rk = this.pairToRank.get(pk);
-        if (rk === undefined) continue;
-
-        if (rk < minRank || (rk === minRank && (L < chosenL || (L === chosenL && R < chosenR)))) {
-          minRank = rk;
-          chosenL = L;
-          chosenR = R;
-        }
-      }
-
-      if (minRank === Infinity) {
-        break;
-      }
-
-      let jAt = -1;
-      for (let k = 0; k < ids.length - 1; k++) {
-        const lk = ids[k];
-        const rk = ids[k + 1];
-        if (lk === undefined || rk === undefined) continue;
-        if (lk === chosenL && rk === chosenR) {
-          jAt = k;
-          break;
-        }
-      }
-      if (jAt < 0) {
-        break;
-      }
-
-      const mergedId = this.pairToMergedId.get(pairKey(chosenL, chosenR));
-      if (mergedId === undefined) {
-        break;
-      }
-
-      ids[jAt] = mergedId;
-      ids.splice(jAt + 1, 1);
+    if (minRank === Infinity) {
+      return null;
     }
 
-    return ids;
+    let jAt = -1;
+    for (let k = 0; k < len - 1; k++) {
+      if (buf[k] === chosenL && buf[k + 1] === chosenR) {
+        jAt = k;
+        break;
+      }
+    }
+    if (jAt < 0) {
+      return null;
+    }
+
+    const mergedId = nestedNumberGet(this.mergeOutputIdByPair, chosenL, chosenR);
+    if (mergedId === undefined) {
+      return null;
+    }
+
+    buf[jAt] = mergedId;
+    if (jAt + 2 < len) {
+      buf.copyWithin(jAt + 1, jAt + 2, len);
+    }
+    return len - 1;
   }
 
-  decode(ids: number[]): string {
+  /** CPU-bound; progress hooks run but TUIs/timer paints stall until **`encode`** returns. */
+  encode(text: string, hooks?: BpeEncodeHooks): number[] {
+    this.assertTrained();
+    const emit = hooks?.onProgress;
+    const S = this.specialTokens.length;
+    const bytes = this.textEncoder.encode(text);
+    const n = bytes.length;
+    const buf = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+      buf[i] = S + (bytes[i] as number);
+    }
+    let len = n;
+
+    emit?.({
+      phase: 'expand',
+      textChars: text.length,
+      byteLength: bytes.length,
+      initialTokenCount: len,
+    });
+
+    let mergeIteration = 0;
+    while (true) {
+      const nextLen = this.performSingleGreedyMergeUint32(buf, len);
+      if (nextLen === null) break;
+      len = nextLen;
+      mergeIteration += 1;
+      if (
+        emit !== undefined &&
+        (mergeIteration % EMIT_MERGE_EVERY === 0 || len <= 2 || mergeIteration <= 4)
+      ) {
+        emit({ phase: 'merge', mergeIteration, tokenCount: len });
+      }
+    }
+
+    emit?.({
+      phase: 'merge',
+      mergeIteration,
+      tokenCount: len,
+    });
+
+    return Array.from(buf.subarray(0, len));
+  }
+
+  /**
+   * Same as **`encode`**, but periodically yields (~50ms wall clock and after merge progress)
+   * so hosts can repaint and handle **`Ctrl+C`** while merges run.
+   */
+  async encodeAsync(text: string, hooks?: BpeEncodeHooks): Promise<number[]> {
+    this.assertTrained();
+    const emit = hooks?.onProgress;
+    const onYieldCb = hooks?.onYield;
+    const sliceYield = async (): Promise<void> => {
+      await yieldEventLoopForHostUi();
+      onYieldCb?.();
+    };
+    const S = this.specialTokens.length;
+    const bytes = this.textEncoder.encode(text);
+    const n = bytes.length;
+    const buf = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+      buf[i] = S + (bytes[i] as number);
+    }
+    let len = n;
+
+    emit?.({
+      phase: 'expand',
+      textChars: text.length,
+      byteLength: bytes.length,
+      initialTokenCount: len,
+    });
+    await sliceYield();
+
+    let mergeIteration = 0;
+    let lastYieldWallMs = Date.now();
+    while (true) {
+      const nextLen = this.performSingleGreedyMergeUint32(buf, len);
+      if (nextLen === null) break;
+      len = nextLen;
+      mergeIteration += 1;
+      let emittedThisRound = false;
+      if (
+        emit !== undefined &&
+        (mergeIteration % EMIT_MERGE_EVERY_ASYNC === 0 || len <= 2 || mergeIteration <= 4)
+      ) {
+        emit({ phase: 'merge', mergeIteration, tokenCount: len });
+        emittedThisRound = true;
+      }
+
+      const nowMs = Date.now();
+      if (emittedThisRound || nowMs - lastYieldWallMs >= TIME_SLICE_ENCODE_ASYNC_MS) {
+        await sliceYield();
+        lastYieldWallMs = Date.now();
+      }
+    }
+
+    emit?.({
+      phase: 'merge',
+      mergeIteration,
+      tokenCount: len,
+    });
+    await sliceYield();
+
+    return Array.from(buf.subarray(0, len));
+  }
+
+  decode(ids: number[], options?: BpeDecodeOptions): string {
     this.assertTrained();
     let totalLen = 0;
     const rows: Uint8Array[] = [];
@@ -255,6 +412,10 @@ export class BPETokenizer implements Tokenizer {
     for (const r of rows) {
       all.set(r, offset);
       offset += r.length;
+    }
+
+    if (options?.utf8 === 'replace') {
+      return replacingUtf8Decoder.decode(all);
     }
 
     try {
@@ -345,21 +506,22 @@ export class BPETokenizer implements Tokenizer {
     this.vocabByteRows = nextRows;
     this.mergesRecorded = data.merges.map((pair) => [pair[0], pair[1]]);
 
-    const pairToMerged = new Map<string, number>();
-    const pairRank = new Map<string, number>();
+    const pairToMergedNum = new Map<number, Map<number, number>>();
+    const pairRankNum = new Map<number, Map<number, number>>();
     let mergedIdWalker = S + 256;
 
     for (let rank = 0; rank < this.mergesRecorded.length; rank++) {
       const step = this.mergesRecorded[rank];
       if (step === undefined) throw new Error('BPETokenizer.load: merge hole');
-      const pk = pairKey(step[0], step[1]);
-      pairToMerged.set(pk, mergedIdWalker);
-      pairRank.set(pk, rank);
+      const Lm = step[0];
+      const Rm = step[1];
+      nestedNumberSet(pairToMergedNum, Lm, Rm, mergedIdWalker);
+      nestedNumberSet(pairRankNum, Lm, Rm, rank);
       mergedIdWalker += 1;
     }
 
-    this.pairToMergedId = pairToMerged;
-    this.pairToRank = pairRank;
+    this.mergeOutputIdByPair = pairToMergedNum;
+    this.mergeRankByPair = pairRankNum;
     this.activeVocabCount = maxIdSeen + 1;
 
     if (mergedIdWalker !== this.activeVocabCount) {

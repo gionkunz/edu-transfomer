@@ -1,5 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  // `moduleResolution: bundler`: extensionless `./foo` imports in .ts stay readable (bundler-ish).
+  // Node ESM at runtime expects `./foo.js`. See `tools/patch-dist-esm-imports.mjs` after nx `build`.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],

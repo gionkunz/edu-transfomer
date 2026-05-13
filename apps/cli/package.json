@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "`llm` CLI — tokenizer, train, generate, inspect",
+  "description": "`llm` CLI — tokenizer, train, generate, chat, inspect",
   "main": "./dist/main.js",
   "types": "./dist/main.d.ts",
   "bin": {

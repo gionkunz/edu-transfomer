@@ -8,7 +8,7 @@
     "node": ">=20.18.0"
   },
   "scripts": {
-    "build": "nx run-many -t build --all && node tools/patch-dist-esm-imports.mjs",
+    "build": "nx run-many -t build --all",
     "test": "nx run-many -t test --all",
     "test:vitest": "vitest run",
     "lint": "eslint .",
@@ -35,5 +35,8 @@
     "typescript-eslint": "^8.46.5",
     "vite": "6.3.5",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "commander": "^14.0.3"
   }
 }
