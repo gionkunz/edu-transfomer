@@ -1,7 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "module": "commonjs",
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "importHelpers": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/**/*.ts", "vitest.config.ts", "../../vitest.config.base.ts"]
+  "files": [],
+  "include": [],
+  "references": [{ "path": "./tsconfig.lib.json" }]
 }

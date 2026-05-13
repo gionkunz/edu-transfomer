@@ -1,8 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Index reads on `t.shape` are guarded by `assertRank` immediately above each use,
- * so the non-null assertions are safe under `noUncheckedIndexedAccess`.
- */
-
 import {
   dispatchAdd,
   dispatchAdamWStep,
@@ -43,9 +38,9 @@ import type { Tensor, TensorRuntime } from './types';
 export function matmul(rt: TensorRuntime, a: Tensor, b: Tensor): Tensor {
   assertRank(a, 2);
   assertRank(b, 2);
-  const M = a.shape[0]!;
-  const K = a.shape[1]!;
-  const N = b.shape[1]!;
+  const M = a.shape[0];
+  const K = a.shape[1];
+  const N = b.shape[1];
   if (b.shape[0] !== K) {
     throw new Error(
       `matmul: inner dimensions must match (a=[${a.shape.join(',')}], b=[${b.shape.join(',')}])`,
@@ -88,8 +83,8 @@ export function softmax(rt: TensorRuntime, a: Tensor): Tensor {
   if (!isContiguous(a)) {
     throw new Error('softmax: non-contiguous strides not supported');
   }
-  const rows = a.shape[0]!;
-  const cols = a.shape[1]!;
+  const rows = a.shape[0];
+  const cols = a.shape[1];
   const out = allocateContiguousBuffer(rt, rows * cols);
   dispatchSoftmax(rt.ctx, rt.registry, a.buffer, out, rows, cols);
   return makeContiguousTensor([rows, cols], out);
@@ -110,8 +105,8 @@ export function softmaxBackward(
   if (!isContiguous(gradOutput) || !isContiguous(softmaxOutput)) {
     throw new Error('softmaxBackward: non-contiguous strides not supported');
   }
-  const rows = gradOutput.shape[0]!;
-  const cols = gradOutput.shape[1]!;
+  const rows = gradOutput.shape[0];
+  const cols = gradOutput.shape[1];
   const out = allocateContiguousBuffer(rt, rows * cols);
   dispatchSoftmaxBackward(
     rt.ctx,
@@ -149,8 +144,8 @@ export function rmsnorm(rt: TensorRuntime, x: Tensor, gamma: Tensor, epsilon = 1
   assertDtype(gamma, 'f32');
   assertRank(x, 2);
   assertRank(gamma, 1);
-  const rows = x.shape[0]!;
-  const cols = x.shape[1]!;
+  const rows = x.shape[0];
+  const cols = x.shape[1];
   if (gamma.shape[0] !== cols) {
     throw new Error(`rmsnorm: gamma length ${String(gamma.shape[0])} != d_model ${String(cols)}`);
   }
@@ -174,8 +169,8 @@ export function rmsnormGradInput(
   assertDtype(gamma, 'f32');
   assertRank(x, 2);
   assertRank(gamma, 1);
-  const rows = x.shape[0]!;
-  const cols = x.shape[1]!;
+  const rows = x.shape[0];
+  const cols = x.shape[1];
   if (
     gamma.shape[0] !== cols ||
     !isContiguous(x) ||
@@ -209,8 +204,8 @@ export function rmsnormGradGamma(
 ): Tensor {
   assertSameShape(gradOutput, x);
   assertRank(x, 2);
-  const rows = x.shape[0]!;
-  const cols = x.shape[1]!;
+  const rows = x.shape[0];
+  const cols = x.shape[1];
   if (!isContiguous(x) || !isContiguous(gradOutput)) {
     throw new Error('rmsnormGradGamma: non-contiguous tensors not supported');
   }
@@ -234,8 +229,8 @@ export function rmsnormGradGamma(
  */
 export function transpose(rt: TensorRuntime, a: Tensor): Tensor {
   assertRank(a, 2);
-  const rows = a.shape[0]!;
-  const cols = a.shape[1]!;
+  const rows = a.shape[0];
+  const cols = a.shape[1];
   const out = allocateContiguousBuffer(rt, rows * cols);
   dispatchTranspose(rt.ctx, rt.registry, a.buffer, out, rows, cols);
   return makeContiguousTensor([cols, rows], out);
@@ -249,8 +244,8 @@ export function embedding(rt: TensorRuntime, weights: Tensor, indices: Tensor): 
   assertDtype(indices, 'u32');
   assertRank(weights, 2);
   assertRank(indices, 1);
-  const embedDim = weights.shape[1]!;
-  const tokens = indices.shape[0]!;
+  const embedDim = weights.shape[1];
+  const tokens = indices.shape[0];
   const outBuf = allocateContiguousBuffer(rt, tokens * embedDim);
   dispatchEmbeddingGather(
     rt.ctx,
@@ -278,8 +273,8 @@ export function scatterEmbeddingAccum(
   assertDtype(gradTokens, 'f32');
   assertRank(indices, 1);
   assertRank(gradTokens, 2);
-  const tokens = indices.shape[0]!;
-  const embedDim = gradTokens.shape[1]!;
+  const tokens = indices.shape[0];
+  const embedDim = gradTokens.shape[1];
   if (gradTokens.shape[0] !== tokens) {
     throw new Error(
       `scatterEmbeddingAccum: gradTokens shape[0] (${String(gradTokens.shape[0] ?? '')}) must equal ` +
@@ -309,8 +304,8 @@ export function crossEntropyRowsFromLogits(
   assertDtype(targets, 'u32');
   assertRank(logits, 2);
   assertRank(targets, 1);
-  const rows = logits.shape[0]!;
-  const cols = logits.shape[1]!;
+  const rows = logits.shape[0];
+  const cols = logits.shape[1];
   if (targets.shape[0] !== rows) {
     throw new Error(
       `crossEntropyRowsFromLogits: logits rows (${String(rows)}) must match targets (${String(targets.shape[0] ?? '')})`,
@@ -344,8 +339,8 @@ export function crossEntropyLogitsGrad(
   assertRank(probs, 2);
   assertRank(targets, 1);
   assertRank(upstreamPerRow, 1);
-  const rows = probs.shape[0]!;
-  const cols = probs.shape[1]!;
+  const rows = probs.shape[0];
+  const cols = probs.shape[1];
   if (targets.shape[0] !== rows || upstreamPerRow.shape[0] !== rows) {
     throw new Error('crossEntropyLogitsGrad: shapes rows mismatch');
   }
@@ -367,7 +362,7 @@ export function crossEntropyLogitsGrad(
 export function sumFlat(rt: TensorRuntime, a: Tensor): Tensor {
   assertDtype(a, 'f32');
   assertRank(a, 1);
-  const n = a.shape[0]!;
+  const n = a.shape[0];
   const collapsed = reshape(a, [1, n]);
   const outBuf = allocateContiguousBuffer(rt, 1);
   dispatchReduceSum(rt.ctx, rt.registry, collapsed.buffer, outBuf, 1, n);
@@ -479,8 +474,8 @@ export function copyF32Elems(
 export function view2dRowPrefix(t: Tensor, prefixRows: number): Tensor {
   assertDtype(t, 'f32');
   assertRank(t, 2);
-  const rows = t.shape[0]!;
-  const cols = t.shape[1]!;
+  const rows = t.shape[0];
+  const cols = t.shape[1];
   if (!Number.isInteger(prefixRows) || prefixRows < 0 || prefixRows > rows) {
     throw new Error(
       `view2dRowPrefix: prefixRows must be in [0, ${String(rows)}] (got ${String(prefixRows)})`,

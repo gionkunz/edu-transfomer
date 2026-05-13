@@ -4,24 +4,16 @@
   "projectType": "library",
   "sourceRoot": "packages/tensor/src",
   "targets": {
-    "compile": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
-      "options": {
-        "outputPath": "packages/tensor/dist",
-        "main": "packages/tensor/src/index.ts",
-        "rootDir": "packages/tensor/src",
-        "tsConfig": "packages/tensor/tsconfig.build.json",
-        "generatePackageJson": false
-      }
-    },
     "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/packages/tensor"],
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
+        "outputPath": "dist/packages/tensor",
+        "main": "packages/tensor/src/index.ts",
+        "tsConfig": "packages/tensor/tsconfig.lib.json",
+        "packageJson": "packages/tensor/package.json",
+        "generatePackageJson": true,
+        "assets": ["packages/tensor/*.md"]
       }
     },
     "test": {

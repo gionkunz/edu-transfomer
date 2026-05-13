@@ -38,7 +38,7 @@ export function cpuMatMul(
     for (let j = 0; j < N; j++) {
       let sum = 0;
       for (let k = 0; k < K; k++) {
-        sum += a[i * K + k]! * b[k * N + j]!;
+        sum += a[i * K + k] * b[k * N + j];
       }
       c[i * N + j] = sum;
     }
@@ -59,7 +59,7 @@ export function cpuTranspose(src: Float32Array, rows: number, cols: number): Flo
 export function cpuAdd(a: Float32Array, b: Float32Array, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    out[i] = a[i]! + b[i]!;
+    out[i] = a[i] + b[i];
   }
   return out;
 }
@@ -67,7 +67,7 @@ export function cpuAdd(a: Float32Array, b: Float32Array, n: number): Float32Arra
 export function cpuMul(a: Float32Array, b: Float32Array, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    out[i] = a[i]! * b[i]!;
+    out[i] = a[i] * b[i];
   }
   return out;
 }
@@ -75,7 +75,7 @@ export function cpuMul(a: Float32Array, b: Float32Array, n: number): Float32Arra
 export function cpuScale(a: Float32Array, scale: number, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    out[i] = a[i]! * scale;
+    out[i] = a[i] * scale;
   }
   return out;
 }
@@ -83,7 +83,7 @@ export function cpuScale(a: Float32Array, scale: number, n: number): Float32Arra
 export function cpuGelu(a: Float32Array, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    out[i] = geluScalar(a[i]!);
+    out[i] = geluScalar(a[i]);
   }
   return out;
 }
@@ -92,7 +92,7 @@ export function cpuGelu(a: Float32Array, n: number): Float32Array {
 export function cpuGeluBackward(gradOut: Float32Array, inp: Float32Array, n: number): Float32Array {
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    out[i] = gradOut[i]! * geluDerivativeScalar(inp[i]!);
+    out[i] = gradOut[i] * geluDerivativeScalar(inp[i]);
   }
   return out;
 }
@@ -104,7 +104,7 @@ export function cpuReduceSum(data: Float32Array, rows: number, cols: number): Fl
     const base = i * cols;
     let acc = 0;
     for (let j = 0; j < cols; j++) {
-      acc += data[base + j]!;
+      acc += data[base + j];
     }
     out[i] = acc;
   }
@@ -122,7 +122,7 @@ export function cpuReduceMax(data: Float32Array, rows: number, cols: number): Fl
     const base = i * cols;
     let acc = Number.NEGATIVE_INFINITY;
     for (let j = 0; j < cols; j++) {
-      const v = data[base + j]!;
+      const v = data[base + j];
       if (v > acc) acc = v;
     }
     out[i] = acc;
@@ -141,17 +141,17 @@ export function cpuSoftmax(data: Float32Array, rows: number, cols: number): Floa
     const base = i * cols;
     let m = Number.NEGATIVE_INFINITY;
     for (let j = 0; j < cols; j++) {
-      const v = data[base + j]!;
+      const v = data[base + j];
       if (v > m) m = v;
     }
     let s = 0;
     for (let j = 0; j < cols; j++) {
-      const e = Math.exp(data[base + j]! - m);
+      const e = Math.exp(data[base + j] - m);
       out[base + j] = e;
       s += e;
     }
     for (let j = 0; j < cols; j++) {
-      out[base + j] = out[base + j]! / s;
+      out[base + j] = out[base + j] / s;
     }
   }
   return out;
@@ -172,10 +172,10 @@ export function cpuSoftmaxBackward(
     const base = i * cols;
     let dot = 0;
     for (let j = 0; j < cols; j++) {
-      dot += y[base + j]! * gradOut[base + j]!;
+      dot += y[base + j] * gradOut[base + j];
     }
     for (let j = 0; j < cols; j++) {
-      out[base + j] = y[base + j]! * (gradOut[base + j]! - dot);
+      out[base + j] = y[base + j] * (gradOut[base + j] - dot);
     }
   }
   return out;
@@ -208,12 +208,12 @@ export function cpuRmsNorm(
     const base = i * cols;
     let sumSq = 0;
     for (let j = 0; j < cols; j++) {
-      const v = data[base + j]!;
+      const v = data[base + j];
       sumSq += v * v;
     }
     const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
     for (let j = 0; j < cols; j++) {
-      out[base + j] = data[base + j]! * inv * gamma[j]!;
+      out[base + j] = data[base + j] * inv * gamma[j];
     }
   }
   return out;
@@ -235,19 +235,19 @@ export function cpuRmsNormGradInput(
     const base = i * cols;
     let sumSq = 0;
     for (let j = 0; j < cols; j++) {
-      const v = data[base + j]!;
+      const v = data[base + j];
       sumSq += v * v;
     }
     const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
     let sumTerm = 0;
     for (let j = 0; j < cols; j++) {
-      const xv = data[base + j]!;
-      sumTerm += xv * gamma[j]! * gradOut[base + j]!;
+      const xv = data[base + j];
+      sumTerm += xv * gamma[j] * gradOut[base + j];
     }
     const coeff = (inv * inv * inv) / cols;
     for (let j = 0; j < cols; j++) {
-      const xv = data[base + j]!;
-      gradIn[base + j] = inv * gamma[j]! * gradOut[base + j]! - xv * coeff * sumTerm;
+      const xv = data[base + j];
+      gradIn[base + j] = inv * gamma[j] * gradOut[base + j] - xv * coeff * sumTerm;
     }
   }
   return gradIn;
@@ -267,11 +267,11 @@ export function cpuRmsNormGradGamma(
       const base = i * cols;
       let sumSq = 0;
       for (let k = 0; k < cols; k++) {
-        const v = data[base + k]!;
+        const v = data[base + k];
         sumSq += v * v;
       }
       const inv = 1 / Math.sqrt(sumSq / cols + epsilon);
-      acc += gradOut[base + j]! * data[base + j]! * inv;
+      acc += gradOut[base + j] * data[base + j] * inv;
     }
     gradGamma[j] = acc;
   }
@@ -289,7 +289,7 @@ export function cpuEmbeddingGather(
   const out = new Float32Array(n * embedDim);
   const maxIx = vocabSize * embedDim;
   for (let t = 0; t < n; t++) {
-    const vid = indices[t]!;
+    const vid = indices[t];
     const baseOut = t * embedDim;
     const baseW = vid * embedDim;
     if (baseW + embedDim > maxIx) {
@@ -314,12 +314,12 @@ export function cpuEmbeddingScatterAccum(
   const gradW = new Float32Array(vocabSize * embedDim);
   const n = indices.length;
   for (let t = 0; t < n; t++) {
-    const vid = indices[t]!;
+    const vid = indices[t];
     const bt = t * embedDim;
     const bw = vid * embedDim;
     for (let d = 0; d < embedDim; d++) {
       const ix = bw + d;
-      gradW[ix] = (gradW[ix] ?? 0) + gradTokens[bt + d]!;
+      gradW[ix] = (gradW[ix] ?? 0) + gradTokens[bt + d];
     }
   }
   return gradW;
@@ -335,16 +335,16 @@ export function cpuCrossEntropyFromLogits(
   const losses = new Float32Array(rows);
   for (let row = 0; row < rows; row++) {
     const base = row * cols;
-    let m = logits[base]!;
+    let m = logits[base];
     for (let j = 1; j < cols; j++) {
-      m = Math.max(m, logits[base + j]!);
+      m = Math.max(m, logits[base + j]);
     }
     let sumexp = 0;
     for (let j = 0; j < cols; j++) {
-      sumexp += Math.exp(logits[base + j]! - m);
+      sumexp += Math.exp(logits[base + j] - m);
     }
-    const t = targets[row]!;
-    losses[row] = Math.log(sumexp) + m - logits[base + t]!;
+    const t = targets[row];
+    losses[row] = Math.log(sumexp) + m - logits[base + t];
   }
   return losses;
 }
@@ -362,11 +362,11 @@ export function cpuCrossEntropyLogitsGradFromProbs(
 ): Float32Array {
   const out = new Float32Array(rows * cols);
   for (let row = 0; row < rows; row++) {
-    const tgt = targets[row]!;
-    const u = upstream[row]!;
+    const tgt = targets[row];
+    const u = upstream[row];
     const base = row * cols;
     for (let col = 0; col < cols; col++) {
-      const p = probs[base + col]!;
+      const p = probs[base + col];
       const delta = col === tgt ? u * (p - 1) : u * p;
       out[base + col] = delta;
     }
@@ -392,13 +392,13 @@ export function cpuAdamWStep(
   biasCorrection2: number,
 ): void {
   for (let i = 0; i < n; i++) {
-    const g = grad[i]!;
-    const mNew = beta1 * m[i]! + (1 - beta1) * g;
-    const vNew = beta2 * v[i]! + (1 - beta2) * g * g;
+    const g = grad[i];
+    const mNew = beta1 * m[i] + (1 - beta1) * g;
+    const vNew = beta2 * v[i] + (1 - beta2) * g * g;
     const mHat = mNew / biasCorrection1;
     const vHat = vNew / biasCorrection2;
     const denom = Math.sqrt(vHat) + eps;
-    theta[i] = theta[i]! - (lr * mHat) / denom - lr * weightDecay * theta[i]!;
+    theta[i] = theta[i] - (lr * mHat) / denom - lr * weightDecay * theta[i];
     m[i] = mNew;
     v[i] = vNew;
   }

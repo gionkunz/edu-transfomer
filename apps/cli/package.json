@@ -2,30 +2,25 @@
   "name": "@llm-transformer-diy/cli",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "description": "`llm` CLI — tokenizer, train, generate, chat, inspect",
-  "main": "./dist/main.js",
-  "types": "./dist/main.d.ts",
+  "main": "./main.js",
+  "types": "./main.d.ts",
   "bin": {
-    "llm": "./dist/main.js"
+    "llm": "./main.js"
   },
   "dependencies": {
-    "@llm-transformer-diy/autograd": "workspace:*",
-    "@llm-transformer-diy/gpu": "workspace:*",
-    "@llm-transformer-diy/inference": "workspace:*",
-    "@llm-transformer-diy/io": "workspace:*",
-    "@llm-transformer-diy/model": "workspace:*",
-    "@llm-transformer-diy/tensor": "workspace:*",
-    "@llm-transformer-diy/tokenizer": "workspace:*",
-    "@llm-transformer-diy/training": "workspace:*",
+    "@llm-transformer-diy/autograd": "file:../../packages/autograd",
+    "@llm-transformer-diy/gpu": "file:../../packages/gpu",
+    "@llm-transformer-diy/inference": "file:../../packages/inference",
+    "@llm-transformer-diy/io": "file:../../packages/io",
+    "@llm-transformer-diy/model": "file:../../packages/model",
+    "@llm-transformer-diy/tensor": "file:../../packages/tensor",
+    "@llm-transformer-diy/tokenizer": "file:../../packages/tokenizer",
+    "@llm-transformer-diy/training": "file:../../packages/training",
     "@wolf-tui/react": "^1.9.0",
     "commander": "^14.0.3",
-    "react": "^19.2.6"
-  },
-  "files": [
-    "dist"
-  ],
-  "devDependencies": {
-    "@types/react": "^19.2.14"
+    "glob": "^13.0.6",
+    "react": "^19.2.6",
+    "webgpu": "0.4.0"
   }
 }

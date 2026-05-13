@@ -166,7 +166,7 @@ export async function writeCachedCorpusTokens(
 
   const buf = Buffer.allocUnsafe(ids.length * 4);
   for (let i = 0; i < ids.length; i++) {
-    buf.writeUInt32LE(ids[i] as number, i * 4);
+    buf.writeUInt32LE(ids[i], i * 4);
   }
   await writeFile(idsBinPath(cacheBase), buf);
 }

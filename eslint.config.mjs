@@ -10,8 +10,9 @@ export default tseslint.config(
       'node_modules/**',
       '.nx/**',
       'coverage/**',
-      'pnpm-lock.yaml',
-      'eslint.config.js',
+      'tmp/**',
+      'package-lock.json',
+      'eslint.config.mjs',
     ],
   },
   eslint.configs.recommended,
@@ -22,6 +23,7 @@ export default tseslint.config(
       'apps/**/vitest.config.ts',
       'packages/**/vitest.config.ts',
       'apps/**/src/**/*.ts',
+      'apps/**/src/**/*.tsx',
       'packages/**/src/**/*.ts',
     ],
     extends: [...tseslint.configs.strictTypeChecked],
@@ -46,6 +48,13 @@ export default tseslint.config(
           varsIgnorePattern: '^_',
         },
       ],
+      // strictTypeChecked is valuable, but these rules misfire on defensive runtime checks
+      // (JSON manifests, optional CLI flags) and loosely typed UI event payloads (wolf-tui).
+      '@typescript-eslint/no-unnecessary-condition': 'off',
+      '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'off',
+      '@typescript-eslint/no-unnecessary-type-conversion': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
     },
   },
   {

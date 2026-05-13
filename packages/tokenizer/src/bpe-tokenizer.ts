@@ -244,8 +244,8 @@ export class BPETokenizer implements Tokenizer {
     let chosenR = Infinity;
 
     for (let j = 0; j < len - 1; j++) {
-      const L = buf[j] as number;
-      const R = buf[j + 1] as number;
+      const L = buf[j];
+      const R = buf[j + 1];
       const rk = nestedNumberGet(this.mergeRankByPair, L, R);
       if (rk === undefined) continue;
 
@@ -292,7 +292,7 @@ export class BPETokenizer implements Tokenizer {
     const n = bytes.length;
     const buf = new Uint32Array(n);
     for (let i = 0; i < n; i++) {
-      buf[i] = S + (bytes[i] as number);
+      buf[i] = S + bytes[i];
     }
     let len = n;
 
@@ -343,7 +343,7 @@ export class BPETokenizer implements Tokenizer {
     const n = bytes.length;
     const buf = new Uint32Array(n);
     for (let i = 0; i < n; i++) {
-      buf[i] = S + (bytes[i] as number);
+      buf[i] = S + bytes[i];
     }
     let len = n;
 

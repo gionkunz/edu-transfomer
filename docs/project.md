@@ -41,19 +41,19 @@ Build a transformer-based language model engine from scratch in **TypeScript** f
 
 ## Technology Stack
 
-| Concern           | Choice                                                                       |
-| ----------------- | ---------------------------------------------------------------------------- |
-| Language          | TypeScript (strict mode, ESM)                                                |
-| Runtime           | Node.js 24 LTS                                                               |
-| GPU               | WebGPU via `webgpu` npm package (Dawn v0.4.0)                                |
-| Shader language   | WGSL                                                                         |
-| Monorepo          | Nx with `@nx/js`, pnpm workspaces                                            |
-| TUI               | wolf-tui (framework-agnostic, Taffy layout engine)                           |
-| Tests             | Vitest                                                                       |
-| Linting           | ESLint + Prettier                                                            |
-| Package manager   | pnpm                                                                         |
-| GPU strategy      | GPU-only (hard requirement — fail loudly if no adapter)                      |
-| Checkpoint format | Binary `.bin` (packed Float32 tensors) + `.json` sidecar (config + metadata) |
+| Concern           | Choice                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Language          | TypeScript (strict mode; CommonJS emit for Node libs/app)                                                                                                                  |
+| Runtime           | Node.js 24 LTS                                                                                                                                                             |
+| GPU               | WebGPU via `webgpu` npm package (Dawn v0.4.0)                                                                                                                              |
+| Shader language   | WGSL                                                                                                                                                                       |
+| Monorepo          | Nx with `@nx/js`; **`packages/*`** use **`tsconfig` paths** for `@llm-transformer-diy/*`; **`apps/cli`** uses **`file:`** deps for npm install / prune (no npm workspaces) |
+| TUI               | wolf-tui (framework-agnostic, Taffy layout engine)                                                                                                                         |
+| Tests             | Vitest                                                                                                                                                                     |
+| Linting           | ESLint + Prettier                                                                                                                                                          |
+| Package manager   | npm                                                                                                                                                                        |
+| GPU strategy      | GPU-only (hard requirement — fail loudly if no adapter)                                                                                                                    |
+| Checkpoint format | Binary `.bin` (packed Float32 tensors) + `.json` sidecar (config + metadata)                                                                                               |
 
 ---
 
@@ -216,7 +216,7 @@ llm-transformer-diy/
 │   └── project.md                  ← this file
 ├── nx.json
 ├── tsconfig.base.json
-├── pnpm-workspace.yaml
+├── package-lock.json
 ├── package.json
 ├── .eslintrc.json
 ├── .prettierrc

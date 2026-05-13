@@ -19,14 +19,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 const webgpuAvailable = await probeWebGpu();
 
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Float32Array compares use indices bounded by shared `.length`.
- */
-
 function expectCloseVec(a: Float32Array, b: Float32Array, digits = 3): void {
   expect(a.length).toBe(b.length);
   for (let i = 0; i < a.length; i++) {
-    expect(a[i]).toBeCloseTo(b[i]!, digits);
+    expect(a[i]).toBeCloseTo(b[i], digits);
   }
 }
 

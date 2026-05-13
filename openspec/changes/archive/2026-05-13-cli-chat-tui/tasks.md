@@ -14,4 +14,4 @@
 ## 3. Verification
 
 - [x] 3.1 Update `apps/cli/src/cli-program.spec.ts` expectations to include `chat`.
-- [x] 3.2 Smoke: `pnpm exec nx run @llm-transformer-diy/cli:build`, apply `tools/patch-dist-esm-imports.mjs` if required, then confirm `node apps/cli/dist/main.js chat --help` lists flags.
+- [x] 3.2 Smoke: `pnpm exec nx run @llm-transformer-diy/cli:build`, then confirm `node dist/apps/cli/main.js chat --help` lists flags.

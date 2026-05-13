@@ -4,24 +4,16 @@
   "projectType": "library",
   "sourceRoot": "packages/io/src",
   "targets": {
-    "compile": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
-      "options": {
-        "outputPath": "packages/io/dist",
-        "main": "packages/io/src/index.ts",
-        "rootDir": "packages/io/src",
-        "tsConfig": "packages/io/tsconfig.build.json",
-        "generatePackageJson": false
-      }
-    },
     "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/packages/io"],
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
+        "outputPath": "dist/packages/io",
+        "main": "packages/io/src/index.ts",
+        "tsConfig": "packages/io/tsconfig.lib.json",
+        "packageJson": "packages/io/package.json",
+        "generatePackageJson": true,
+        "assets": ["packages/io/*.md"]
       }
     },
     "test": {

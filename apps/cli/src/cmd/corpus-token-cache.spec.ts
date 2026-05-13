@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type CorpusTokenCacheFingerprint,
   corpusTokenFingerprintsEqual,
-} from './corpus-token-cache.js';
+} from './corpus-token-cache';
 
 describe('corpusTokenFingerprintsEqual', () => {
   function fp(partial: Partial<CorpusTokenCacheFingerprint>): CorpusTokenCacheFingerprint {

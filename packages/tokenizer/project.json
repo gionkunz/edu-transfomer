@@ -4,24 +4,16 @@
   "projectType": "library",
   "sourceRoot": "packages/tokenizer/src",
   "targets": {
-    "compile": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
-      "options": {
-        "outputPath": "packages/tokenizer/dist",
-        "main": "packages/tokenizer/src/index.ts",
-        "rootDir": "packages/tokenizer/src",
-        "tsConfig": "packages/tokenizer/tsconfig.build.json",
-        "generatePackageJson": false
-      }
-    },
     "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/packages/tokenizer"],
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
+        "outputPath": "dist/packages/tokenizer",
+        "main": "packages/tokenizer/src/index.ts",
+        "tsConfig": "packages/tokenizer/tsconfig.lib.json",
+        "packageJson": "packages/tokenizer/package.json",
+        "generatePackageJson": true,
+        "assets": ["packages/tokenizer/*.md"]
       }
     },
     "test": {

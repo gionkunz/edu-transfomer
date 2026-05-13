@@ -4,31 +4,23 @@
   "projectType": "library",
   "sourceRoot": "packages/gpu/src",
   "targets": {
-    "compile": {
+    "build": {
       "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "outputs": ["{workspaceRoot}/dist/packages/gpu"],
       "options": {
-        "outputPath": "packages/gpu/dist",
+        "outputPath": "dist/packages/gpu",
         "main": "packages/gpu/src/index.ts",
-        "rootDir": "packages/gpu/src",
-        "tsConfig": "packages/gpu/tsconfig.build.json",
-        "generatePackageJson": false,
+        "tsConfig": "packages/gpu/tsconfig.lib.json",
+        "packageJson": "packages/gpu/package.json",
+        "generatePackageJson": true,
         "assets": [
+          "packages/gpu/*.md",
           {
             "glob": "*.wgsl",
             "input": "packages/gpu/src/kernels",
             "output": "kernels"
           }
         ]
-      }
-    },
-    "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
-      "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
       }
     },
     "test": {

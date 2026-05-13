@@ -39,7 +39,9 @@ Project-specific agent rules (if present) live in **`.cursor/rules/`** as `.mdc`
 
 - Match existing naming, imports, and test style in whichever package you touch.
 - Prefer tests (e.g. Vitest) when behavior is easy to specify; each package/app owns a `vitest.config.ts`, and Nx runs them via `@nx/vitest:test` (`nx run <project>:test` or `nx run-many -t test --all`). Stay aligned with `docs/project.md`.
-- **CLI smoke (local, WebGPU)**: `pnpm exec nx run @llm-transformer-diy/cli:build && node tools/patch-dist-esm-imports.mjs && node apps/cli/dist/main.js --help`; then e.g. `llm tokenizer` / `llm train` / `llm generate` with a GPU-capable Node + Dawn when exercising GPU commands.
+- **CLI smoke (local, WebGPU)**: `npm run build`. To exercise the **deployable** bundle under `dist/apps/cli` (after `@nx/node` prune): `npx nx run @llm-transformer-diy/cli:prune`, then `npm run cli:install-dist`, then `node dist/apps/cli/main.js --help`. For dev, `npx nx run @llm-transformer-diy/cli:serve` is typical.
+- **CLI global install (`npm link`)**: The runnable package lives under **`dist/apps/cli`** (not `apps/cli`). Use **`npm run cli:link-global`** (runs prune, **`npm install --prefix dist/apps/cli`**, then **`npm link`** in that folder). Remove with **`npm run cli:unlink-global`**. Manual equivalent: `cd dist/apps/cli && npm install && npm link`. To consume from another local project: **`npm install /absolute/path/to/repo/dist/apps/cli`** (after installing deps in `dist/apps/cli`, same as prune flow).
+- **Incremental compile**: `npx nx run <project>:build` emits that project’s artifacts under `dist/` per its `project.json` targets.
 - Avoid new markdown/docs files unless the user asks for documentation deliverables.
 
 When in doubt, re-read **`docs/project.md`** before refactoring or proposing dependencies.

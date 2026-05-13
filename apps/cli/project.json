@@ -4,25 +4,77 @@
   "projectType": "application",
   "sourceRoot": "apps/cli/src",
   "targets": {
-    "compile": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{workspaceRoot}/dist/apps/cli"],
+      "defaultConfiguration": "production",
       "options": {
-        "outputPath": "apps/cli/dist",
+        "platform": "node",
+        "outputPath": "dist/apps/cli",
+        "format": ["cjs"],
+        "bundle": false,
         "main": "apps/cli/src/main.ts",
-        "rootDir": "apps/cli/src",
-        "tsConfig": "apps/cli/tsconfig.build.json",
-        "generatePackageJson": false
+        "tsConfig": "apps/cli/tsconfig.app.json",
+        "assets": ["apps/cli/src/assets"],
+        "generatePackageJson": true,
+        "esbuildOptions": {
+          "sourcemap": true,
+          "outExtension": { ".js": ".js" }
+        },
+        "thirdParty": false
+      },
+      "configurations": {
+        "development": {},
+        "production": {
+          "esbuildOptions": {
+            "sourcemap": false,
+            "outExtension": { ".js": ".js" }
+          }
+        }
       }
     },
-    "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
+    "serve": {
+      "continuous": true,
+      "executor": "@nx/js:node",
+      "defaultConfiguration": "development",
+      "dependsOn": ["build"],
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
+        "buildTarget": "@llm-transformer-diy/cli:build",
+        "runBuildTargetDependencies": false
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "@llm-transformer-diy/cli:build:development"
+        },
+        "production": {
+          "buildTarget": "@llm-transformer-diy/cli:build:production"
+        }
       }
+    },
+    "prune-lockfile": {
+      "dependsOn": ["build"],
+      "cache": true,
+      "executor": "@nx/js:prune-lockfile",
+      "outputs": [
+        "{workspaceRoot}/dist/apps/cli/package.json",
+        "{workspaceRoot}/dist/apps/cli/package-lock.json"
+      ],
+      "options": {
+        "buildTarget": "@llm-transformer-diy/cli:build"
+      }
+    },
+    "copy-workspace-modules": {
+      "dependsOn": ["build"],
+      "cache": true,
+      "outputs": ["{workspaceRoot}/dist/apps/cli/workspace_modules"],
+      "executor": "@nx/js:copy-workspace-modules",
+      "options": {
+        "buildTarget": "@llm-transformer-diy/cli:build"
+      }
+    },
+    "prune": {
+      "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
+      "executor": "nx:noop"
     },
     "test": {
       "executor": "@nx/vitest:test"

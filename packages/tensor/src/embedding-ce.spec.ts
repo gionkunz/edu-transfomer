@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Buffer lengths are guarded by asserted shapes.
- */
 import {
   cpuCrossEntropyFromLogits,
   cpuCrossEntropyLogitsGradFromProbs,
@@ -33,7 +30,7 @@ const webgpuAvailable = await probeWebGpu();
 function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i]!, places);
+    expect(actual[i]).toBeCloseTo(expected[i], places);
   }
 }
 

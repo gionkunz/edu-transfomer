@@ -10,6 +10,7 @@ coverage/
 # Nx
 .nx/cache
 .nx/workspace-data
+tmp/
 
 # OS / editor
 .DS_Store

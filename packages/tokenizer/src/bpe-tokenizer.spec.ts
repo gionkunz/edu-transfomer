@@ -240,7 +240,7 @@ describe('BPETokenizer', () => {
     tok.train('ab', minVocab);
     const first = tok.encode('a')[0];
     expect(first).toBeDefined();
-    const sparse: number[] = [first as number];
+    const sparse: number[] = [first];
     sparse.length = 2;
     expect(() => tok.decode(sparse)).toThrow(/undefined/);
   });

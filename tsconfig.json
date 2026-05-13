@@ -4,5 +4,11 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["vitest.config.ts", "vitest.config.base.ts", "apps/**/*.ts", "packages/**/*.ts"]
+  "include": [
+    "vitest.config.ts",
+    "vitest.config.base.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts"
+  ]
 }

@@ -14,9 +14,9 @@ import { generateAutoregressive } from '@llm-transformer-diy/inference';
 import { loadGptModelFromCheckpoint } from '@llm-transformer-diy/training';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 
-import { resolvePackedCheckpointPaths } from '../paths.js';
-import { createTensorRuntime } from '../runtime.js';
-import { primeTuiTerminalCanvas } from '../tui-prime.js';
+import { resolvePackedCheckpointPaths } from '../paths';
+import { createTensorRuntime } from '../runtime';
+import { primeTuiTerminalCanvas } from '../tui-prime';
 
 type ChatVm = {
   committed: string;
@@ -41,11 +41,7 @@ function ChatUi(props: ChatUiProps): React.ReactElement {
   const scrollRef = useRef<IScrollViewHandle | null>(null);
 
   const transcript = (() => {
-    if (
-      props.vm.busy !== true ||
-      props.vm.pendingUserLine === null ||
-      props.vm.pendingUserLine === ''
-    ) {
+    if (!props.vm.busy || props.vm.pendingUserLine === null || props.vm.pendingUserLine === '') {
       return props.vm.committed;
     }
     return `${props.vm.committed}User: ${props.vm.pendingUserLine}\nAssistant: ${props.vm.streamText}`;
@@ -130,12 +126,6 @@ export async function runChatCommand(opts: {
     );
   }
 
-  let inst!: ReturnType<typeof render>;
-
-  function paint(): void {
-    inst.rerender(buildUi());
-  }
-
   async function submitLine(trimmedLine: string): Promise<void> {
     if (vm.busy || trimmedLine === '') return;
 
@@ -203,6 +193,10 @@ export async function runChatCommand(opts: {
     }
   }
 
-  inst = render(buildUi(), { exitOnCtrlC: true, patchConsole: true });
+  function paint(): void {
+    inst.rerender(buildUi());
+  }
+
+  const inst = render(buildUi(), { exitOnCtrlC: true, patchConsole: true });
   await inst.waitUntilExit();
 }

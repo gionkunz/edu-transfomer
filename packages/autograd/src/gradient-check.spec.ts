@@ -108,7 +108,7 @@ async function runComposedGraph(
 function sum(arr: Float32Array): number {
   let total = 0;
   for (let i = 0; i < arr.length; i++) {
-    total += arr[i] as number;
+    total += arr[i];
   }
   return total;
 }
@@ -148,9 +148,9 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
       for (let i = 0; i < slot.base.length; i++) {
         // Central difference: f(x + ε) - f(x - ε) over 2ε.
         const plus = new Float32Array(slot.base);
-        plus[i] = (slot.base[i] as number) + epsilon;
+        plus[i] = slot.base[i] + epsilon;
         const minus = new Float32Array(slot.base);
-        minus[i] = (slot.base[i] as number) - epsilon;
+        minus[i] = slot.base[i] - epsilon;
 
         const aP = slot.name === 'a' ? plus : aBase;
         const bP = slot.name === 'b' ? plus : bBase;
@@ -165,7 +165,7 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(
-          Math.abs((analytic[i] as number) - numerical),
+          Math.abs(analytic[i] - numerical),
           `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
         ).toBeLessThanOrEqual(tolerance);
       }
@@ -239,9 +239,9 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
       const analytic = grads![slot.name];
       for (let i = 0; i < slot.base.length; i++) {
         const plus = new Float32Array(slot.base);
-        plus[i] = (slot.base[i] as number) + epsilon;
+        plus[i] = slot.base[i] + epsilon;
         const minus = new Float32Array(slot.base);
-        minus[i] = (slot.base[i] as number) - epsilon;
+        minus[i] = slot.base[i] - epsilon;
 
         const xP = slot.name === 'x' ? plus : xBase;
         const wP = slot.name === 'w' ? plus : wBase;
@@ -253,7 +253,7 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(
-          Math.abs((analytic[i] as number) - numerical),
+          Math.abs(analytic[i] - numerical),
           `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
         ).toBeLessThanOrEqual(tolerance);
       }
@@ -324,9 +324,9 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
       const analytic = grads![slot.name];
       for (let i = 0; i < slot.base.length; i++) {
         const plus = new Float32Array(slot.base);
-        plus[i] = (slot.base[i] as number) + epsilon;
+        plus[i] = slot.base[i] + epsilon;
         const minus = new Float32Array(slot.base);
-        minus[i] = (slot.base[i] as number) - epsilon;
+        minus[i] = slot.base[i] - epsilon;
 
         const aP = slot.name === 'a' ? plus : aBase;
         const bP = slot.name === 'b' ? plus : bBase;
@@ -338,7 +338,7 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(
-          Math.abs((analytic[i] as number) - numerical),
+          Math.abs(analytic[i] - numerical),
           `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
         ).toBeLessThanOrEqual(tolerance);
       }
@@ -414,9 +414,9 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
       const analytic = grads![slot.name];
       for (let i = 0; i < slot.base.length; i++) {
         const plus = new Float32Array(slot.base);
-        plus[i] = (slot.base[i] as number) + epsilon;
+        plus[i] = slot.base[i] + epsilon;
         const minus = new Float32Array(slot.base);
-        minus[i] = (slot.base[i] as number) - epsilon;
+        minus[i] = slot.base[i] - epsilon;
 
         const aP = slot.name === 'a' ? plus : aBase;
         const bP = slot.name === 'b' ? plus : bBase;
@@ -428,7 +428,7 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(
-          Math.abs((analytic[i] as number) - numerical),
+          Math.abs(analytic[i] - numerical),
           `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
         ).toBeLessThanOrEqual(tolerance);
       }

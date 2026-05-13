@@ -1,7 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Float32Array reads are typed `number | undefined` under
- * `noUncheckedIndexedAccess`; lengths are checked before iterating.
- */
 import './webgpu-globals';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -41,7 +37,7 @@ const webgpuAvailable = await probeWebGpu();
 function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i]!, places);
+    expect(actual[i]).toBeCloseTo(expected[i], places);
   }
 }
 
@@ -77,7 +73,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
     expectCloseVec(got, cpuSoftmax(data, 2, 4));
     for (let i = 0; i < 2; i++) {
       let s = 0;
-      for (let j = 0; j < 4; j++) s += got[i * 4 + j]!;
+      for (let j = 0; j < 4; j++) s += got[i * 4 + j];
       expect(s).toBeCloseTo(1, 5);
     }
   });
@@ -86,7 +82,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
     const data = new Float32Array([1000, 1001, 999]);
     const got = await smokeSoftmax(ctx, registry, data, 1, 3);
     for (let i = 0; i < got.length; i++) {
-      expect(Number.isFinite(got[i]!)).toBe(true);
+      expect(Number.isFinite(got[i])).toBe(true);
     }
     expectCloseVec(got, cpuSoftmax(data, 1, 3));
   });

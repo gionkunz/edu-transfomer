@@ -6,9 +6,9 @@ import { generateAutoregressive } from '@llm-transformer-diy/inference';
 import { loadGptModelFromCheckpoint } from '@llm-transformer-diy/training';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 
-import { resolvePackedCheckpointPaths } from '../paths.js';
-import { createTensorRuntime } from '../runtime.js';
-import { primeTuiTerminalCanvas } from '../tui-prime.js';
+import { resolvePackedCheckpointPaths } from '../paths';
+import { createTensorRuntime } from '../runtime';
+import { primeTuiTerminalCanvas } from '../tui-prime';
 
 type GenViewProps = {
   readonly text: string;

@@ -1,8 +1,14 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Single-parameter Adam smoke test uses a defined gradient buffer.
- */
-import { createParameter, createParameterRegistry, registerParameter } from '@llm-transformer-diy/autograd';
-import { GpuContext, KernelRegistry, probeWebGpu, registerCoreKernels } from '@llm-transformer-diy/gpu';
+import {
+  createParameter,
+  createParameterRegistry,
+  registerParameter,
+} from '@llm-transformer-diy/autograd';
+import {
+  GpuContext,
+  KernelRegistry,
+  probeWebGpu,
+  registerCoreKernels,
+} from '@llm-transformer-diy/gpu';
 import { createFromArray, destroy, toArray, type TensorRuntime } from '@llm-transformer-diy/tensor';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -38,7 +44,7 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
 
     expect(w.grad).toBeNull();
     const out = await toArray(rt, w.tensor);
-    expect(out[0]!).not.toBeCloseTo(w0[0]!, 6);
+    expect(out[0]).not.toBeCloseTo(w0[0], 6);
     destroy(w.tensor);
     opt.dispose();
   });

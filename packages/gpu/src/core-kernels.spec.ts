@@ -1,7 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Float32Array reads are typed `number | undefined` under
- * `noUncheckedIndexedAccess`; lengths are checked before iterating.
- */
 import './webgpu-globals';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -17,7 +13,16 @@ import {
   smokeScale,
   smokeTranspose,
 } from './core-kernels.test-helpers';
-import { cpuAdamWStep, cpuAdd, cpuGelu, cpuGeluBackward, cpuMatMul, cpuMul, cpuScale, cpuTranspose } from './cpu-reference';
+import {
+  cpuAdamWStep,
+  cpuAdd,
+  cpuGelu,
+  cpuGeluBackward,
+  cpuMatMul,
+  cpuMul,
+  cpuScale,
+  cpuTranspose,
+} from './cpu-reference';
 import { GpuContext, probeWebGpu } from './device';
 import { KernelRegistry } from './kernel-registry';
 
@@ -26,7 +31,7 @@ const webgpuAvailable = await probeWebGpu();
 function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i]!, 5);
+    expect(actual[i]).toBeCloseTo(expected[i], 5);
   }
 }
 

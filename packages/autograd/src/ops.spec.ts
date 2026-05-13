@@ -34,7 +34,7 @@ const webgpuAvailable = await probeWebGpu();
 function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i]!, 5);
+    expect(actual[i]).toBeCloseTo(expected[i], 5);
   }
 }
 

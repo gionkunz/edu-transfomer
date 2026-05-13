@@ -1,7 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Float32Array reads use indices bounded by `length` in the loop header.
- */
-
 /** RNG in **`[0, 1)`** — default **`Math.random`**. */
 export type Random01 = () => number;
 
@@ -32,7 +28,7 @@ export function applyRepetitionPenalty(
     if (!Number.isInteger(id) || id < 0 || id >= logits.length) {
       continue;
     }
-    const v = logits[id]!;
+    const v = logits[id];
     if (v > 0) {
       logits[id] = v / penalty;
     } else {
@@ -46,9 +42,9 @@ export function greedyArgmax(logits: Float32Array): number {
     throw new Error('greedyArgmax: empty logits');
   }
   let best = 0;
-  let bestV = logits[0]!;
+  let bestV = logits[0];
   for (let i = 1; i < logits.length; i++) {
-    const v = logits[i]!;
+    const v = logits[i];
     if (v > bestV) {
       bestV = v;
       best = i;
@@ -60,15 +56,15 @@ export function greedyArgmax(logits: Float32Array): number {
 function softmaxMutable(a: Float32Array): void {
   let mx = -Infinity;
   for (let i = 0; i < a.length; i++) {
-    mx = Math.max(mx, a[i]!);
+    mx = Math.max(mx, a[i]);
   }
   let s = 0;
   for (let i = 0; i < a.length; i++) {
-    a[i] = Math.exp(a[i]! - mx);
-    s += a[i]!;
+    a[i] = Math.exp(a[i] - mx);
+    s += a[i];
   }
   for (let i = 0; i < a.length; i++) {
-    a[i]! /= s;
+    a[i] /= s;
   }
 }
 
@@ -89,10 +85,10 @@ export function sampleLogits(rng: Random01, logits: Float32Array, opts: SampleOp
   const k = opts.topK;
   if (Number.isInteger(k) && k > 0 && k < p.length) {
     const idx: number[] = Array.from({ length: p.length }, (_, i) => i);
-    idx.sort((i, j) => p[j]! - p[i]!);
-    const kth = p[idx[k - 1]!]!;
+    idx.sort((i, j) => p[j] - p[i]);
+    const kth = p[idx[k - 1]];
     for (let i = 0; i < p.length; i++) {
-      if (p[i]! < kth) {
+      if (p[i] < kth) {
         p[i] = -Infinity;
       }
     }
@@ -100,13 +96,13 @@ export function sampleLogits(rng: Random01, logits: Float32Array, opts: SampleOp
 
   const invTau = 1 / opts.temperature;
   for (let i = 0; i < p.length; i++) {
-    p[i]! *= invTau;
+    p[i] *= invTau;
   }
   softmaxMutable(p);
 
   let r = rng();
   for (let i = 0; i < p.length; i++) {
-    r -= p[i]!;
+    r -= p[i];
     if (r <= 0) {
       return i;
     }

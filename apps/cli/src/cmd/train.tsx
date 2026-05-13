@@ -16,27 +16,27 @@ import {
   saveGptCheckpoint,
 } from '@llm-transformer-diy/training';
 
-import { resolveTrainConfig } from '../config-presets.js';
-import { createTensorRuntime } from '../runtime.js';
-import { primeTuiTerminalCanvas } from '../tui-prime.js';
+import { resolveTrainConfig } from '../config-presets';
+import { createTensorRuntime } from '../runtime';
+import { primeTuiTerminalCanvas } from '../tui-prime';
 import {
   buildCorpusTokenCacheFingerprint,
   tryReadCachedCorpusTokens,
   writeCachedCorpusTokens,
-} from './corpus-token-cache.js';
+} from './corpus-token-cache';
 import {
   pessimisticEtaFromRate,
   pessimisticMergeRemaining,
   pessimisticMergeUpperBound,
   mergeProgressPct,
-} from './encode-eta.js';
+} from './encode-eta';
 import {
   createInitialTrainDashboardDraft,
   createTrainDashboardThrottle,
   finalizeTrainDashboardDraft,
   type TrainDashboardDraft,
-} from './train-dash-model.js';
-import { TrainDashboardView } from './train-dashboard.js';
+} from './train-dash-model';
+import { TrainDashboardView } from './train-dashboard';
 
 export async function runTrainCommand(opts: {
   readonly dataGlobs: string[];
@@ -57,17 +57,17 @@ export async function runTrainCommand(opts: {
   });
 
   type RenderInstance = ReturnType<typeof render>;
+  const dashRef: { inst?: RenderInstance } = {};
   const paintDashboard = (): void => {
-    if (dashInst === undefined) return;
-    dashInst.rerender(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />);
+    if (dashRef.inst === undefined) return;
+    dashRef.inst.rerender(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />);
   };
   const dashThrottle = createTrainDashboardThrottle(96, paintDashboard);
-  let dashInst: RenderInstance | undefined;
 
   draft.phase = 'starting';
   draft.detailLine = 'mounting dashboard';
   primeTuiTerminalCanvas();
-  dashInst = render(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />, {
+  dashRef.inst = render(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />, {
     exitOnCtrlC: true,
     patchConsole: true,
   });
@@ -412,7 +412,7 @@ export async function runTrainCommand(opts: {
     draft.detailLine = 'artifacts written';
     dashThrottle.flush();
   } finally {
-    dashInst?.unmount();
+    dashRef.inst?.unmount();
     opt.dispose();
   }
 }

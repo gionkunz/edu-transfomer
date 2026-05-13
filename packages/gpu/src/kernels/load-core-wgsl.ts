@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 function loadWgsl(relativePath: string): string {
-  const url = new URL(relativePath, import.meta.url);
-  return readFileSync(fileURLToPath(url), 'utf8');
+  const file = relativePath.replace(/^\.\//, '');
+  return readFileSync(path.join(__dirname, file), 'utf8');
 }
 
 export function loadMatMulWgsl(): string {

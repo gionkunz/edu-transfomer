@@ -2,18 +2,18 @@
 
 ## Purpose
 
-Establish a minimal pnpm + Nx workspace with strict TypeScript, layered package stubs, and root smoke commands so feature work can attach to real projects without redefining repo shape.
+Establish a minimal **npm + Nx** repository with strict TypeScript, layered package stubs, and root smoke commands so feature work can attach to real projects without redefining repo shape. **`packages/*` manifests omit internal dependency lists**; TypeScript resolves **`@llm-transformer-diy/*`** via **`tsconfig.base.json`** `paths`. **`apps/cli`** alone declares **`file:`** links to local libraries plus the npm packages the runnable CLI needs (`glob`, `webgpu`, wolf-tui, etc.). No npm workspaces.
 
 ## Requirements
 
-### Requirement: Repository uses a pnpm workspace for apps and libraries
+### Requirement: Repository links local packages without npm workspaces
 
-The repository SHALL define workspace membership for `apps/*` and `packages/*` via `pnpm-workspace.yaml` (or successor format supported by pnpm) such that workspace packages resolve by name without publishing.
+The repository SHALL use **`file:`** dependencies only on **`apps/cli`** (pointing at **`packages/*`**) where npm must materialize links. Library **`package.json`** files under **`packages/`** SHALL NOT list **`@llm-transformer-diy/*`** dependencies; those edges are expressed in **`tsconfig.base.json`** `paths`. It MUST NOT rely on npm **`workspaces`** or **`pnpm-workspace.yaml`** for name resolution.
 
-#### Scenario: Workspace packages resolve from the repository root
+#### Scenario: Local packages resolve from the repository root
 
-- **WHEN** a maintainer runs a pnpm install from the repository root using the documented package manager major version
-- **THEN** workspace links exist for each application under `apps/` and library under `packages/` that has a `package.json`
+- **WHEN** a maintainer runs **`npm install`** from the repository root using the documented package manager major version
+- **THEN** **`apps/cli`** (linked from the root via **`file:`**) resolves **`packages/*`** through **`file:`** references and installs the npm packages declared on the CLI (and hoisted types via the root **`devDependencies`** as documented)
 
 ---
 
@@ -30,12 +30,12 @@ The repository SHALL contain Nx workspace configuration identifying every `apps/
 
 ### Requirement: Canonical layer packages exist only as compilable stubs
 
-For each layered library named in `docs/project.md` under `packages/` (`gpu`, `tensor`, `autograd`, `tokenizer`, `model`, `training`, `inference`, `io`), the codebase SHALL contain a matching package folder with TypeScript compilation enabled and dependency edges that respect layering (a package MUST NOT declare a workspace dependency on a layer above itself). Packages MUST NOT introduce ML framework or hidden-compute prohibited dependencies listed in project documentation.
+For each layered library named in `docs/project.md` under `packages/` (`gpu`, `tensor`, `autograd`, `tokenizer`, `model`, `training`, `inference`, `io`), the codebase SHALL contain a matching package folder with TypeScript compilation enabled and dependency edges that respect layering (a package MUST NOT declare a dependency on a layer above itself). Packages MUST NOT introduce ML framework or hidden-compute prohibited dependencies listed in project documentation.
 
 #### Scenario: Dependency direction forbids inverted edges
 
 - **WHEN** dependency declarations for workspace packages are reviewed
-- **THEN** there is no `package.json` workspace dependency pointing from `gpu` to `tensor` or from `tensor` to `autograd`; lower layers MUST NOT reference higher layers
+- **THEN** there is no `package.json` dependency pointing from `gpu` to `tensor` or from `tensor` to `autograd`; lower layers MUST NOT reference higher layers
 
 #### Scenario: Forbidden dependency classes are absent
 
@@ -44,9 +44,9 @@ For each layered library named in `docs/project.md` under `packages/` (`gpu`, `t
 
 ---
 
-### Requirement: Applications use ESM-compatible TypeScript
+### Requirement: Applications use Node-compatible TypeScript
 
-The repository SHALL compile TypeScript in strict mode for workspace projects using native `module` interoperability suitable for Node.js runtime described in project documentation (`type: module` where applicable).
+The repository SHALL compile TypeScript in strict mode for workspace projects using CommonJS (`module: commonjs`) and **`esModuleInterop`** suitable for Node.js runtime described in project documentation.
 
 #### Scenario: Strict module interoperability
 

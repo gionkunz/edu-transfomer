@@ -4,24 +4,16 @@
   "projectType": "library",
   "sourceRoot": "packages/autograd/src",
   "targets": {
-    "compile": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
-      "options": {
-        "outputPath": "packages/autograd/dist",
-        "main": "packages/autograd/src/index.ts",
-        "rootDir": "packages/autograd/src",
-        "tsConfig": "packages/autograd/tsconfig.build.json",
-        "generatePackageJson": false
-      }
-    },
     "build": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["^build", "compile"],
-      "cache": false,
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/packages/autograd"],
       "options": {
-        "cwd": "{workspaceRoot}",
-        "command": "node tools/patch-dist-esm-imports.mjs"
+        "outputPath": "dist/packages/autograd",
+        "main": "packages/autograd/src/index.ts",
+        "tsConfig": "packages/autograd/tsconfig.lib.json",
+        "packageJson": "packages/autograd/package.json",
+        "generatePackageJson": true,
+        "assets": ["packages/autograd/*.md"]
       }
     },
     "test": {

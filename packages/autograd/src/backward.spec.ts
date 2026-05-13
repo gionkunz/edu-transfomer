@@ -1,7 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * `Variable.grad` reads after a successful backward are non-null by contract;
- * non-null assertions are checked first via `expect(...).not.toBeNull()`.
- */
 import {
   GpuContext,
   KernelRegistry,
@@ -21,7 +17,7 @@ const webgpuAvailable = await probeWebGpu();
 function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i]!, 5);
+    expect(actual[i]).toBeCloseTo(expected[i], 5);
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createCliProgram } from './cli-program.js';
+import { createCliProgram } from './cli-program';
 
 describe('createCliProgram', () => {
   it('registers tokenizer, train, generate, chat, inspect', () => {

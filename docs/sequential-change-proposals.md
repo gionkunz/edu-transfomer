@@ -22,9 +22,9 @@ Cross-cutting packages (`tokenizer`, `io`, `utils`) should depend **downward** o
 
 ## Already completed anchor (example)
 
-| Change (archived) | Role |
-|-------------------|------|
-| Monorepo skeleton / project foundation | pnpm + Nx, package placeholders, TS baseline, test/lint gates—**no** WGSL, ops, or model semantics. |
+| Change (archived)                      | Role                                                                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo skeleton / project foundation | npm + Nx (`file:` local packages), package placeholders, TS baseline, test/lint gates—**no** WGSL, ops, or model semantics. |
 
 Treat anything listed in `docs/project.md` as the north star for what each later change must eventually satisfy.
 

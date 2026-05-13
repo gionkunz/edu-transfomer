@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { formatInspectReport, loadSidecarFromJsonFile } from './cmd/inspect.js';
+import { formatInspectReport, loadSidecarFromJsonFile } from './cmd/inspect';
 
 describe('inspect helpers', () => {
   it('formatInspectReport summarizes tensors', () => {

@@ -5,7 +5,7 @@ import {
   pessimisticEtaFromRate,
   pessimisticMergeRemaining,
   pessimisticMergeUpperBound,
-} from './encode-eta.js';
+} from './encode-eta';
 
 describe('encode-eta', () => {
   it('pessimisticMergeUpperBound', () => {

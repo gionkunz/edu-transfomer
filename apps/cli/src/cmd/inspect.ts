@@ -6,7 +6,7 @@ import {
 } from '@llm-transformer-diy/io';
 import type { GptConfig } from '@llm-transformer-diy/model';
 
-import { resolvePackedCheckpointPaths } from '../paths.js';
+import { resolvePackedCheckpointPaths } from '../paths';
 
 function asGptConfig(c: unknown): GptConfig | null {
   if (c === null || typeof c !== 'object') return null;

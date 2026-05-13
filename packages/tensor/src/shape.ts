@@ -1,8 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Indices are bounded by the freshly-allocated arrays' known lengths under
- * `noUncheckedIndexedAccess`, so the assertions are safe.
- */
-
 import type { DType, Tensor } from './types';
 
 /**
@@ -16,7 +11,7 @@ export function computeContiguousStrides(shape: readonly number[]): readonly num
   let stride = 1;
   for (let i = n - 1; i >= 0; i--) {
     strides[i] = stride;
-    stride *= shape[i]!;
+    stride *= shape[i];
   }
   return strides;
 }

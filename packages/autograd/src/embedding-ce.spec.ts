@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion --
- * Grad tensors are guarded by assertions before dereferencing.
- */
 import {
   cpuCrossEntropyLogitsGradFromProbs,
   cpuSoftmax,
@@ -27,7 +24,7 @@ const webgpuAvailable = await probeWebGpu();
 
 function expectCloseVec(a: Float32Array, e: Float32Array, places = 5): void {
   expect(a.length).toBe(e.length);
-  for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(e[i]!, places);
+  for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(e[i], places);
 }
 
 describe.skipIf(!webgpuAvailable)('autograd embedding + CE mean (GPU)', () => {

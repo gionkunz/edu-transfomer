@@ -1,4 +1,4 @@
-import type { TrainDashboardSnapshot, TrainPipelinePhase } from './train-dash-types.js';
+import type { TrainDashboardSnapshot, TrainPipelinePhase } from './train-dash-types';
 
 /** Mutable authoring surface consumed by **`finalizeTrainDashboardDraft`**. */
 export interface TrainDashboardDraft {

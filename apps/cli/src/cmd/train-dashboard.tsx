@@ -6,7 +6,7 @@ import {
   type TrainPipelinePhase,
   TRAIN_SETUP_PIPELINE_ORDER,
   setupMacroPct,
-} from './train-dash-types.js';
+} from './train-dash-types';
 
 const PHASE_LABEL: Record<TrainPipelinePhase, string> = {
   starting: 'start',
@@ -127,9 +127,7 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
   const etaStr =
     etaSec !== null && Number.isFinite(etaSec) ? `~${Math.max(0, Math.round(etaSec))}s` : '—';
 
-  const inSetupFunnel = TRAIN_SETUP_PIPELINE_ORDER.includes(
-    snap.phase as (typeof TRAIN_SETUP_PIPELINE_ORDER)[number],
-  );
+  const inSetupFunnel = TRAIN_SETUP_PIPELINE_ORDER.includes(snap.phase);
   const showEncodeSpinner = snap.phase === 'encode_corpus';
   const showTrainingBlock =
     snap.phase === 'training' ||
