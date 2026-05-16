@@ -57,6 +57,16 @@ export interface RunIncrementalMergeLoopOpts {
   /** First merge-derived id (caller passes `S + 256` after specials + byte singletons). */
   readonly nextIdInitial: number;
   readonly hooks?: IncrementalMergeLoopHooks;
+  /**
+   * Region-boundary bitmap, one byte per slot (`1` means the pair starting
+   * at this slot crosses a region boundary and SHALL NOT be counted as adjacent).
+   * The merge loop maintains the invariant after each merge: if the right slot `j`
+   * had `regionBoundary[j] === 1`, the merged slot `i` inherits it. Neighbor-pair
+   * updates (`decrementPair` / `incrementPair`) are gated on this bit.
+   *
+   * Pass `new Uint8Array(stream.capacity)` (all zeros) to disable region gating.
+   */
+  readonly regionBoundary: Uint8Array;
 }
 
 export interface RunIncrementalMergeLoopResult {
@@ -86,13 +96,22 @@ export function runIncrementalMergeLoopSync(
     readonly hooks?: Pick<IncrementalMergeLoopHooks, 'onMergeComplete'>;
   },
 ): RunIncrementalMergeLoopResult {
-  const { stream, index, occList, rows, vocabCap, nextIdInitial, hooks } = opts;
+  const { stream, index, occList, rows, vocabCap, nextIdInitial, hooks, regionBoundary } = opts;
   const mergesList: [number, number][] = [];
   let nextId = nextIdInitial;
   while (nextId < vocabCap) {
     const top = pickArgmaxByCountTieLR(index);
     if (top === null) break;
-    const advanced = applyOneMerge(stream, index, occList, rows, top.L, top.R, nextId);
+    const advanced = applyOneMerge(
+      stream,
+      index,
+      occList,
+      rows,
+      top.L,
+      top.R,
+      nextId,
+      regionBoundary,
+    );
     if (!advanced) break;
     mergesList.push([top.L, top.R]);
     hooks?.onMergeComplete?.({
@@ -113,14 +132,23 @@ export function runIncrementalMergeLoopSync(
 export async function runIncrementalMergeLoop(
   opts: RunIncrementalMergeLoopOpts,
 ): Promise<RunIncrementalMergeLoopResult> {
-  const { stream, index, occList, rows, vocabCap, nextIdInitial, hooks } = opts;
+  const { stream, index, occList, rows, vocabCap, nextIdInitial, hooks, regionBoundary } = opts;
   const mergesList: [number, number][] = [];
   let nextId = nextIdInitial;
 
   while (nextId < vocabCap) {
     const top = pickArgmaxByCountTieLR(index);
     if (top === null) break;
-    const advanced = applyOneMerge(stream, index, occList, rows, top.L, top.R, nextId);
+    const advanced = applyOneMerge(
+      stream,
+      index,
+      occList,
+      rows,
+      top.L,
+      top.R,
+      nextId,
+      regionBoundary,
+    );
     if (!advanced) break;
     mergesList.push([top.L, top.R]);
     const mergeIndex = mergesList.length - 1;
@@ -159,6 +187,7 @@ function applyOneMerge(
   L: number,
   R: number,
   mergedId: number,
+  regionBoundary: Uint8Array,
 ): boolean {
   const lb = rows[L];
   const rb = rows[R];
@@ -175,9 +204,6 @@ function applyOneMerge(
   const sites = collectOccurrencesIntoArray(index, occList, L, R);
   for (let k = 0; k < sites.length; k++) {
     const i = sites[k];
-    // Site invalidated by an earlier merge in this same iteration (e.g. an
-    // overlapping `(X, X)` adjacency that was consumed when its left neighbor
-    // was merged). Skip — matches today's `r += 2` non-overlap rule.
     if (stream.alive[i] === 0) continue;
     const j = stream.next[i];
     if (j === END || stream.alive[j] === 0) continue;
@@ -186,25 +212,34 @@ function applyOneMerge(
     const prevSlot = stream.prev[i];
     const nextSlot = stream.next[j];
 
-    // Drop the up-to-three pairs that touched slots {i, j} from the index.
-    // (prev, L) is recorded at slot `prevSlot` (its pairOf entry). (L, R) is
-    // recorded at slot `i`. (R, next) is recorded at slot `j`.
-    if (prevSlot !== END) {
+    // Region-boundary gates: a `(prev, L)` or `(R, next)` pair that crosses a
+    // region boundary was never counted in the initial scan (see
+    // `buildInitialPairIndex` under `regionBoundary`). Skipping its
+    // decrement/increment keeps the index consistent.
+    const prevWithinRegion = prevSlot !== END && regionBoundary[prevSlot] === 0;
+    const rightWithinRegion = nextSlot !== END && regionBoundary[j] === 0;
+
+    if (prevWithinRegion) {
       decrementPair(index, occList, prevSlot);
     }
     decrementPair(index, occList, i);
-    if (nextSlot !== END) {
+    if (rightWithinRegion) {
       decrementPair(index, occList, j);
     }
 
-    // Rewrite slot i to the merged token; unlink slot j from the live list.
     unitMergeSlot(stream, i, mergedId);
 
-    // Add the up-to-two new pairs that touch the new slot i.
-    if (prevSlot !== END) {
+    // Propagate the boundary bit from `j` (the slot being absorbed) into `i`
+    // (the surviving merged slot). After this, `regionBoundary[i]` correctly
+    // describes "is the pair starting at the merged slot a cross-region pair".
+    regionBoundary[i] = regionBoundary[j];
+    regionBoundary[j] = 0;
+
+    if (prevWithinRegion) {
       incrementPair(index, occList, stream, stream.value[prevSlot], mergedId, prevSlot);
     }
-    if (nextSlot !== END) {
+    const mergedSlotWithinRegion = nextSlot !== END && regionBoundary[i] === 0;
+    if (mergedSlotWithinRegion) {
       incrementPair(index, occList, stream, mergedId, stream.value[nextSlot], i);
     }
   }
@@ -242,7 +277,10 @@ function collectOccurrencesIntoArray(
  * Allocates the index with a capacity hint of `min(stream.liveCount, 1 << 14)`
  * to keep early grow-and-rehash cycles cheap on large corpora.
  */
-export function buildInitialPairIndex(stream: BpeLinkedTokenStream): {
+export function buildInitialPairIndex(
+  stream: BpeLinkedTokenStream,
+  regionBoundary: Uint8Array,
+): {
   readonly index: BpePairFreqIndex;
   readonly occList: BpePairOccurrenceList;
   readonly distinctInitialPairs: number;
@@ -255,7 +293,9 @@ export function buildInitialPairIndex(stream: BpeLinkedTokenStream): {
   while (cur !== END) {
     const nxt = stream.next[cur];
     if (nxt === END) break;
-    incrementPair(index, occList, stream, stream.value[cur], stream.value[nxt], cur);
+    if (regionBoundary[cur] === 0) {
+      incrementPair(index, occList, stream, stream.value[cur], stream.value[nxt], cur);
+    }
     cur = nxt;
   }
   return { index, occList, distinctInitialPairs: index.size };

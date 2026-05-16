@@ -18,6 +18,11 @@ function streamFromBytes(bytes: ArrayLike<number>): ReturnType<typeof createLink
   return stream;
 }
 
+/** All-zero boundary bitmap: treats the entire stream as one region (no region gating). */
+function noBoundary(stream: ReturnType<typeof createLinkedTokenStream>): Uint8Array {
+  return new Uint8Array(stream.capacity);
+}
+
 function makeRows(): Uint8Array[] {
   const rows: Uint8Array[] = [];
   for (let i = 0; i < SPECIALS_COUNT; i++) {
@@ -34,7 +39,8 @@ describe('runIncrementalMergeLoop', () => {
     // "abababab" → bytes [97, 98] repeating 4× → 8 tokens after byte mapping.
     const corpus = new TextEncoder().encode('abababab');
     const stream = streamFromBytes(corpus);
-    const { index, occList } = buildInitialPairIndex(stream);
+    const regionBoundary = noBoundary(stream);
+    const { index, occList } = buildInitialPairIndex(stream, regionBoundary);
     const rows = makeRows();
     const result = await runIncrementalMergeLoop({
       stream,
@@ -43,6 +49,7 @@ describe('runIncrementalMergeLoop', () => {
       rows,
       vocabCap: FLOOR + 4,
       nextIdInitial: FLOOR,
+      regionBoundary,
     });
     // First merge: (a, b) — count 4 in "abababab" — wins over (b, a) (count 3).
     // Bytes a=97, b=98 → ids S+97=99, S+98=100.
@@ -62,7 +69,8 @@ describe('runIncrementalMergeLoop', () => {
     // greedy non-overlapping merge consumes positions 0 and 2, leaving stream [merged, merged].
     const corpus = new TextEncoder().encode('XXXX');
     const stream = streamFromBytes(corpus);
-    const { index, occList } = buildInitialPairIndex(stream);
+    const regionBoundary = noBoundary(stream);
+    const { index, occList } = buildInitialPairIndex(stream, regionBoundary);
     const rows = makeRows();
     const result = await runIncrementalMergeLoop({
       stream,
@@ -71,6 +79,7 @@ describe('runIncrementalMergeLoop', () => {
       rows,
       vocabCap: FLOOR + 4,
       nextIdInitial: FLOOR,
+      regionBoundary,
     });
     expect(result.mergesList[0]).toEqual([SPECIALS_COUNT + 88, SPECIALS_COUNT + 88]);
     // After first merge, stream is [258, 258]. Pair (258, 258) has count 1, loop stops.
@@ -86,7 +95,8 @@ describe('runIncrementalMergeLoop', () => {
     // Tie between (a,b) and (c,d) at count 2. Smaller L wins → (a, b) which is (97, 98) < (99, 100).
     const corpus = new TextEncoder().encode('abab cdcd');
     const stream = streamFromBytes(corpus);
-    const { index, occList } = buildInitialPairIndex(stream);
+    const regionBoundary = noBoundary(stream);
+    const { index, occList } = buildInitialPairIndex(stream, regionBoundary);
     const rows = makeRows();
     const result = await runIncrementalMergeLoop({
       stream,
@@ -95,6 +105,7 @@ describe('runIncrementalMergeLoop', () => {
       rows,
       vocabCap: FLOOR + 1,
       nextIdInitial: FLOOR,
+      regionBoundary,
     });
     expect(result.mergesList[0]).toEqual([SPECIALS_COUNT + 97, SPECIALS_COUNT + 98]);
   });
@@ -103,7 +114,8 @@ describe('runIncrementalMergeLoop', () => {
     // Use a corpus with repeating pairs so we get multiple merges.
     const corpus = new TextEncoder().encode('abababcccdd extra abababab');
     const stream = streamFromBytes(corpus);
-    const { index, occList } = buildInitialPairIndex(stream);
+    const regionBoundary = noBoundary(stream);
+    const { index, occList } = buildInitialPairIndex(stream, regionBoundary);
     const rows = makeRows();
     type Evt = { mergeIndex: number; newVocabId: number; tokenStreamBytes: bigint };
     const events: Evt[] = [];
@@ -114,6 +126,7 @@ describe('runIncrementalMergeLoop', () => {
       rows,
       vocabCap: FLOOR + 8,
       nextIdInitial: FLOOR,
+      regionBoundary,
       hooks: {
         onMergeComplete: (e) => {
           events.push({
@@ -136,7 +149,8 @@ describe('runIncrementalMergeLoop', () => {
   it('awaits yieldToHost once per merge', async () => {
     const corpus = new TextEncoder().encode('abababab');
     const stream = streamFromBytes(corpus);
-    const { index, occList } = buildInitialPairIndex(stream);
+    const regionBoundary = noBoundary(stream);
+    const { index, occList } = buildInitialPairIndex(stream, regionBoundary);
     const rows = makeRows();
     let yieldCount = 0;
     const result = await runIncrementalMergeLoop({
@@ -146,6 +160,7 @@ describe('runIncrementalMergeLoop', () => {
       rows,
       vocabCap: FLOOR + 4,
       nextIdInitial: FLOOR,
+      regionBoundary,
       hooks: {
         yieldToHost: () => {
           yieldCount += 1;
@@ -161,19 +176,19 @@ describe('buildInitialPairIndex', () => {
   it('reports the correct distinct-pair count', () => {
     const corpus = new TextEncoder().encode('aabb');
     const stream = streamFromBytes(corpus);
-    const { distinctInitialPairs } = buildInitialPairIndex(stream);
+    const { distinctInitialPairs } = buildInitialPairIndex(stream, noBoundary(stream));
     // pairs: (a,a), (a,b), (b,b) — 3 distinct.
     expect(distinctInitialPairs).toBe(3);
   });
 
   it('returns an empty index for a corpus with fewer than 2 tokens', () => {
     const stream = streamFromBytes(new TextEncoder().encode(''));
-    const { index, distinctInitialPairs } = buildInitialPairIndex(stream);
+    const { index, distinctInitialPairs } = buildInitialPairIndex(stream, noBoundary(stream));
     expect(distinctInitialPairs).toBe(0);
     expect(index.size).toBe(0);
 
     const single = streamFromBytes(new TextEncoder().encode('a'));
-    const r2 = buildInitialPairIndex(single);
+    const r2 = buildInitialPairIndex(single, noBoundary(single));
     expect(r2.distinctInitialPairs).toBe(0);
   });
 });

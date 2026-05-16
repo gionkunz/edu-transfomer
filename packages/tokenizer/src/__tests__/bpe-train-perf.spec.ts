@@ -2,8 +2,8 @@ import { performance } from 'node:perf_hooks';
 
 import { describe, expect, it } from 'vitest';
 
-import { countAdjacentPairsOverlappingUint32, pickBestMergePair } from '../bpe-merge-stats';
-import { BPETokenizer } from '../bpe-tokenizer';
+import { bpePairKey, pickBestMergePair } from '../bpe-merge-stats';
+import { BPETokenizer, splitIntoRegions } from '../bpe-tokenizer';
 
 /**
  * Perf comparison between the new incremental training path and the legacy
@@ -50,49 +50,58 @@ function trainReferenceFullRescan(
   const enc = new TextEncoder();
   const S = specials.length;
   const floor = S + 256;
-  const bytes = enc.encode(corpus);
-  let stream = new Uint32Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i];
-    if (b === undefined) throw new Error('unreachable: bytes index out of range');
-    stream[i] = S + b;
-  }
+  let regions: Uint32Array[] = splitIntoRegions(corpus, 'word-and-punct-v1').map((r) => {
+    const b = enc.encode(r);
+    const u = new Uint32Array(b.length);
+    for (let i = 0; i < b.length; i++) u[i] = S + b[i];
+    return u;
+  });
   const merges: [number, number][] = [];
   const start = performance.now();
   let nextId = floor;
   while (nextId < vocabSize) {
-    // Reference baseline — full O(N) rescan per merge — kept here only so the
+    // Reference baseline — full O(N) rescan per merge across regions — kept here only so the
     // benchmark has something concrete to measure the incremental path against.
-    const freq = countAdjacentPairsOverlappingUint32(stream);
+    const freq = new Map<string, number>();
+    for (const region of regions) {
+      for (let i = 0; i + 1 < region.length; i++) {
+        const L = region[i];
+        const R = region[i + 1];
+        const key = bpePairKey(L, R);
+        freq.set(key, (freq.get(key) ?? 0) + 1);
+      }
+    }
     const pair = pickBestMergePair(freq);
     if (pair === null) break;
     merges.push([pair.L, pair.R]);
-    let outLen = 0;
-    let i = 0;
-    while (i < stream.length) {
-      if (i + 1 < stream.length && stream[i] === pair.L && stream[i + 1] === pair.R) {
-        outLen += 1;
-        i += 2;
-      } else {
-        outLen += 1;
-        i += 1;
+    const next: Uint32Array[] = [];
+    for (const region of regions) {
+      let outLen = 0;
+      let i = 0;
+      while (i < region.length) {
+        if (i + 1 < region.length && region[i] === pair.L && region[i + 1] === pair.R) {
+          outLen += 1;
+          i += 2;
+        } else {
+          outLen += 1;
+          i += 1;
+        }
       }
-    }
-    const out = new Uint32Array(outLen);
-    let w = 0;
-    i = 0;
-    while (i < stream.length) {
-      if (i + 1 < stream.length && stream[i] === pair.L && stream[i + 1] === pair.R) {
-        out[w++] = nextId;
-        i += 2;
-      } else {
-        const cur = stream[i];
-        if (cur === undefined) throw new Error('unreachable: stream index out of range');
-        out[w++] = cur;
-        i += 1;
+      const out = new Uint32Array(outLen);
+      let w = 0;
+      i = 0;
+      while (i < region.length) {
+        if (i + 1 < region.length && region[i] === pair.L && region[i + 1] === pair.R) {
+          out[w++] = nextId;
+          i += 2;
+        } else {
+          out[w++] = region[i];
+          i += 1;
+        }
       }
+      next.push(out);
     }
-    stream = out;
+    regions = next;
     nextId += 1;
   }
   return { merges, elapsedMs: performance.now() - start };

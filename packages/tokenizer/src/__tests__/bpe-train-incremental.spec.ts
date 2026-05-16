@@ -5,14 +5,15 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as bpeMergeStats from '../bpe-merge-stats';
-import { countAdjacentPairsOverlappingUint32, pickBestMergePair } from '../bpe-merge-stats';
-import { BPETokenizer } from '../bpe-tokenizer';
+import { bpePairKey, pickBestMergePair } from '../bpe-merge-stats';
+import { BPETokenizer, splitIntoRegions } from '../bpe-tokenizer';
 
 /**
  * Reference helper: train a `BPETokenizer`-equivalent merge sequence using the
- * deprecated full-rescan path, in-process and synchronously. Returns the merge
- * list and the populated vocab byte rows so callers can assert equivalence with
- * the new incremental training path.
+ * deprecated full-rescan path, folded over `word-and-punct-v1` regions to match
+ * the production tokenizer's mandatory pre-tokenization. Returns the merge list
+ * and the populated vocab byte rows so callers can assert equivalence with the
+ * new incremental training path.
  */
 function trainReferenceFullRescan(
   corpus: string,
@@ -26,14 +27,12 @@ function trainReferenceFullRescan(
     throw new Error(`reference: vocabSize ${vocabSize} < floor ${floor}`);
   }
 
-  const bytes = enc.encode(corpus);
-  let stream: Uint32Array;
-  if (bytes.length === 0) {
-    stream = new Uint32Array(0);
-  } else {
-    stream = new Uint32Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) stream[i] = S + bytes[i];
-  }
+  let regions: Uint32Array[] = splitIntoRegions(corpus, 'word-and-punct-v1').map((r) => {
+    const b = enc.encode(r);
+    const u = new Uint32Array(b.length);
+    for (let i = 0; i < b.length; i++) u[i] = S + b[i];
+    return u;
+  });
 
   const rows: Uint8Array[] = [];
   for (let i = 0; i < S; i++) rows[i] = enc.encode(specials[i]);
@@ -42,7 +41,15 @@ function trainReferenceFullRescan(
   const merges: [number, number][] = [];
   let nextId = floor;
   while (nextId < vocabSize) {
-    const freq = countAdjacentPairsOverlappingUint32(stream);
+    const freq = new Map<string, number>();
+    for (const region of regions) {
+      for (let i = 0; i + 1 < region.length; i++) {
+        const L = region[i];
+        const R = region[i + 1];
+        const key = bpePairKey(L, R);
+        freq.set(key, (freq.get(key) ?? 0) + 1);
+      }
+    }
     const pair = pickBestMergePair(freq);
     if (pair === null) break;
     const L = pair.L;
@@ -53,31 +60,34 @@ function trainReferenceFullRescan(
     rows[nextId].set(lb, 0);
     rows[nextId].set(rb, lb.length);
     merges.push([L, R]);
-    // Greedy non-overlapping rewrite into a fresh Uint32Array.
-    let outLen = 0;
-    let i = 0;
-    while (i < stream.length) {
-      if (i + 1 < stream.length && stream[i] === L && stream[i + 1] === R) {
-        outLen += 1;
-        i += 2;
-      } else {
-        outLen += 1;
-        i += 1;
+    const nextRegions: Uint32Array[] = [];
+    for (const region of regions) {
+      let outLen = 0;
+      let i = 0;
+      while (i < region.length) {
+        if (i + 1 < region.length && region[i] === L && region[i + 1] === R) {
+          outLen += 1;
+          i += 2;
+        } else {
+          outLen += 1;
+          i += 1;
+        }
       }
-    }
-    const out = new Uint32Array(outLen);
-    let w = 0;
-    i = 0;
-    while (i < stream.length) {
-      if (i + 1 < stream.length && stream[i] === L && stream[i + 1] === R) {
-        out[w++] = nextId;
-        i += 2;
-      } else {
-        out[w++] = stream[i];
-        i += 1;
+      const out = new Uint32Array(outLen);
+      let w = 0;
+      i = 0;
+      while (i < region.length) {
+        if (i + 1 < region.length && region[i] === L && region[i + 1] === R) {
+          out[w++] = nextId;
+          i += 2;
+        } else {
+          out[w++] = region[i];
+          i += 1;
+        }
       }
+      nextRegions.push(out);
     }
-    stream = out;
+    regions = nextRegions;
     nextId += 1;
   }
   return { merges, rows, activeVocabCount: nextId };

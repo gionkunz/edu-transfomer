@@ -26,12 +26,7 @@ import {
   tryReadCachedCorpusTokens,
   writeCachedCorpusTokens,
 } from './corpus-token-cache';
-import {
-  pessimisticEtaFromRate,
-  pessimisticMergeRemaining,
-  pessimisticMergeUpperBound,
-  mergeProgressPct,
-} from './encode-eta';
+import { perRegionPessimisticEta } from './encode-eta';
 import {
   createInitialTrainDashboardDraft,
   createTrainDashboardThrottle,
@@ -299,10 +294,14 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
 
     const encodeWallStartMs = Date.now();
     let initialTokForEncode = 0;
-    let lastMergeSampleWallMs = encodeWallStartMs;
-    let lastMergeIterForRate = 0;
-    let mergesPerSecEma: number | null = null;
-    let mergeRateSamples = 0;
+    let lastSampleWallMs = encodeWallStartMs;
+    let passesPerSecEma: number | null = null;
+
+    const pretokenizerPolicy = tokenizer.pretokenizer;
+    let lastRegionIndex = -1;
+    let completedRegions = 0;
+    let cumulativePassesAcrossRegions = 0;
+    let lastPassCountForRegion = 0;
 
     tokenIds = await tokenizer.encodeUint32Async(corpus, {
       onYield: () => {
@@ -315,11 +314,12 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
           expandChars = ev.textChars;
           expandBytes = ev.byteLength;
           initialTokForEncode = ev.initialTokenCount;
-          lastMergeSampleWallMs = nowMs;
-          lastMergeIterForRate = 0;
-          mergesPerSecEma = null;
-          mergeRateSamples = 0;
-          const upper = pessimisticMergeUpperBound(initialTokForEncode);
+          lastSampleWallMs = nowMs;
+          passesPerSecEma = null;
+          lastRegionIndex = -1;
+          completedRegions = 0;
+          cumulativePassesAcrossRegions = 0;
+          lastPassCountForRegion = 0;
           draft.encodeProgress = {
             textChars: ev.textChars,
             byteLength: ev.byteLength,
@@ -328,25 +328,45 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
             tokenCount: ev.initialTokenCount,
             initialTokenCount: initialTokForEncode,
             encodeElapsedSec,
-            pessimisticMergeUpperBound: upper,
-            pessimisticMergeRemaining: pessimisticMergeRemaining(initialTokForEncode, 0),
-            mergesPerSec: null,
-            pessimisticEtaSec: null,
-            mergeProgressPct: 0,
+            pretokenizerPolicy,
+            regionsPerSec: null,
+            etaSec: null,
+            regionIndex: 0,
+            regionsTotal: 0,
+            meanPassesPerRegion: null,
           };
         } else {
-          const dIter = ev.mergeIteration - lastMergeIterForRate;
-          const dWall = (nowMs - lastMergeSampleWallMs) / 1000;
-          if (dWall >= 0.05 && dIter > 0) {
-            mergeRateSamples += 1;
-            const instant = dIter / dWall;
-            mergesPerSecEma =
-              mergesPerSecEma === null ? instant : instant * 0.25 + mergesPerSecEma * 0.75;
-            lastMergeSampleWallMs = nowMs;
-            lastMergeIterForRate = ev.mergeIteration;
+          // Region transition: roll the previous region's final pass count into cumulative,
+          // count it as completed, and reset the per-region pass counter.
+          if (ev.regionIndex !== lastRegionIndex) {
+            if (lastRegionIndex >= 0) {
+              cumulativePassesAcrossRegions += lastPassCountForRegion;
+              completedRegions += 1;
+            }
+            lastRegionIndex = ev.regionIndex;
+            lastPassCountForRegion = 0;
           }
-          const remain = pessimisticMergeRemaining(initialTokForEncode, ev.mergeIteration);
-          const eta = pessimisticEtaFromRate(remain, mergesPerSecEma, mergeRateSamples, 2);
+          // Each event reports passes-so-far within the current region.
+          lastPassCountForRegion = ev.mergeIteration;
+
+          // Rate is "pass events per wall second" over a coarse moving sample.
+          const dWall = (nowMs - lastSampleWallMs) / 1000;
+          if (dWall >= 0.05) {
+            const instant = 1 / dWall;
+            passesPerSecEma =
+              passesPerSecEma === null ? instant : instant * 0.25 + passesPerSecEma * 0.75;
+            lastSampleWallMs = nowMs;
+          }
+
+          const meanPasses =
+            completedRegions > 0 ? cumulativePassesAcrossRegions / completedRegions : null;
+          const regionsRemaining = Math.max(0, ev.regionsTotal - completedRegions);
+          const eta = perRegionPessimisticEta(regionsRemaining, meanPasses, passesPerSecEma);
+          const regionsPerSec =
+            meanPasses !== null && passesPerSecEma !== null && meanPasses > 0
+              ? passesPerSecEma / meanPasses
+              : null;
+
           draft.encodeProgress = {
             textChars: expandChars,
             byteLength: expandBytes,
@@ -355,11 +375,12 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
             tokenCount: ev.tokenCount,
             initialTokenCount: initialTokForEncode,
             encodeElapsedSec,
-            pessimisticMergeUpperBound: pessimisticMergeUpperBound(initialTokForEncode),
-            pessimisticMergeRemaining: remain,
-            mergesPerSec: mergesPerSecEma,
-            pessimisticEtaSec: eta,
-            mergeProgressPct: mergeProgressPct(initialTokForEncode, ev.tokenCount),
+            pretokenizerPolicy,
+            regionsPerSec,
+            etaSec: eta,
+            regionIndex: ev.regionIndex,
+            regionsTotal: ev.regionsTotal,
+            meanPassesPerRegion: meanPasses,
           };
         }
         dashThrottle.schedule();
@@ -436,6 +457,14 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   const trainer = new Trainer(rt, model, reg, opt, {
     maxGradNorm: optim.maxGradNorm,
     schedule,
+    // Smooth out V8's lazy GC of stale GPUBuffer wrappers when Node was
+    // started with `--expose-gc`. No-op otherwise. The buffer pool already
+    // eliminates most per-step churn; this is belt-and-suspenders for long runs.
+    forceGcEverySteps: 50,
+    // Periodic buffer-pool diagnostics on stderr so we can verify the pool's
+    // hit-rate after warmup and watch its idle footprint. Visible only on the
+    // diagnostics stream, not the TUI dashboard.
+    logBufferPoolEverySteps: 100,
   });
 
   draft.archSummary = `${String(gptCfg.nLayers)}L · d${String(model.config.dModel)} · V${String(model.config.vocabSize)} · ${computeDtype}`;

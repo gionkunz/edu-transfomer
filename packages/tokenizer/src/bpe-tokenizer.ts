@@ -29,10 +29,189 @@ export type BpeEncodeProgressEvent =
     }
   | {
       readonly phase: 'merge';
-      /** Outer best-rank passes completed (each pass may collapse many pair occurrences). */
+      /** Outer best-rank passes completed in the **current region** (each pass collapses
+       * every non-overlapping occurrence of the chosen pair).
+       */
       readonly mergeIteration: number;
+      /** Aggregate token count across all regions encoded so far in the call. */
       readonly tokenCount: number;
+      /** Zero-based index of the region whose pass count is being reported. */
+      readonly regionIndex: number;
+      /** Total regions in the active encode call (known after pre-tokenization). */
+      readonly regionsTotal: number;
     };
+
+/**
+ * Pre-tokenizer policy applied by **`encode`** and **`train`** before any BPE step.
+ *
+ * Currently a single label — **`word-and-punct-v1`** (split on whitespace / digits /
+ * Unicode letters / other). The label is persisted in the tokenizer JSON so a future
+ * policy can be added without breaking loaded tokenizers.
+ */
+export type PretokenizerPolicy = 'word-and-punct-v1';
+
+/**
+ * Regex backing **`word-and-punct-v1`**: matches contiguous runs of one of four kinds —
+ * whitespace, ASCII digits, Unicode letters, or everything else (punctuation / symbols).
+ * Every code point falls under exactly one alternative, so the concatenation of matches
+ * is byte-for-byte equal to the original input.
+ */
+export const PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1: RegExp = /\s+|\d+|\p{L}+|[^\s\p{L}\p{N}]+/gu;
+
+/**
+ * Split **`text`** into adjacent non-overlapping **regions** under **`policy`**.
+ *
+ * Each match of {@link PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1} produces one region; the
+ * concatenation equals **`text`**. Allocates exactly one fresh array per call.
+ */
+export function splitIntoRegions(text: string, _policy: PretokenizerPolicy): readonly string[] {
+  if (text.length === 0) {
+    return [];
+  }
+  const out: string[] = [];
+  PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1.lastIndex = 0;
+  for (const m of text.matchAll(PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1)) {
+    out.push(m[0]);
+  }
+  return out;
+}
+
+/**
+ * Build a region-boundary bitmap over **`corpusUtf8`** under **`policy`**, sized to the
+ * byte length. **`boundary[i] === 1`** means "the pair `(byte[i], byte[i+1])` crosses a
+ * region boundary and SHALL NOT be counted during BPE training".
+ *
+ * Walks UTF-8 bytes and emits a `1` at every byte position that is the **last byte of a
+ * region** (i.e. the next byte starts a new region). Every region boundary in the JS
+ * string corresponds to a code-point boundary, hence a byte boundary.
+ */
+function buildRegionBoundaryBitmap(
+  corpusUtf8: Uint8Array,
+  policy: PretokenizerPolicy,
+  textForRegions: string | null,
+): Uint8Array {
+  if (corpusUtf8.length === 0) return new Uint8Array(0);
+
+  const boundary = new Uint8Array(corpusUtf8.length);
+
+  if (textForRegions !== null) {
+    // Fast path: JS string already in hand (in-memory training). Use the exact regex
+    // to stay perfectly consistent with `splitIntoRegions`.
+    if (textForRegions.length === 0) return boundary;
+    const utf8 = new TextEncoder();
+    let byteCursor = 0;
+    let firstRegion = true;
+    PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1.lastIndex = 0;
+    for (const m of textForRegions.matchAll(PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1)) {
+      const regionBytes = utf8.encode(m[0]);
+      if (!firstRegion) {
+        const prevLastIdx = byteCursor - 1;
+        if (prevLastIdx >= 0 && prevLastIdx < boundary.length) {
+          boundary[prevLastIdx] = 1;
+        }
+      }
+      firstRegion = false;
+      byteCursor += regionBytes.length;
+    }
+    return boundary;
+  }
+
+  // No string available (large file-based corpus). V8 strings are capped at ~512 MB, so
+  // decoding a 1+ GB byte array crashes. Classify code points directly from the raw UTF-8
+  // bytes instead — equivalent to the regex for all characters the regex matches.
+  fillBoundaryFromUtf8Bytes(corpusUtf8, boundary, policy);
+  return boundary;
+}
+
+/**
+ * Per-module cache for non-ASCII code point classification under `word-and-punct-v1`.
+ * Values: 0 = whitespace, 1 = digit, 2 = letter, 3 = other.
+ * The cache is populated lazily via single-char regex tests and is stable across calls.
+ */
+const WORD_PUNCT_CP_CLASS_CACHE = new Map<number, 0 | 1 | 2 | 3>();
+
+/**
+ * Classify a Unicode code point as one of four `word-and-punct-v1` character classes:
+ * `0` whitespace (`\s`), `1` digit (`\d`), `2` letter (`\p{L}`), `3` other.
+ *
+ * ASCII is handled by direct comparison (fast path). Non-ASCII code points are tested
+ * once via single-character regex tests and the result is cached.
+ */
+function classifyWordAndPunctCodePoint(cp: number): 0 | 1 | 2 | 3 {
+  if (cp < 0x80) {
+    // ASCII fast path — covers ≥ 95 % of typical training text.
+    if (cp === 0x09 || cp === 0x0a || cp === 0x0b || cp === 0x0c || cp === 0x0d || cp === 0x20)
+      return 0; // whitespace
+    if (cp >= 0x30 && cp <= 0x39) return 1; // digit
+    if ((cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a)) return 2; // letter
+    return 3; // other
+  }
+  const cached = WORD_PUNCT_CP_CLASS_CACHE.get(cp);
+  if (cached !== undefined) return cached;
+  const ch = String.fromCodePoint(cp);
+  let cls: 0 | 1 | 2 | 3;
+  if (/^\s$/u.test(ch)) cls = 0;
+  else if (/^\d$/u.test(ch)) cls = 1;
+  else if (/^\p{L}$/u.test(ch)) cls = 2;
+  else cls = 3;
+  WORD_PUNCT_CP_CLASS_CACHE.set(cp, cls);
+  return cls;
+}
+
+/**
+ * Walk raw UTF-8 bytes, classify each code point under `word-and-punct-v1`,
+ * and set `boundary[i] = 1` for every byte `i` that is the **last byte of a region**
+ * (i.e. the next byte starts a code point of a different class).
+ *
+ * Ill-formed UTF-8 bytes (lone continuation bytes) are each treated as one OT token
+ * so the cursor stays in sync without throwing.
+ */
+function fillBoundaryFromUtf8Bytes(
+  bytes: Uint8Array,
+  boundary: Uint8Array,
+  policy: PretokenizerPolicy,
+): void {
+  const n = bytes.length;
+  let prevCls = -1;
+  let i = 0;
+  while (i < n) {
+    const b0 = bytes[i];
+    let cp: number;
+    let seqLen: number;
+    if (b0 < 0x80) {
+      cp = b0;
+      seqLen = 1;
+    } else if (b0 < 0xc2) {
+      // Lone continuation byte — ill-formed UTF-8; treat as OT and advance by 1.
+      cp = b0;
+      seqLen = 1;
+    } else if (b0 < 0xe0) {
+      cp = ((b0 & 0x1f) << 6) | (i + 1 < n ? bytes[i + 1] & 0x3f : 0);
+      seqLen = 2;
+    } else if (b0 < 0xf0) {
+      cp =
+        ((b0 & 0x0f) << 12) |
+        (i + 1 < n ? (bytes[i + 1] & 0x3f) << 6 : 0) |
+        (i + 2 < n ? bytes[i + 2] & 0x3f : 0);
+      seqLen = 3;
+    } else {
+      cp =
+        ((b0 & 0x07) << 18) |
+        (i + 1 < n ? (bytes[i + 1] & 0x3f) << 12 : 0) |
+        (i + 2 < n ? (bytes[i + 2] & 0x3f) << 6 : 0) |
+        (i + 3 < n ? bytes[i + 3] & 0x3f : 0);
+      seqLen = 4;
+    }
+    const cls = classifyWordAndPunctCodePoint(cp);
+    if (prevCls !== -1 && cls !== prevCls) {
+      // Class transition: the last byte of the previous code point ends a region.
+      boundary[i - 1] = 1;
+    }
+    prevCls = cls;
+    i += seqLen;
+  }
+  void policy; // used only for error messages on the string path
+}
 
 /** Instrumentation callbacks for **`encode`** (beyond the **`Tokenizer`** contract). */
 export type BpeEncodeHooks = {
@@ -82,7 +261,8 @@ function yieldEventLoopForHostUi(): Promise<void> {
 }
 
 const JSON_KIND = 'llm-transformer-diy/bpe-tokenizer' as const;
-const JSON_VERSION = 1 as const;
+const JSON_VERSION = 2 as const;
+const KNOWN_PRETOKENIZER_LABELS = new Set<PretokenizerPolicy>(['word-and-punct-v1']);
 
 const fatalDecoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -105,20 +285,24 @@ function assertValidSpecials(specials: readonly string[]): void {
   }
 }
 
-/** Merge lookup tables use **`outer.get(L).get(R)`** so **`encode`** does not allocate a string per adjacent pair probe. */
-type PairNestedNumberMap = Map<number, Map<number, number>>;
+/**
+ * Encode hot-path lookups for **`(L, R)`** pairs use a **single-level** `Map<number, number>`
+ * keyed by the packed integer **`L * vocabSize + R`**. One **`Map.get`** per probe — no
+ * intermediate row allocation, no optional chain, no nested map.
+ *
+ * Safe while **`vocabSize ≤ floor(sqrt(2^53))`** (about **`94 906 265`**), well above the
+ * **`O(10^4–10^5)`** range used by this project. Larger vocabularies SHALL fall back to a
+ * nested-map representation (not exercised here today, see
+ * `tokenizer-bpe-bootstrap` spec for the conditional invariant).
+ */
+const PACKED_PAIR_KEY_SAFE_VOCAB_MAX = Math.floor(Math.sqrt(Number.MAX_SAFE_INTEGER));
 
-function nestedNumberGet(m: PairNestedNumberMap, a: number, b: number): number | undefined {
-  return m.get(a)?.get(b);
-}
-
-function nestedNumberSet(m: PairNestedNumberMap, a: number, b: number, v: number): void {
-  let row = m.get(a);
-  if (row === undefined) {
-    row = new Map();
-    m.set(a, row);
+function assertPackedKeySafe(vocabSize: number, label: string): void {
+  if (vocabSize > PACKED_PAIR_KEY_SAFE_VOCAB_MAX) {
+    throw new Error(
+      `${label}: packed-key invariant requires vocabSize <= ${String(PACKED_PAIR_KEY_SAFE_VOCAB_MAX)} (got ${String(vocabSize)}); the nested-map fallback is not yet implemented in this build`,
+    );
   }
-  row.set(b, v);
 }
 
 /** Payload for **`onMergeComplete`** during BPE training (RAM **`train`** / **`trainAsync`** or **`trainFromFiles`**). */
@@ -178,13 +362,14 @@ export type BpeTrainOptions = {
   readonly hooks?: BpeTrainHooks;
 };
 
-interface BPETokenizerJsonV1 {
+interface BPETokenizerJsonParsed {
   readonly kind: typeof JSON_KIND;
   readonly version: typeof JSON_VERSION;
   readonly specialTokens: readonly string[];
   readonly byteOffset: number;
   readonly merges: readonly (readonly [number, number])[];
   readonly vocab: Readonly<Record<string, readonly number[]>>;
+  readonly pretokenizer: PretokenizerPolicy;
 }
 
 export class BPETokenizer implements Tokenizer {
@@ -195,11 +380,14 @@ export class BPETokenizer implements Tokenizer {
   private vocabByteRows: Uint8Array[] = [];
   /** Merge creation order (`mergeRank` = index) */
   private mergesRecorded: [number, number][] = [];
-  /** Merge rank & output id keyed by **`(L,R)`** (nested maps — fast **`encode`** probes). */
-  private mergeRankByPair = new Map<number, Map<number, number>>();
-  private mergeOutputIdByPair = new Map<number, Map<number, number>>();
+  /** Merge rank & output id keyed by the **packed** pair `L * vocabSize + R` — one **`Map.get`** per encode probe. */
+  private mergeRankByPackedPair = new Map<number, number>();
+  private mergeOutputIdByPackedPair = new Map<number, number>();
 
   private activeVocabCount = 0;
+
+  /** Active pre-tokenizer policy. Set by `train{,Async,...}` / `load`; immutable on a trained tokenizer. */
+  private pretokenizerPolicy: PretokenizerPolicy = 'word-and-punct-v1';
 
   constructor(options?: BPETokenizerOptions) {
     const defaults = ['<|pad|>', '<|endoftext|>'] as const;
@@ -210,6 +398,16 @@ export class BPETokenizer implements Tokenizer {
 
   get vocabSize(): number {
     return this.activeVocabCount;
+  }
+
+  /** Active pre-tokenizer policy label. */
+  get pretokenizer(): PretokenizerPolicy {
+    return this.pretokenizerPolicy;
+  }
+
+  /** Pack `(L, R)` into the single-level Map key. Caller guarantees both are `< vocabSize`. */
+  private packPairKey(L: number, R: number): number {
+    return L * this.activeVocabCount + R;
   }
 
   /**
@@ -246,7 +444,7 @@ export class BPETokenizer implements Tokenizer {
   /** Synchronous RAM training (**`Tokenizer.train`** shape + optional **`3rd`**-arg hooks). */
   train(text: string, vocabSizeRequested: number, options?: BpeTrainOptions): void {
     const bytes = this.textEncoder.encode(text);
-    this.runRamTrainingSync(bytes, vocabSizeRequested, options);
+    this.runRamTrainingSync(bytes, vocabSizeRequested, options, text);
   }
 
   /** Byte-level training on UTF-8 bytes (same semantics as **`train(chunksAsString)`**). */
@@ -255,7 +453,7 @@ export class BPETokenizer implements Tokenizer {
     vocabSizeRequested: number,
     options?: BpeTrainOptions,
   ): void {
-    this.runRamTrainingSync(corpusUtf8, vocabSizeRequested, options);
+    this.runRamTrainingSync(corpusUtf8, vocabSizeRequested, options, null);
   }
 
   /**
@@ -268,7 +466,7 @@ export class BPETokenizer implements Tokenizer {
     vocabSizeRequested: number,
     options?: BpeTrainOptions,
   ): Promise<void> {
-    await this.runRamTrainingAsync(corpusUtf8, vocabSizeRequested, options);
+    await this.runRamTrainingAsync(corpusUtf8, vocabSizeRequested, options, null);
   }
 
   /**
@@ -281,20 +479,24 @@ export class BPETokenizer implements Tokenizer {
     options?: BpeTrainOptions,
   ): Promise<void> {
     const bytes = this.textEncoder.encode(text);
-    await this.runRamTrainingAsync(bytes, vocabSizeRequested, options);
+    await this.runRamTrainingAsync(bytes, vocabSizeRequested, options, text);
   }
 
   /** Sync RAM training core (no microtask hops). Backs `train` and `trainOnUtf8Bytes`. */
   private runRamTrainingSync(
     corpusUtf8: Uint8Array,
     vocabSizeRequested: number,
-    options?: BpeTrainOptions,
+    options: BpeTrainOptions | undefined,
+    textForRegions: string | null,
   ): void {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
 
+    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+    const regionBoundary = buildRegionBoundaryBitmap(corpusUtf8, policy, textForRegions);
+
     const stream = materializeUtf8BytesIntoSlotPoolSync(corpusUtf8, S);
-    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream, regionBoundary);
     options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
 
     const result = runIncrementalMergeLoopSync({
@@ -309,26 +511,31 @@ export class BPETokenizer implements Tokenizer {
           ? { onMergeComplete: options.hooks.onMergeComplete }
           : {}),
       },
+      regionBoundary,
     });
 
-    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor, policy);
   }
 
   /** Async RAM training core. Backs `trainAsync` and `trainAsyncOnUtf8Bytes`. */
   private async runRamTrainingAsync(
     corpusUtf8: Uint8Array,
     vocabSizeRequested: number,
-    options?: BpeTrainOptions,
+    options: BpeTrainOptions | undefined,
+    textForRegions: string | null,
   ): Promise<void> {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
+
+    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+    const regionBoundary = buildRegionBoundaryBitmap(corpusUtf8, policy, textForRegions);
 
     const stream = await materializeUtf8BytesIntoSlotPool(corpusUtf8, S, {
       ...(options?.hooks?.yieldToHost !== undefined
         ? { yieldToHost: options.hooks.yieldToHost }
         : {}),
     });
-    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream, regionBoundary);
     options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
 
     const result = await runIncrementalMergeLoop({
@@ -346,9 +553,10 @@ export class BPETokenizer implements Tokenizer {
           ? { yieldToHost: options.hooks.yieldToHost }
           : {}),
       },
+      regionBoundary,
     });
 
-    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor, policy);
   }
 
   /**
@@ -372,6 +580,8 @@ export class BPETokenizer implements Tokenizer {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.trainFromFiles');
 
+    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+
     const stream = await materializeFilesIntoSlotPool(sortedAbsolutePaths, S, {
       ...(options?.hooks?.onCorpusUtf8Bytes !== undefined
         ? { onCorpusUtf8Bytes: options.hooks.onCorpusUtf8Bytes }
@@ -387,7 +597,14 @@ export class BPETokenizer implements Tokenizer {
       await options.hooks.yieldToHost();
     }
 
-    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    // For pre-tokenization we need the raw corpus bytes to find region boundaries.
+    // The streaming materializer has already encoded each byte into a slot at id
+    // `S + byte`; recover the bytes by walking the slot pool's `value` array (the
+    // slots are populated in append order, so indices `0 .. liveCount-1` carry the
+    // original byte stream including the synthetic `\n` separators between files).
+    const regionBoundary = this.buildRegionBoundaryFromSlotStream(stream, S);
+
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream, regionBoundary);
     options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
 
     const result = await runIncrementalMergeLoop({
@@ -405,9 +622,32 @@ export class BPETokenizer implements Tokenizer {
           ? { yieldToHost: options.hooks.yieldToHost }
           : {}),
       },
+      regionBoundary,
     });
 
-    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor, policy);
+  }
+
+  /**
+   * Recover the raw UTF-8 byte stream from a freshly-materialized slot pool and run the
+   * pre-tokenizer regex over it. Returns a region-boundary bitmap sized to `stream.capacity`.
+   *
+   * Only safe to call **before any merge** (so `value[i] - S` is exactly the original byte).
+   */
+  private buildRegionBoundaryFromSlotStream(
+    stream: { value: Uint32Array; capacity: number; liveCount: number },
+    S: number,
+  ): Uint8Array {
+    const n = stream.liveCount;
+    if (n === 0) return new Uint8Array(stream.capacity);
+    const bytes = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      bytes[i] = stream.value[i] - S;
+    }
+    const boundaryNarrow = buildRegionBoundaryBitmap(bytes, 'word-and-punct-v1', null);
+    const boundaryFull = new Uint8Array(stream.capacity);
+    boundaryFull.set(boundaryNarrow.subarray(0, n));
+    return boundaryFull;
   }
 
   private finalizeBpeTraining(
@@ -415,26 +655,45 @@ export class BPETokenizer implements Tokenizer {
     mergesList: [number, number][],
     nextId: number,
     floor: number,
+    pretokenizerPolicy: PretokenizerPolicy,
   ): void {
     this.vocabByteRows = rows;
     this.mergesRecorded = mergesList;
+    this.activeVocabCount = nextId;
+    this.pretokenizerPolicy = pretokenizerPolicy;
+    this.rebuildPackedPairTables(floor);
+  }
 
-    const pairToMergedNum = new Map<number, Map<number, number>>();
-    const pairRankNum = new Map<number, Map<number, number>>();
+  /**
+   * Build the encode-hot-path packed-pair tables (`mergeRankByPackedPair`,
+   * `mergeOutputIdByPackedPair`) from `mergesRecorded` and `activeVocabCount`.
+   * Called by `finalizeBpeTraining` and `load`. Keys are `L * activeVocabCount + R`.
+   */
+  private rebuildPackedPairTables(floor: number): void {
+    assertPackedKeySafe(this.activeVocabCount, 'BPETokenizer');
+    const rankMap = new Map<number, number>();
+    const idMap = new Map<number, number>();
     let mergedIdWalker = floor;
-    for (let rank = 0; rank < mergesList.length; rank++) {
-      const pair = mergesList[rank];
-      if (pair === undefined) throw new Error('BPETokenizer.train: merge hole');
+    for (let rank = 0; rank < this.mergesRecorded.length; rank++) {
+      const pair = this.mergesRecorded[rank];
+      if (pair === undefined) throw new Error('BPETokenizer: merge hole');
       const Lm = pair[0];
       const Rm = pair[1];
-      nestedNumberSet(pairToMergedNum, Lm, Rm, mergedIdWalker);
-      nestedNumberSet(pairRankNum, Lm, Rm, rank);
+      if (Lm >= this.activeVocabCount || Rm >= this.activeVocabCount) {
+        throw new Error(
+          `BPETokenizer: merge rank ${String(rank)} references id >= vocabSize (${String(Lm)},${String(Rm)} vs ${String(this.activeVocabCount)})`,
+        );
+      }
+      const key = Lm * this.activeVocabCount + Rm;
+      idMap.set(key, mergedIdWalker);
+      rankMap.set(key, rank);
       mergedIdWalker += 1;
     }
-    this.mergeOutputIdByPair = pairToMergedNum;
-    this.mergeRankByPair = pairRankNum;
-
-    this.activeVocabCount = nextId;
+    this.mergeRankByPackedPair = rankMap;
+    this.mergeOutputIdByPackedPair = idMap;
+    if (mergedIdWalker !== this.activeVocabCount) {
+      throw new Error('BPETokenizer: internal merge counter mismatch');
+    }
   }
 
   /**
@@ -446,6 +705,10 @@ export class BPETokenizer implements Tokenizer {
   private performGreedyMergePassUint32(buf: Uint32Array, len: number): number | null {
     if (len < 2) return null;
 
+    const V = this.activeVocabCount;
+    const rankByPacked = this.mergeRankByPackedPair;
+    const idByPacked = this.mergeOutputIdByPackedPair;
+
     let minRank = Infinity;
     let chosenL = Infinity;
     let chosenR = Infinity;
@@ -453,7 +716,7 @@ export class BPETokenizer implements Tokenizer {
     for (let j = 0; j < len - 1; j++) {
       const L = buf[j];
       const R = buf[j + 1];
-      const rk = nestedNumberGet(this.mergeRankByPair, L, R);
+      const rk = rankByPacked.get(L * V + R);
       if (rk === undefined) continue;
 
       if (rk < minRank || (rk === minRank && (L < chosenL || (L === chosenL && R < chosenR)))) {
@@ -467,7 +730,7 @@ export class BPETokenizer implements Tokenizer {
       return null;
     }
 
-    const mergedId = nestedNumberGet(this.mergeOutputIdByPair, chosenL, chosenR);
+    const mergedId = idByPacked.get(chosenL * V + chosenR);
     if (mergedId === undefined) {
       return null;
     }
@@ -489,8 +752,24 @@ export class BPETokenizer implements Tokenizer {
   }
 
   /**
+   * Expand a single region's UTF-8 bytes into byte-seed token ids on top of a shared
+   * working buffer at offset 0. Returns the initial token length for this region.
+   */
+  private expandRegionIntoBuffer(buf: Uint32Array, regionBytes: Uint8Array, S: number): number {
+    const n = regionBytes.length;
+    for (let i = 0; i < n; i++) {
+      buf[i] = S + regionBytes[i];
+    }
+    return n;
+  }
+
+  /**
    * Encode to a freshly allocated **`Uint32Array`** (length = logical token count; not a
    * subarray view into shared working storage).
+   *
+   * Each pre-tokenizer region is encoded independently; merges never cross region boundaries.
+   * The implementation works directly on UTF-8 bytes to avoid the O(regions) string-object
+   * overhead that `splitIntoRegions` would cause for corpora with millions of regions.
    *
    * CPU-bound; progress hooks run but TUIs/timer paints stall until this returns.
    */
@@ -498,47 +777,102 @@ export class BPETokenizer implements Tokenizer {
     this.assertTrained();
     const emit = hooks?.onProgress;
     const S = this.specialTokens.length;
-    const bytes = this.textEncoder.encode(text);
-    const n = bytes.length;
-    const buf = new Uint32Array(n);
-    for (let i = 0; i < n; i++) {
-      buf[i] = S + bytes[i];
-    }
-    let len = n;
+
+    // Single UTF-8 encode of the full text.
+    const allBytes = this.textEncoder.encode(text);
+    const B = allBytes.length;
 
     emit?.({
       phase: 'expand',
       textChars: text.length,
-      byteLength: bytes.length,
-      initialTokenCount: len,
+      byteLength: B,
+      initialTokenCount: B,
     });
 
-    let mergeIteration = 0;
-    while (true) {
-      const nextLen = this.performGreedyMergePassUint32(buf, len);
-      if (nextLen === null) break;
-      len = nextLen;
-      mergeIteration += 1;
-      if (
-        emit !== undefined &&
-        (mergeIteration % EMIT_PASS_EVERY === 0 || len <= 2 || mergeIteration <= 4)
-      ) {
-        emit({ phase: 'merge', mergeIteration, tokenCount: len });
-      }
+    if (B === 0) return new Uint32Array(0);
+
+    // Build boundary bitmap via byte-level classifier — O(B), no per-region string allocs.
+    const boundary = new Uint8Array(B);
+    fillBoundaryFromUtf8Bytes(allBytes, boundary, this.pretokenizerPolicy);
+
+    // Count regions for progress emission (single O(B) scan).
+    let regionsTotal = 1;
+    for (let i = 0; i < B - 1; i++) {
+      if (boundary[i] === 1) regionsTotal++;
     }
 
-    emit?.({
-      phase: 'merge',
-      mergeIteration,
-      tokenCount: len,
-    });
+    // Output buffer: start at B/4 (assumes ≥4x compression, typical for a trained BPE vocab)
+    // and double on demand. This avoids allocating 4× the byte count up-front.
+    let outCapacity = Math.max(65536, B >> 2);
+    let outputBuf = new Uint32Array(outCapacity);
+    let outputLen = 0;
+    // Reusable working buffer sized to the largest region we encounter; grows lazily.
+    let workBuf = new Uint32Array(0);
 
-    return Uint32Array.from(buf.subarray(0, len));
+    let regionStart = 0;
+    for (let r = 0; r < regionsTotal; r++) {
+      // Scan to find the exclusive end of this region.
+      let regionEnd = regionStart;
+      while (regionEnd < B - 1 && boundary[regionEnd] !== 1) regionEnd++;
+      regionEnd++;
+
+      const regionLen = regionEnd - regionStart;
+      if (workBuf.length < regionLen) workBuf = new Uint32Array(regionLen);
+
+      // Expand bytes → token ids directly from the byte subarray (zero-copy view).
+      let len = this.expandRegionIntoBuffer(workBuf, allBytes.subarray(regionStart, regionEnd), S);
+
+      let mergeIteration = 0;
+      while (true) {
+        const nextLen = this.performGreedyMergePassUint32(workBuf, len);
+        if (nextLen === null) break;
+        len = nextLen;
+        mergeIteration += 1;
+        if (
+          emit !== undefined &&
+          (mergeIteration % EMIT_PASS_EVERY === 0 || len <= 2 || mergeIteration <= 4)
+        ) {
+          emit({
+            phase: 'merge',
+            mergeIteration,
+            tokenCount: outputLen + len,
+            regionIndex: r,
+            regionsTotal,
+          });
+        }
+      }
+
+      // Grow output buffer if needed (rare — only when compression is worse than initial guess).
+      if (outputLen + len > outCapacity) {
+        outCapacity = Math.min(B, Math.max(outCapacity * 2, outputLen + len));
+        const grown = new Uint32Array(outCapacity);
+        grown.set(outputBuf.subarray(0, outputLen));
+        outputBuf = grown;
+      }
+
+      // Write region tokens directly into the output buffer — no per-region Uint32Array alloc.
+      outputBuf.set(workBuf.subarray(0, len), outputLen);
+      outputLen += len;
+
+      emit?.({
+        phase: 'merge',
+        mergeIteration,
+        tokenCount: outputLen,
+        regionIndex: r,
+        regionsTotal,
+      });
+
+      regionStart = regionEnd;
+    }
+
+    return outputBuf.slice(0, outputLen);
   }
 
   /**
    * Async **`encodeUint32`**: yields on the same wall-time / progress cadence as **`encodeAsync`**
-   * so hosts stay responsive during long encodes.
+   * so hosts stay responsive during long encodes. Folds over pre-tokenized regions.
+   *
+   * Uses the same byte-range strategy as the sync path — no per-region string allocations.
    */
   async encodeUint32Async(text: string, hooks?: BpeEncodeHooks): Promise<Uint32Array> {
     this.assertTrained();
@@ -549,53 +883,104 @@ export class BPETokenizer implements Tokenizer {
       onYieldCb?.();
     };
     const S = this.specialTokens.length;
-    const bytes = this.textEncoder.encode(text);
-    const n = bytes.length;
-    const buf = new Uint32Array(n);
-    for (let i = 0; i < n; i++) {
-      buf[i] = S + bytes[i];
-    }
-    let len = n;
+
+    const allBytes = this.textEncoder.encode(text);
+    const B = allBytes.length;
 
     emit?.({
       phase: 'expand',
       textChars: text.length,
-      byteLength: bytes.length,
-      initialTokenCount: len,
+      byteLength: B,
+      initialTokenCount: B,
     });
     await sliceYield();
 
-    let mergeIteration = 0;
+    if (B === 0) return new Uint32Array(0);
+
+    const boundary = new Uint8Array(B);
+    fillBoundaryFromUtf8Bytes(allBytes, boundary, this.pretokenizerPolicy);
+
+    let regionsTotal = 1;
+    for (let i = 0; i < B - 1; i++) {
+      if (boundary[i] === 1) regionsTotal++;
+    }
+
+    let outCapacity = Math.max(65536, B >> 2);
+    let outputBuf = new Uint32Array(outCapacity);
+    let outputLen = 0;
+    let workBuf = new Uint32Array(0);
     let lastYieldWallMs = Date.now();
-    while (true) {
-      const nextLen = this.performGreedyMergePassUint32(buf, len);
-      if (nextLen === null) break;
-      len = nextLen;
-      mergeIteration += 1;
-      let emittedThisRound = false;
-      if (
-        emit !== undefined &&
-        (mergeIteration % EMIT_PASS_EVERY_ASYNC === 0 || len <= 2 || mergeIteration <= 4)
-      ) {
-        emit({ phase: 'merge', mergeIteration, tokenCount: len });
-        emittedThisRound = true;
+
+    let regionStart = 0;
+    for (let r = 0; r < regionsTotal; r++) {
+      let regionEnd = regionStart;
+      while (regionEnd < B - 1 && boundary[regionEnd] !== 1) regionEnd++;
+      regionEnd++;
+
+      const regionLen = regionEnd - regionStart;
+      if (workBuf.length < regionLen) workBuf = new Uint32Array(regionLen);
+
+      let len = this.expandRegionIntoBuffer(workBuf, allBytes.subarray(regionStart, regionEnd), S);
+
+      let mergeIteration = 0;
+      while (true) {
+        const nextLen = this.performGreedyMergePassUint32(workBuf, len);
+        if (nextLen === null) break;
+        len = nextLen;
+        mergeIteration += 1;
+
+        if (
+          emit !== undefined &&
+          (mergeIteration % EMIT_PASS_EVERY_ASYNC === 0 || len <= 2 || mergeIteration <= 4)
+        ) {
+          emit({
+            phase: 'merge',
+            mergeIteration,
+            tokenCount: outputLen + len,
+            regionIndex: r,
+            regionsTotal,
+          });
+        }
+
+        // Yield only on the wall-clock slice — not on every emit. For corpora with millions
+        // of tiny regions every emit would otherwise schedule a ~1ms setTimeout, turning a
+        // second of BPE work into hours of event-loop overhead.
+        const nowMs = Date.now();
+        if (nowMs - lastYieldWallMs >= TIME_SLICE_ENCODE_ASYNC_MS) {
+          await sliceYield();
+          lastYieldWallMs = Date.now();
+        }
       }
 
+      if (outputLen + len > outCapacity) {
+        outCapacity = Math.min(B, Math.max(outCapacity * 2, outputLen + len));
+        const grown = new Uint32Array(outCapacity);
+        grown.set(outputBuf.subarray(0, outputLen));
+        outputBuf = grown;
+      }
+
+      outputBuf.set(workBuf.subarray(0, len), outputLen);
+      outputLen += len;
+
+      emit?.({
+        phase: 'merge',
+        mergeIteration,
+        tokenCount: outputLen,
+        regionIndex: r,
+        regionsTotal,
+      });
+
       const nowMs = Date.now();
-      if (emittedThisRound || nowMs - lastYieldWallMs >= TIME_SLICE_ENCODE_ASYNC_MS) {
+      if (nowMs - lastYieldWallMs >= TIME_SLICE_ENCODE_ASYNC_MS) {
         await sliceYield();
         lastYieldWallMs = Date.now();
       }
+
+      regionStart = regionEnd;
     }
 
-    emit?.({
-      phase: 'merge',
-      mergeIteration,
-      tokenCount: len,
-    });
     await sliceYield();
-
-    return Uint32Array.from(buf.subarray(0, len));
+    return outputBuf.slice(0, outputLen);
   }
 
   /** CPU-bound; progress hooks run but TUIs/timer paints stall until **`encode`** returns. */
@@ -662,14 +1047,15 @@ export class BPETokenizer implements Tokenizer {
       vocabOut[String(id)] = Array.from(row);
     }
 
-    const payload: BPETokenizerJsonV1 = {
+    const payload = {
       kind: JSON_KIND,
       version: JSON_VERSION,
+      pretokenizer: this.pretokenizerPolicy,
       specialTokens: this.specialTokens,
       byteOffset: S,
       merges: [...this.mergesRecorded.map((step) => [step[0], step[1]] as const)],
       vocab: vocabOut,
-    };
+    } as const;
 
     await writeFile(path, `${JSON.stringify(payload)}\n`, 'utf8');
   }
@@ -678,6 +1064,7 @@ export class BPETokenizer implements Tokenizer {
     const rawText = await readFile(path, 'utf8');
     const parsed: unknown = JSON.parse(rawText) as unknown;
     const data = parseBpeTokenizerJson(parsed);
+    this.pretokenizerPolicy = data.pretokenizer;
 
     if (data.byteOffset !== data.specialTokens.length) {
       throw new Error(
@@ -728,28 +1115,8 @@ export class BPETokenizer implements Tokenizer {
 
     this.vocabByteRows = nextRows;
     this.mergesRecorded = data.merges.map((pair) => [pair[0], pair[1]]);
-
-    const pairToMergedNum = new Map<number, Map<number, number>>();
-    const pairRankNum = new Map<number, Map<number, number>>();
-    let mergedIdWalker = S + 256;
-
-    for (let rank = 0; rank < this.mergesRecorded.length; rank++) {
-      const step = this.mergesRecorded[rank];
-      if (step === undefined) throw new Error('BPETokenizer.load: merge hole');
-      const Lm = step[0];
-      const Rm = step[1];
-      nestedNumberSet(pairToMergedNum, Lm, Rm, mergedIdWalker);
-      nestedNumberSet(pairRankNum, Lm, Rm, rank);
-      mergedIdWalker += 1;
-    }
-
-    this.mergeOutputIdByPair = pairToMergedNum;
-    this.mergeRankByPair = pairRankNum;
     this.activeVocabCount = maxIdSeen + 1;
-
-    if (mergedIdWalker !== this.activeVocabCount) {
-      throw new Error('BPETokenizer.load: internal merge counter mismatch');
-    }
+    this.rebuildPackedPairTables(S + 256);
   }
 
   private assertTrained(): void {
@@ -759,7 +1126,7 @@ export class BPETokenizer implements Tokenizer {
   }
 }
 
-function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonV1 {
+function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonParsed {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('BPETokenizer.load: root must be a JSON object');
   }
@@ -769,11 +1136,29 @@ function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonV1 {
       `BPETokenizer.load: expected kind ${JSON.stringify(JSON_KIND)}, got ${JSON.stringify(rec.kind)}`,
     );
   }
-  if (typeof rec.version !== 'number' || rec.version !== JSON_VERSION) {
+  if (rec.version !== JSON_VERSION) {
     throw new Error(
-      `BPETokenizer.load: unsupported version ${JSON.stringify(rec.version)} (need ${String(JSON_VERSION)})`,
+      `BPETokenizer.load: unsupported version ${JSON.stringify(rec.version)} (need ${String(JSON_VERSION)}); retrain the tokenizer`,
     );
   }
+  const version = rec.version;
+
+  if (!('pretokenizer' in rec)) {
+    throw new Error(
+      `BPETokenizer.load: missing required "pretokenizer" field (supported: ${[...KNOWN_PRETOKENIZER_LABELS].map((k) => JSON.stringify(k)).join(', ')})`,
+    );
+  }
+  const rawPolicy = rec.pretokenizer;
+  if (
+    typeof rawPolicy !== 'string' ||
+    !KNOWN_PRETOKENIZER_LABELS.has(rawPolicy as PretokenizerPolicy)
+  ) {
+    throw new Error(
+      `BPETokenizer.load: unknown pretokenizer ${JSON.stringify(rawPolicy)} (supported: ${[...KNOWN_PRETOKENIZER_LABELS].map((k) => JSON.stringify(k)).join(', ')})`,
+    );
+  }
+  const pretokenizer: PretokenizerPolicy = rawPolicy as PretokenizerPolicy;
+
   if (!Array.isArray(rec.specialTokens)) {
     throw new Error('BPETokenizer.load: specialTokens must be string[]');
   }
@@ -833,7 +1218,8 @@ function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonV1 {
 
   return {
     kind: JSON_KIND,
-    version: JSON_VERSION,
+    version,
+    pretokenizer,
     specialTokens,
     byteOffset: rec.byteOffset,
     merges,

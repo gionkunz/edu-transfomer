@@ -28,7 +28,32 @@ export type TrainerOptions = {
   readonly schedule: CosineLrSchedule;
   /** Optional hook after **`optimizer.step`** (for CLIs / logging). */
   readonly onStep?: (info: TrainerStepInfo) => void;
+  /**
+   * If Node was started with `--expose-gc`, force a major GC every N training
+   * steps. Smooths out the long sawtooth where V8 lazily collects stale
+   * `GPUBuffer` wrappers, trading a small predictable pause for unpredictable
+   * multi-second incremental-marking stalls.
+   *
+   * `0` / unset → never call gc() explicitly. Ignored when `global.gc` is
+   * unavailable (Node without `--expose-gc`).
+   */
+  readonly forceGcEverySteps?: number;
+  /**
+   * Emit a one-line buffer-pool stats summary to stderr every N steps. `0` /
+   * unset → never. Used to verify the pool's hit-rate climbs to ~100% after
+   * the warmup window and that VRAM stays bounded.
+   */
+  readonly logBufferPoolEverySteps?: number;
 };
+
+/**
+ * Returns Node's `global.gc` only if it has been exposed via `--expose-gc`.
+ * Resolved once on first call; subsequent calls are a plain function check.
+ */
+function resolveExposedGc(): (() => void) | null {
+  const g = globalThis as { gc?: unknown };
+  return typeof g.gc === 'function' ? (g.gc as () => void) : null;
+}
 
 /**
  * Minimal single-process trainer: one forward (GPT + mean CE), backward, graph
@@ -40,6 +65,7 @@ export class Trainer {
   private readonly registry: ParameterRegistry;
   private readonly optimizer: AdamW;
   private readonly options: TrainerOptions;
+  private readonly exposedGc: (() => void) | null;
 
   constructor(
     rt: TensorRuntime,
@@ -53,6 +79,7 @@ export class Trainer {
     this.registry = registry;
     this.optimizer = optimizer;
     this.options = options;
+    this.exposedGc = resolveExposedGc();
   }
 
   /**
@@ -103,6 +130,35 @@ export class Trainer {
     this.optimizer.step();
 
     onStep?.({ trainingStepIndex, loss: lossScalar, lr });
+
+    const gcEvery = this.options.forceGcEverySteps ?? 0;
+    if (
+      gcEvery > 0 &&
+      this.exposedGc !== null &&
+      trainingStepIndex > 0 &&
+      trainingStepIndex % gcEvery === 0
+    ) {
+      this.exposedGc();
+    }
+
+    // Periodic buffer-pool diagnostics so we can verify the pool is doing
+    // what we expect at runtime: hit-rate should approach ~100% after warmup,
+    // and idleBytes should stabilize quickly. Emitting to stderr keeps the
+    // dashboard TUI clean.
+    const poolEvery = this.options.logBufferPoolEverySteps ?? 0;
+    if (poolEvery > 0 && trainingStepIndex > 0 && trainingStepIndex % poolEvery === 0) {
+      const s = this.rt.ctx.bufferPool.stats();
+      const total = s.acquireHits + s.acquireMisses;
+      const hitPct = total > 0 ? ((s.acquireHits / total) * 100).toFixed(1) : 'n/a';
+      const idleMib = (s.idleBytes / (1024 * 1024)).toFixed(1);
+      console.error(
+        `trainer: pool step=${String(trainingStepIndex)} ` +
+          `hit=${hitPct}% (${String(s.acquireHits)}/${String(total)}) ` +
+          `idle=${String(s.idleBuffers)} buffers / ${idleMib} MiB ` +
+          `in ${String(s.buckets)} buckets ` +
+          `overflow=${String(s.overflowDestroys)}`,
+      );
+    }
 
     return lossScalar;
   }

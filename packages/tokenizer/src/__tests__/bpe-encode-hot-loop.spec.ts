@@ -4,18 +4,15 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { BPETokenizer, type BpeEncodeProgressEvent } from '../bpe-tokenizer';
+import { BPETokenizer, type BpeEncodeProgressEvent, splitIntoRegions } from '../bpe-tokenizer';
 
-type PairMap = Map<number, Map<number, number>>;
-
-function nestedGet(m: PairMap, a: number, b: number): number | undefined {
-  return m.get(a)?.get(b);
-}
+type PackedPairMap = Map<number, number>;
 
 /** One merge: min-rank pair, **leftmost** occurrence only (reference for equivalence). */
 function performSingleGreedyMergeLeftmost(
-  mergeRankByPair: PairMap,
-  mergeOutputIdByPair: PairMap,
+  mergeRankByPackedPair: PackedPairMap,
+  mergeOutputIdByPackedPair: PackedPairMap,
+  vocabSize: number,
   buf: Uint32Array,
   len: number,
 ): number | null {
@@ -28,7 +25,7 @@ function performSingleGreedyMergeLeftmost(
   for (let j = 0; j < len - 1; j++) {
     const L = buf[j];
     const R = buf[j + 1];
-    const rk = nestedGet(mergeRankByPair, L, R);
+    const rk = mergeRankByPackedPair.get(L * vocabSize + R);
     if (rk === undefined) continue;
     if (rk < minRank || (rk === minRank && (L < chosenL || (L === chosenL && R < chosenR)))) {
       minRank = rk;
@@ -48,7 +45,7 @@ function performSingleGreedyMergeLeftmost(
   }
   if (jAt < 0) return null;
 
-  const mergedId = nestedGet(mergeOutputIdByPair, chosenL, chosenR);
+  const mergedId = mergeOutputIdByPackedPair.get(chosenL * vocabSize + chosenR);
   if (mergedId === undefined) return null;
 
   buf[jAt] = mergedId;
@@ -59,34 +56,51 @@ function performSingleGreedyMergeLeftmost(
 }
 
 type BpeMergeTables = {
-  mergeRankByPair: PairMap;
-  mergeOutputIdByPair: PairMap;
+  mergeRankByPackedPair: PackedPairMap;
+  mergeOutputIdByPackedPair: PackedPairMap;
   specialTokens: string[];
   textEncoder: TextEncoder;
+  pretokenizerPolicy: 'word-and-punct-v1';
 };
 
+/**
+ * Reference encoder: applies the same merge-table lookups as production but with
+ * leftmost-only per-pass collapse instead of merge-all. Folds over pre-tokenized
+ * regions to match the production encode for tokenizers trained under a non-null policy.
+ */
 function encodeLeftmostOnlyReference(tok: BPETokenizer, text: string): number[] {
-  const { mergeRankByPair, mergeOutputIdByPair, specialTokens, textEncoder } =
-    tok as unknown as BpeMergeTables;
+  const {
+    mergeRankByPackedPair,
+    mergeOutputIdByPackedPair,
+    specialTokens,
+    textEncoder,
+    pretokenizerPolicy,
+  } = tok as unknown as BpeMergeTables;
   const S = specialTokens.length;
-  const bytes = textEncoder.encode(text);
-  const n = bytes.length;
-  const buf = new Uint32Array(n);
-  for (let i = 0; i < n; i++) {
-    buf[i] = S + bytes[i];
+  const V = tok.vocabSize;
+  const regions = splitIntoRegions(text, pretokenizerPolicy);
+  const result: number[] = [];
+  for (const regionText of regions) {
+    const bytes = textEncoder.encode(regionText);
+    const n = bytes.length;
+    if (n === 0) continue;
+    const buf = new Uint32Array(n);
+    for (let i = 0; i < n; i++) buf[i] = S + bytes[i];
+    let len = n;
+    while (true) {
+      const nextLen = performSingleGreedyMergeLeftmost(
+        mergeRankByPackedPair,
+        mergeOutputIdByPackedPair,
+        V,
+        buf,
+        len,
+      );
+      if (nextLen === null) break;
+      len = nextLen;
+    }
+    for (let i = 0; i < len; i++) result.push(buf[i]);
   }
-  let len = n;
-  while (true) {
-    const nextLen = performSingleGreedyMergeLeftmost(
-      mergeRankByPair,
-      mergeOutputIdByPair,
-      buf,
-      len,
-    );
-    if (nextLen === null) break;
-    len = nextLen;
-  }
-  return Array.from(buf.subarray(0, len));
+  return result;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

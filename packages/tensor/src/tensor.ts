@@ -10,6 +10,7 @@ import {
   readBf16Buffer,
   readFloat32Buffer,
   readUint32Buffer,
+  releasePooledOrDestroy,
   uint32ByteLength,
   writeBf16Buffer,
   writeFloat32Buffer,
@@ -85,11 +86,12 @@ export function allocateContiguousBuffer(
   length: number,
   dtype: FloatDType,
 ): GPUBuffer {
+  const pool = rt.ctx.bufferPool;
   switch (dtype) {
     case 'f32':
-      return createFloat32StorageBuffer(rt.ctx.device, length);
+      return createFloat32StorageBuffer(rt.ctx.device, length, pool);
     case 'bf16':
-      return createBf16StorageBuffer(rt.ctx.device, length);
+      return createBf16StorageBuffer(rt.ctx.device, length, pool);
     default: {
       const _e: never = dtype;
       return _e;
@@ -157,7 +159,7 @@ export function createIndices(
         `productOfShape([${shape.join(',')}])=${String(length)}`,
     );
   }
-  const buf = createUint32StorageBuffer(rt.ctx.device, length);
+  const buf = createUint32StorageBuffer(rt.ctx.device, length, rt.ctx.bufferPool);
   writeUint32Buffer(rt.ctx.queue, buf, data);
   return makeIndicesTensor(shape, buf);
 }
@@ -172,10 +174,19 @@ export async function toArray(rt: TensorRuntime, t: Tensor): Promise<Float32Arra
   if (t.dtype === 'u32') {
     throw new Error("toArray: use readIndices for dtype 'u32'");
   }
+  const pool = rt.ctx.bufferPool;
   if (t.dtype === 'f32') {
-    return readFloat32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, float32ByteLength(t.length));
+    return readFloat32Buffer(
+      rt.ctx.device,
+      rt.ctx.queue,
+      t.buffer,
+      float32ByteLength(t.length),
+      pool,
+    );
   }
-  return unpackBf16ToFloat32(await readBf16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length));
+  return unpackBf16ToFloat32(
+    await readBf16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length, pool),
+  );
 }
 
 /**
@@ -278,7 +289,13 @@ export function copyContiguousElems(
  */
 export async function readIndices(rt: TensorRuntime, t: Tensor): Promise<Uint32Array> {
   assertDtype(t, 'u32');
-  return readUint32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, uint32ByteLength(t.length));
+  return readUint32Buffer(
+    rt.ctx.device,
+    rt.ctx.queue,
+    t.buffer,
+    uint32ByteLength(t.length),
+    rt.ctx.bufferPool,
+  );
 }
 
 /**
@@ -290,5 +307,5 @@ export async function readIndices(rt: TensorRuntime, t: Tensor): Promise<Uint32A
  * destroying either invalidates both.
  */
 export function destroy(t: Tensor): void {
-  t.buffer.destroy();
+  releasePooledOrDestroy(t.buffer);
 }

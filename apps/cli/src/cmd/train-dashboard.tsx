@@ -34,14 +34,14 @@ function formatEncodeCountApprox(n: number): string {
   return String(x);
 }
 
-/** Outer BPE passes/sec (each pass may collapse many token pairs). */
-function formatPassThroughput(passesPerSec: number | null): string {
-  if (passesPerSec === null || !Number.isFinite(passesPerSec)) return '—';
-  if (passesPerSec >= 1000) return `${(passesPerSec / 1000).toFixed(1)}k pass/s`;
-  return `${passesPerSec.toFixed(1)} pass/s`;
+/** Regions encoded per second under the **`word-and-punct-v1`** pre-tokenizer. */
+function formatRegionThroughput(regionsPerSec: number | null): string {
+  if (regionsPerSec === null || !Number.isFinite(regionsPerSec)) return '—';
+  if (regionsPerSec >= 1000) return `${(regionsPerSec / 1000).toFixed(1)}k region/s`;
+  return `${regionsPerSec.toFixed(1)} region/s`;
 }
 
-function formatPessimisticEta(sec: number | null): string {
+function formatEtaSec(sec: number | null): string {
   if (sec === null || !Number.isFinite(sec)) return '—';
   return `~${formatDurationSec(sec)}`;
 }
@@ -236,29 +236,44 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
               }}
             >
               <Text style={{ color: 'gray' }}>{'BPE encode'}</Text>
+              <Text style={{ color: 'gray' }}>
+                {`pre-tokenizer: ${snap.encodeProgress.pretokenizerPolicy}`}
+              </Text>
               <Text>
                 {snap.encodeProgress.mergeSubphase === 'expand'
                   ? `expand · ${String(snap.encodeProgress.textChars)} chars · ${String(snap.encodeProgress.byteLength)} bytes → ${String(snap.encodeProgress.tokenCount)} tok`
-                  : `pass #${formatEncodeCountApprox(snap.encodeProgress.mergeIteration)} · ${formatEncodeCountApprox(snap.encodeProgress.tokenCount)} tok`}
+                  : `region ${formatEncodeCountApprox(snap.encodeProgress.regionIndex + 1)} / ${formatEncodeCountApprox(snap.encodeProgress.regionsTotal)} · pass #${formatEncodeCountApprox(snap.encodeProgress.mergeIteration)} · ${formatEncodeCountApprox(snap.encodeProgress.tokenCount)} tok`}
               </Text>
               <Text style={{ color: 'gray' }}>
-                {`elapsed ${formatDurationSec(snap.encodeProgress.encodeElapsedSec)} · worst-case ≤${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeUpperBound)} passes · rem ${formatEncodeCountApprox(snap.encodeProgress.pessimisticMergeRemaining)}`}
+                {`elapsed ${formatDurationSec(snap.encodeProgress.encodeElapsedSec)}${snap.encodeProgress.meanPassesPerRegion !== null ? ` · mean ${snap.encodeProgress.meanPassesPerRegion.toFixed(1)} passes/region` : ''}`}
               </Text>
               {snap.encodeProgress.mergeSubphase === 'merge' ? (
                 <>
                   <Box style={{ marginTop: 1 }}>
-                    <ProgressBar value={snap.encodeProgress.mergeProgressPct} />
-                    <Text
-                      style={{ color: 'gray' }}
-                    >{`${snap.encodeProgress.mergeProgressPct.toFixed(1)}% length-reduction vs post-expand tokens (pass budget is “rem” below)`}</Text>
+                    <ProgressBar
+                      value={
+                        snap.encodeProgress.regionsTotal > 0
+                          ? Math.min(
+                              100,
+                              (100 * snap.encodeProgress.regionIndex) /
+                                snap.encodeProgress.regionsTotal,
+                            )
+                          : 0
+                      }
+                    />
+                    <Text style={{ color: 'gray' }}>
+                      {snap.encodeProgress.regionsTotal > 0
+                        ? `${((100 * snap.encodeProgress.regionIndex) / snap.encodeProgress.regionsTotal).toFixed(1)}% of regions encoded`
+                        : '—'}
+                    </Text>
                   </Box>
                   <Text style={{ marginTop: 1 }}>
-                    {`${formatPassThroughput(snap.encodeProgress.mergesPerSec)} · ETA ${formatPessimisticEta(snap.encodeProgress.pessimisticEtaSec)} (pessimistic)`}
+                    {`${formatRegionThroughput(snap.encodeProgress.regionsPerSec)} · ETA ${formatEtaSec(snap.encodeProgress.etaSec)}`}
                   </Text>
                 </>
               ) : (
                 <Text style={{ color: 'gray', marginTop: 1 }}>
-                  ETA after pass throughput is measured…
+                  ETA after region throughput is measured…
                 </Text>
               )}
             </Box>

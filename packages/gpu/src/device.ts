@@ -1,5 +1,7 @@
 import { create } from 'webgpu';
 
+import { BufferPool } from './buffer-pool';
+
 export type GpuBootstrapOptions = {
   /** Options forwarded to Dawn (`webgpu` / `create`), e.g. `['backend=vulkan']`. */
   dawnOptions?: string[];
@@ -120,6 +122,14 @@ export class GpuContext {
   /** Subset of **`GPUFeatureName`** values actually enabled on **`device`**. */
   readonly grantedFeatures: ReadonlySet<string>;
 
+  /**
+   * Per-context buffer pool. All compute storage and readback allocations made
+   * through this context's helpers route through here, so a steady-state
+   * training step recycles every intermediate buffer instead of creating new
+   * `GPUBuffer` objects each iteration.
+   */
+  readonly bufferPool: BufferPool;
+
   private constructor(
     gpu: GPU,
     device: GPUDevice,
@@ -133,6 +143,7 @@ export class GpuContext {
     this.adapterLabel = adapterLabel;
     this.isLikelyCpuSoftwareAdapter = isLikelyCpuSoftwareAdapter;
     this.grantedFeatures = grantedFeatures;
+    this.bufferPool = new BufferPool(device);
   }
 
   /**

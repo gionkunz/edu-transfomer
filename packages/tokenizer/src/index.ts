@@ -1,5 +1,7 @@
 export {
   BPETokenizer,
+  PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1,
+  splitIntoRegions,
   type BpeTrainFromFilesHooks,
   type BpeTrainFromFilesOptions,
   type BpeTrainHooks,
@@ -9,6 +11,7 @@ export {
   type BpeDecodeOptions,
   type BpeEncodeHooks,
   type BpeEncodeProgressEvent,
+  type PretokenizerPolicy,
 } from './bpe-tokenizer';
 export { CharTokenizer, type CharTokenizerOptions } from './char-tokenizer';
 export type { Tokenizer } from './types';

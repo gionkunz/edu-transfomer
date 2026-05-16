@@ -20,6 +20,17 @@ export {
   writeUint32Buffer,
 } from './buffer';
 export {
+  acquireReadbackBuffer,
+  acquireStorageBuffer,
+  BufferPool,
+  isPoolTracked,
+  READBACK_BUFFER_USAGE,
+  releasePooledOrDestroy,
+  STORAGE_BUFFER_USAGE,
+  type BufferPoolOptions,
+  type BufferPoolStats,
+} from './buffer-pool';
+export {
   bytesPerElement,
   packBf16FromFloat32,
   type PackedStorageDType,

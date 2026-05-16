@@ -1,3 +1,4 @@
+import { releasePooledOrDestroy } from '@llm-transformer-diy/gpu';
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import {
   add,
@@ -174,7 +175,7 @@ export function disposeAutogradGraphExceptParameters(
       return;
     }
     destroyed.add(buf);
-    buf.destroy();
+    releasePooledOrDestroy(buf);
   }
 
   function releaseMaybeTensor(t: Tensor | null | undefined): void {

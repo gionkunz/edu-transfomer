@@ -1,0 +1,8 @@
+{
+  "vocabSize": 10000,
+  "maxSeqLen": 1024,
+  "dModel": 384,
+  "nHeads": 12,
+  "dFf": 1536,
+  "nLayers": 6
+}

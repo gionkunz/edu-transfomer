@@ -433,10 +433,29 @@ Full byte-pair encoding as described in the research section:
 
 1. Start with 256 base tokens (one per byte value)
 2. Add special tokens (`<|endoftext|>`, `<|pad|>`)
-3. Iteratively merge the most frequent adjacent pair
+3. Iteratively merge the most frequent adjacent pair (incremental pair-frequency index, no full-corpus rescan per merge)
 4. Save ordered merge list + vocabulary
 
-**Saved format:** JSON file containing `{ merges: [pair, pair, ...], vocab: { id: bytes[] }, specialTokens: {...} }`
+**Pre-tokenizer policy.** Both `train` and `encode` operate on **pre-tokenized regions** under a named regex policy. The only currently supported policy is `word-and-punct-v1` — splits on whitespace / digits / Unicode letters / other. Merges never cross region boundaries. This bounds per-region pass count at `O(log region_length)` so encode time scales with corpus size linearly, not with vocab size × corpus size.
+
+- **Hot-path lookup.** The encode pair-rank table is a single-level `Map<number, number>` keyed by `L * vocabSize + R` so probes are one hash lookup, not two. Safe for any `vocabSize ≤ 94 906 265`.
+- **Future policies.** New policies can be added as new labels without breaking saved files; `load` rejects any unknown label.
+
+**Saved format.** JSON file, **schema `version: 2`**:
+
+```jsonc
+{
+  "kind": "llm-transformer-diy/bpe-tokenizer",
+  "version": 2,
+  "pretokenizer": "word-and-punct-v1",
+  "specialTokens": ["<|pad|>", "<|endoftext|>"],
+  "byteOffset": 2,
+  "merges": [[L, R], ...],
+  "vocab": { "id": [bytes...], ... }
+}
+```
+
+`load` requires `version: 2` and a known `pretokenizer` label. Older v1 files (no `pretokenizer` field) are rejected with a clear "retrain" message; the previous null / whole-corpus encode path is gone.
 
 ---
 

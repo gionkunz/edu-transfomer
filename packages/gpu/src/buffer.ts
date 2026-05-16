@@ -1,3 +1,10 @@
+import {
+  acquireReadbackBuffer,
+  acquireStorageBuffer,
+  releasePooledOrDestroy,
+  type BufferPool,
+} from './buffer-pool';
+
 /**
  * Number of **`u32`** words used to store **`elementCount`** packed bf16 scalars.
  * Two scalars are packed per word (low / high 16 bits); odd counts round up with a
@@ -34,10 +41,24 @@ export function uint32ByteLength(elementCount: number): number {
   return elementCount * 4;
 }
 
-/** Storage buffer for f32 compute: read/write in shaders, copy src/dst for I/O. */
-export function createFloat32StorageBuffer(device: GPUDevice, elementCount: number): GPUBuffer {
+/**
+ * Storage buffer for f32 compute: read/write in shaders, copy src/dst for I/O.
+ *
+ * When **`pool`** is provided the allocation routes through the pool (recycled
+ * after a previous {@link releasePooledOrDestroy}); otherwise we create a
+ * fresh buffer. Tests and one-shot callers can keep passing the device alone.
+ */
+export function createFloat32StorageBuffer(
+  device: GPUDevice,
+  elementCount: number,
+  pool?: BufferPool,
+): GPUBuffer {
+  const size = float32ByteLength(elementCount);
+  if (pool !== undefined) {
+    return acquireStorageBuffer(pool, size);
+  }
   return device.createBuffer({
-    size: float32ByteLength(elementCount),
+    size,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 }
@@ -54,17 +75,26 @@ export function writeFloat32Buffer(
 /**
  * Copies GPU buffer bytes into a new {@link Float32Array} using a dedicated readback buffer.
  * `source` must have been created with {@link GPUBufferUsage.COPY_SRC}.
+ *
+ * Previously this function leaked the temporary readback buffer (only
+ * `unmap()`ed it, which keeps the GPU allocation alive until V8 collects the
+ * `GPUBuffer` wrapper). The buffer is now either released to **`pool`** for
+ * reuse, or destroyed directly when no pool is provided.
  */
 export async function readFloat32Buffer(
   device: GPUDevice,
   queue: GPUQueue,
   source: GPUBuffer,
   byteLength: number,
+  pool?: BufferPool,
 ): Promise<Float32Array> {
-  const readback = device.createBuffer({
-    size: byteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback =
+    pool !== undefined
+      ? acquireReadbackBuffer(pool, byteLength)
+      : device.createBuffer({
+          size: byteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
 
   const encoder = device.createCommandEncoder();
   encoder.copyBufferToBuffer(source, 0, readback, 0, byteLength);
@@ -74,14 +104,23 @@ export async function readFloat32Buffer(
   const mapped = readback.getMappedRange();
   const copy = new Uint8Array(mapped.slice(0));
   readback.unmap();
+  releasePooledOrDestroy(readback);
 
   return new Float32Array(copy.buffer, copy.byteOffset, copy.byteLength / 4);
 }
 
 /** Storage buffer for `array<u32>` WGSL layouts (embedding indices, class labels). */
-export function createUint32StorageBuffer(device: GPUDevice, elementCount: number): GPUBuffer {
+export function createUint32StorageBuffer(
+  device: GPUDevice,
+  elementCount: number,
+  pool?: BufferPool,
+): GPUBuffer {
+  const size = uint32ByteLength(elementCount);
+  if (pool !== undefined) {
+    return acquireStorageBuffer(pool, size);
+  }
   return device.createBuffer({
-    size: uint32ByteLength(elementCount),
+    size,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 }
@@ -101,11 +140,15 @@ export async function readUint32Buffer(
   queue: GPUQueue,
   source: GPUBuffer,
   byteLength: number,
+  pool?: BufferPool,
 ): Promise<Uint32Array> {
-  const readback = device.createBuffer({
-    size: byteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback =
+    pool !== undefined
+      ? acquireReadbackBuffer(pool, byteLength)
+      : device.createBuffer({
+          size: byteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
 
   const encoder = device.createCommandEncoder();
   encoder.copyBufferToBuffer(source, 0, readback, 0, byteLength);
@@ -115,14 +158,23 @@ export async function readUint32Buffer(
   const mapped = readback.getMappedRange();
   const copy = new Uint8Array(mapped.slice(0));
   readback.unmap();
+  releasePooledOrDestroy(readback);
 
   return new Uint32Array(copy.buffer, copy.byteOffset, copy.byteLength / 4);
 }
 
 /** Storage buffer sized with {@link bf16StorageBufferByteLength}. */
-export function createBf16StorageBuffer(device: GPUDevice, elementCount: number): GPUBuffer {
+export function createBf16StorageBuffer(
+  device: GPUDevice,
+  elementCount: number,
+  pool?: BufferPool,
+): GPUBuffer {
+  const size = bf16StorageBufferByteLength(elementCount);
+  if (pool !== undefined) {
+    return acquireStorageBuffer(pool, size);
+  }
   return device.createBuffer({
-    size: bf16StorageBufferByteLength(elementCount),
+    size,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 }
@@ -162,12 +214,16 @@ export async function readBf16Buffer(
   queue: GPUQueue,
   source: GPUBuffer,
   elementCount: number,
+  pool?: BufferPool,
 ): Promise<Uint16Array> {
   const byteLength = bf16ElementsByteLength(elementCount);
-  const readback = device.createBuffer({
-    size: byteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  const readback =
+    pool !== undefined
+      ? acquireReadbackBuffer(pool, byteLength)
+      : device.createBuffer({
+          size: byteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
 
   const encoder = device.createCommandEncoder();
   encoder.copyBufferToBuffer(source, 0, readback, 0, byteLength);
@@ -177,6 +233,7 @@ export async function readBf16Buffer(
   const mapped = readback.getMappedRange();
   const words = new Uint32Array(mapped.slice(0, byteLength));
   readback.unmap();
+  releasePooledOrDestroy(readback);
 
   const out = new Uint16Array(elementCount);
   const lastFull = elementCount & ~1;

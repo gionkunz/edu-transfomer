@@ -20,22 +20,26 @@ export type TrainPipelinePhase =
 export interface EncodeProgressSnapshot {
   readonly textChars: number;
   readonly byteLength: number;
+  /** Per-region outer-pass count for the region currently being encoded. */
   readonly mergeIteration: number;
   readonly mergeSubphase: 'expand' | 'merge';
   readonly tokenCount: number;
-  /** Post-expand primitive token length **`N`**; used for worst-case merge bound **`N − 1`**. */
+  /** Post-expand primitive token length **`N`** (corpus-wide, prior to merging). */
   readonly initialTokenCount: number;
-  /** Wall seconds since corpus **`encodeAsync`** began (expand + merge). */
+  /** Wall seconds since corpus **`encodeUint32Async`** began (expand + merge). */
   readonly encodeElapsedSec: number;
-  /** Worst-case maximum merge iterations: **`max(1, initialTokenCount − 1)`**. */
-  readonly pessimisticMergeUpperBound: number;
-  readonly pessimisticMergeRemaining: number;
-  /** Smoothed outer BPE pass throughput (passes/sec), **`null`** until estimated. */
-  readonly mergesPerSec: number | null;
-  /** Remaining pessimistic passes ÷ **`mergesPerSec`** when rate is trusted. */
-  readonly pessimisticEtaSec: number | null;
-  /** **`0`** in expand; **`0–100`** ≈ share of **`N−1`** token slots merged away (`N` = post-expand length). */
-  readonly mergeProgressPct: number;
+  /** Active tokenizer pretokenizer policy (label). */
+  readonly pretokenizerPolicy: 'word-and-punct-v1';
+  /** Smoothed regions-per-second throughput, **`null`** until estimated. */
+  readonly regionsPerSec: number | null;
+  /** ETA based on `regionsRemaining * meanPassesPerRegion / passRate` when rates are trusted. */
+  readonly etaSec: number | null;
+  /** Zero-based index of the region currently being encoded. */
+  readonly regionIndex: number;
+  /** Total regions in the active encode call. */
+  readonly regionsTotal: number;
+  /** Running average of outer passes per completed region. */
+  readonly meanPassesPerRegion: number | null;
 }
 
 export interface FileProgressSnapshot {
