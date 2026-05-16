@@ -13,7 +13,7 @@ const FLOOR = SPECIALS_COUNT + 256;
 function streamFromBytes(bytes: ArrayLike<number>): ReturnType<typeof createLinkedTokenStream> {
   const stream = createLinkedTokenStream(bytes.length);
   for (let i = 0; i < bytes.length; i++) {
-    appendLiveSlot(stream, i, SPECIALS_COUNT + (bytes[i] as number));
+    appendLiveSlot(stream, i, SPECIALS_COUNT + bytes[i]);
   }
   return stream;
 }
@@ -129,7 +129,7 @@ describe('runIncrementalMergeLoop', () => {
       expect(events[i]?.mergeIndex).toBe(i);
     }
     for (let i = 1; i < events.length; i++) {
-      expect(events[i]!.tokenStreamBytes <= events[i - 1]!.tokenStreamBytes).toBe(true);
+      expect(events[i].tokenStreamBytes <= events[i - 1].tokenStreamBytes).toBe(true);
     }
   });
 

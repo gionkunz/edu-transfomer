@@ -20,7 +20,7 @@ import {
 
 function makeStream(values: readonly number[]): BpeLinkedTokenStream {
   const stream = createLinkedTokenStream(values.length);
-  for (let i = 0; i < values.length; i++) appendLiveSlot(stream, i, values[i]!);
+  for (let i = 0; i < values.length; i++) appendLiveSlot(stream, i, values[i]);
   return stream;
 }
 
@@ -187,7 +187,9 @@ describe('BpePairFreqIndex', () => {
   it('decrementPair throws when called on a slot with no recorded pair', () => {
     const index = createPairFreqIndex(8);
     const occ = createPairOccurrenceList(8);
-    expect(() => decrementPair(index, occ, 0)).toThrow(/no recorded pair/);
+    expect(() => {
+      decrementPair(index, occ, 0);
+    }).toThrow(/no recorded pair/);
   });
 
   it('NO_OCC sentinel matches EMPTY_KEY (single 0xFFFFFFFF marker)', () => {

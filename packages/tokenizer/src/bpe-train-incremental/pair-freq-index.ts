@@ -154,7 +154,7 @@ export function findOrInsertPairSlot(
   }
   let s = pairHash(L, R) & index.capacityMinusOne;
   while (true) {
-    const kl = index.keysL[s]!;
+    const kl = index.keysL[s];
     if (kl === EMPTY_KEY) {
       index.keysL[s] = L >>> 0;
       index.keysR[s] = R >>> 0;
@@ -184,7 +184,7 @@ export function findOrInsertPairSlot(
 export function lookupPairSlot(index: BpePairFreqIndex, L: number, R: number): number {
   let s = pairHash(L, R) & index.capacityMinusOne;
   while (true) {
-    const kl = index.keysL[s]!;
+    const kl = index.keysL[s];
     if (kl === EMPTY_KEY) return EMPTY_KEY;
     if (kl === L >>> 0 && index.keysR[s] === R >>> 0) return s;
     s = (s + 1) & index.capacityMinusOne;
@@ -213,23 +213,23 @@ function growAndRehash(index: BpePairFreqIndex, occList: BpePairOccurrenceList):
   newOccHead.fill(NO_OCC);
   const newMask = newCapacity - 1;
   for (let s = 0; s < oldCapacity; s++) {
-    const kl = oldKeysL[s]!;
+    const kl = oldKeysL[s];
     if (kl === EMPTY_KEY) continue;
-    const kr = oldKeysR[s]!;
+    const kr = oldKeysR[s];
     let ns = pairHash(kl, kr) & newMask;
-    while (newKeysL[ns]! !== EMPTY_KEY) {
+    while (newKeysL[ns] !== EMPTY_KEY) {
       ns = (ns + 1) & newMask;
     }
     newKeysL[ns] = kl;
     newKeysR[ns] = kr;
-    newCounts[ns] = oldCounts[s]!;
-    const head = oldOccHead[s]!;
+    newCounts[ns] = oldCounts[s];
+    const head = oldOccHead[s];
     newOccHead[ns] = head;
     // Repair pairOf back-pointers for every stream slot in this pair's list.
     let occ = head;
     while (occ !== NO_OCC) {
       occList.pairOf[occ] = ns;
-      occ = occList.occNext[occ]!;
+      occ = occList.occNext[occ];
     }
   }
   // Mutate the index in place so external callers' references stay valid.
@@ -274,7 +274,7 @@ export function incrementPair(
   // existing occurrences to find the immediate predecessor whose stream slot is
   // less than `streamSlot`. For the initial scan this is always the existing
   // tail (we append in slot order) — that case is O(1).
-  const head = index.occHead[pairSlot]!;
+  const head = index.occHead[pairSlot];
   if (head === NO_OCC) {
     occList.occPrev[streamSlot] = NO_OCC;
     occList.occNext[streamSlot] = NO_OCC;
@@ -291,10 +291,10 @@ export function incrementPair(
   // Walk forward from head to find the largest occurrence index < streamSlot.
   // For the initial-scan append-only path this exits on the very first step.
   let predecessor = head;
-  let successor = occList.occNext[predecessor]!;
+  let successor = occList.occNext[predecessor];
   while (successor !== NO_OCC && successor < streamSlot) {
     predecessor = successor;
-    successor = occList.occNext[predecessor]!;
+    successor = occList.occNext[predecessor];
   }
   occList.occPrev[streamSlot] = predecessor;
   occList.occNext[streamSlot] = successor;
@@ -325,7 +325,7 @@ export function decrementPair(
   occList: BpePairOccurrenceList,
   streamSlot: number,
 ): void {
-  const pairSlot = occList.pairOf[streamSlot]!;
+  const pairSlot = occList.pairOf[streamSlot];
   if (pairSlot === NO_OCC) {
     throw new Error(
       `decrementPair: stream slot ${String(streamSlot)} has no recorded pair (pairOf is NO_OCC)`,
@@ -333,8 +333,8 @@ export function decrementPair(
   }
 
   // Unlink from the per-pair occurrence list.
-  const before = occList.occPrev[streamSlot]!;
-  const after = occList.occNext[streamSlot]!;
+  const before = occList.occPrev[streamSlot];
+  const after = occList.occNext[streamSlot];
   if (before === NO_OCC) {
     index.occHead[pairSlot] = after;
   } else {
@@ -376,9 +376,9 @@ function backShiftCluster(
   let gap = initialGap;
   let i = (gap + 1) & index.capacityMinusOne;
   while (true) {
-    const kl = index.keysL[i]!;
+    const kl = index.keysL[i];
     if (kl === EMPTY_KEY) return;
-    const kr = index.keysR[i]!;
+    const kr = index.keysR[i];
     const desired = pairHash(kl, kr) & index.capacityMinusOne;
     // Forward cyclic distance from `desired` to `gap` and from `desired` to `i`.
     // We can shift `i` into `gap` iff the entry's natural probe path passes
@@ -389,14 +389,14 @@ function backShiftCluster(
     if (distGap < distCur) {
       index.keysL[gap] = kl;
       index.keysR[gap] = kr;
-      index.counts[gap] = index.counts[i]!;
-      index.occHead[gap] = index.occHead[i]!;
+      index.counts[gap] = index.counts[i];
+      index.occHead[gap] = index.occHead[i];
       // Repair pairOf back-pointers: every stream slot in this pair's
       // occurrence list previously pointed at `i`; now must point at `gap`.
-      let occ = index.occHead[gap]!;
+      let occ = index.occHead[gap];
       while (occ !== NO_OCC) {
         occList.pairOf[occ] = gap;
-        occ = occList.occNext[occ]!;
+        occ = occList.occNext[occ];
       }
       index.keysL[i] = EMPTY_KEY;
       index.keysR[i] = EMPTY_KEY;
@@ -423,9 +423,9 @@ export function forEachOccurrence(
 ): void {
   const pairSlot = lookupPairSlot(index, L, R);
   if (pairSlot === EMPTY_KEY) return;
-  let cur = index.occHead[pairSlot]!;
+  let cur = index.occHead[pairSlot];
   while (cur !== NO_OCC) {
-    const nextCur = occList.occNext[cur]!;
+    const nextCur = occList.occNext[cur];
     callback(cur);
     cur = nextCur;
   }
@@ -448,10 +448,10 @@ export function pickArgmaxByCountTieLR(
   const cap = index.capacityMinusOne + 1;
   for (let s = 0; s < cap; s++) {
     if (index.keysL[s] === EMPTY_KEY) continue;
-    const c = index.counts[s]!;
+    const c = index.counts[s];
     if (c < 2) continue;
-    const L = index.keysL[s]!;
-    const R = index.keysR[s]!;
+    const L = index.keysL[s];
+    const R = index.keysR[s];
     if (!found || c > bestCount || (c === bestCount && (L < bestL || (L === bestL && R < bestR)))) {
       bestCount = c;
       bestL = L;

@@ -11,7 +11,7 @@ import {
 function appendAll(values: readonly number[]): ReturnType<typeof createLinkedTokenStream> {
   const stream = createLinkedTokenStream(values.length);
   for (let i = 0; i < values.length; i++) {
-    appendLiveSlot(stream, i, values[i]!);
+    appendLiveSlot(stream, i, values[i]);
   }
   return stream;
 }
@@ -49,7 +49,9 @@ describe('BpeLinkedTokenStream', () => {
   it('rejects double-append into the same slot', () => {
     const stream = createLinkedTokenStream(2);
     appendLiveSlot(stream, 0, 1);
-    expect(() => appendLiveSlot(stream, 0, 2)).toThrow(/already alive/);
+    expect(() => {
+      appendLiveSlot(stream, 0, 2);
+    }).toThrow(/already alive/);
   });
 
   it('merging two adjacent middle slots replaces them with the merged token in place', () => {

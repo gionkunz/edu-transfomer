@@ -32,11 +32,11 @@ function trainReferenceFullRescan(
     stream = new Uint32Array(0);
   } else {
     stream = new Uint32Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) stream[i] = S + bytes[i]!;
+    for (let i = 0; i < bytes.length; i++) stream[i] = S + bytes[i];
   }
 
   const rows: Uint8Array[] = [];
-  for (let i = 0; i < S; i++) rows[i] = enc.encode(specials[i]!);
+  for (let i = 0; i < S; i++) rows[i] = enc.encode(specials[i]);
   for (let b = 0; b < 256; b++) rows[S + b] = new Uint8Array([b]);
 
   const merges: [number, number][] = [];
@@ -47,11 +47,11 @@ function trainReferenceFullRescan(
     if (pair === null) break;
     const L = pair.L;
     const R = pair.R;
-    const lb = rows[L]!;
-    const rb = rows[R]!;
+    const lb = rows[L];
+    const rb = rows[R];
     rows[nextId] = new Uint8Array(lb.length + rb.length);
-    rows[nextId]!.set(lb, 0);
-    rows[nextId]!.set(rb, lb.length);
+    rows[nextId].set(lb, 0);
+    rows[nextId].set(rb, lb.length);
     merges.push([L, R]);
     // Greedy non-overlapping rewrite into a fresh Uint32Array.
     let outLen = 0;
@@ -73,7 +73,7 @@ function trainReferenceFullRescan(
         out[w++] = nextId;
         i += 2;
       } else {
-        out[w++] = stream[i]!;
+        out[w++] = stream[i];
         i += 1;
       }
     }
@@ -133,7 +133,7 @@ describe('BPE incremental training equivalence with reference full-rescan', () =
             };
             expect(json.merges.length).toBe(refTokenizerProbe.length);
             for (let i = 0; i < json.merges.length; i++) {
-              expect(json.merges[i]).toEqual([refTokenizerProbe[i]![0], refTokenizerProbe[i]![1]]);
+              expect(json.merges[i]).toEqual([refTokenizerProbe[i][0], refTokenizerProbe[i][1]]);
             }
           } finally {
             await rm(dir, { recursive: true, force: true });
@@ -159,7 +159,7 @@ describe('BPE training: trainFromFiles ≡ in-memory train on the same combined 
       const paths: string[] = [];
       for (let i = 0; i < shards.length; i++) {
         const p = path.join(dir, `shard-${String(i)}.txt`);
-        await writeFile(p, shards[i]!);
+        await writeFile(p, shards[i]);
         paths.push(path.resolve(p));
       }
 
@@ -171,7 +171,7 @@ describe('BPE training: trainFromFiles ≡ in-memory train on the same combined 
 
       expect(tDisk.vocabSize).toBe(tMem.vocabSize);
 
-      const probes = [shards[0]!, shards[2]!, shards.join('\n'), 'héllo', 'efef'];
+      const probes = [shards[0], shards[2], shards.join('\n'), 'héllo', 'efef'];
       for (const p of probes) {
         expect(tDisk.encode(p)).toEqual(tMem.encode(p));
       }

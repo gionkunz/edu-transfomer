@@ -69,7 +69,7 @@ export function materializeUtf8BytesIntoSlotPoolSync(
   }
   const stream = createLinkedTokenStream(corpusUtf8.length);
   for (let j = 0; j < corpusUtf8.length; j++) {
-    appendLiveSlot(stream, j, S + corpusUtf8[j]!);
+    appendLiveSlot(stream, j, S + corpusUtf8[j]);
   }
   return stream;
 }
@@ -95,7 +95,7 @@ export async function materializeUtf8BytesIntoSlotPool(
   while (j < corpusUtf8.length) {
     const end = Math.min(j + RAM_MATERIALIZE_STRIPE_BYTES, corpusUtf8.length);
     for (; j < end; j++) {
-      appendLiveSlot(stream, j, S + corpusUtf8[j]!);
+      appendLiveSlot(stream, j, S + corpusUtf8[j]);
     }
     if (yieldFn !== undefined) {
       await yieldFn();
@@ -149,7 +149,8 @@ export async function materializeFilesIntoSlotPool(
 
     if (fi > 0) {
       // Synthetic inter-file separator. Counts toward slots but NOT toward
-      // `onCorpusUtf8Bytes` (matches legacy `writeJoinedCorpusAsTokenIdsToFile`).
+      // `onCorpusUtf8Bytes` — matches the historical "join files with `\n`"
+      // semantics of the in-memory training path.
       appendLiveSlot(stream, nextSlot, S + FILE_SEPARATOR_BYTE);
       nextSlot += 1;
     }
@@ -160,7 +161,7 @@ export async function materializeFilesIntoSlotPool(
         const buf = chunk as Buffer;
         // Tight synchronous inner loop — one slot per byte, no per-byte await.
         for (let i = 0; i < buf.length; i++) {
-          appendLiveSlot(stream, nextSlot, S + buf[i]!);
+          appendLiveSlot(stream, nextSlot, S + buf[i]);
           nextSlot += 1;
         }
         utf8Total += BigInt(buf.length);

@@ -1,22 +1,26 @@
 /**
  * Adjacent pair key for byte-level BPE frequency maps (stable joiner).
  *
- * @deprecated Allocates a fresh string per call, which dominates the BPE
- * training hot path on large corpora (~30 ns per pair × 300 MB × M merges).
- * The production training path under
- * `packages/tokenizer/src/bpe-train-incremental/` keys pair frequencies by
- * `(L, R)` numerically through `BpePairFreqIndex` — use that instead. This
- * helper is retained for fixtures, debug tooling, and parity tests only.
+ * @internal Reference implementation, not part of the production hot path.
+ * The production training path under `packages/tokenizer/src/bpe-train-incremental/`
+ * keys pair frequencies by `(L, R)` numerically through `BpePairFreqIndex` to avoid
+ * the per-pair string allocation this helper performs. This function exists to back
+ * the full-rescan reference trainer used by the equivalence and performance tests
+ * (`__tests__/bpe-train-incremental.spec.ts`, `__tests__/bpe-train-perf.spec.ts`).
  */
 export function bpePairKey(L: number, R: number): string {
   return `${String(L)}\0${String(R)}`;
 }
 
 /**
- * @deprecated O(N) per call. The training loop used to invoke this once per
- * merge, producing the `O(N · M)` blow-up that the incremental pipeline in
- * `packages/tokenizer/src/bpe-train-incremental/` fixes. Retained for parity
- * tests against the new path; do not use in new hot-path code.
+ * Full-corpus adjacent-pair frequency scan (overlapping observations).
+ *
+ * @internal Reference implementation, not part of the production hot path.
+ * Runs in O(N) per call. The production training loop in
+ * `packages/tokenizer/src/bpe-train-incremental/` maintains pair frequencies
+ * incrementally instead — this helper exists so the equivalence tests can
+ * compare merge-by-merge against the simpler full-rescan baseline, and so the
+ * performance benchmark has a baseline to measure speedup against.
  */
 export function countAdjacentPairsOverlappingUint32(stream: Uint32Array): Map<string, number> {
   const freq = new Map<string, number>();
@@ -34,11 +38,10 @@ export function countAdjacentPairsOverlappingUint32(stream: Uint32Array): Map<st
  * Best pair for BPE training: max count among pairs with count ≥ 2;
  * tie-break smaller L, then smaller R.
  *
- * @deprecated Linear scan over a `Map<string, number>` whose keys are produced
- * by {@link bpePairKey}; both per-pair string allocation and the full-frequency-map
- * input are dominated by the typed-array `pickArgmaxByCountTieLR` in
- * `packages/tokenizer/src/bpe-train-incremental/pair-freq-index.ts`. Retained
- * for parity tests only.
+ * @internal Reference implementation, not part of the production hot path.
+ * Pairs with the typed-array `pickArgmaxByCountTieLR` in
+ * `packages/tokenizer/src/bpe-train-incremental/pair-freq-index.ts` as the
+ * full-rescan baseline used by the equivalence and performance tests.
  */
 export function pickBestMergePair(freq: Map<string, number>): { L: number; R: number } | null {
   let bestFreq = -1;

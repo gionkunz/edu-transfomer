@@ -113,7 +113,7 @@ describe('BPETokenizer', () => {
   });
 
   it('trainFromFiles matches train() on corpus joined like CLI (newline between files)', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'bpe-train-disk-parity-'));
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'bpe-trainfromfiles-parity-'));
     try {
       const f1 = path.join(dir, 'a.txt');
       const f2 = path.join(dir, 'b.txt');

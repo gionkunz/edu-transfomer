@@ -61,11 +61,9 @@ function trainReferenceFullRescan(
   const start = performance.now();
   let nextId = floor;
   while (nextId < vocabSize) {
-    // The whole point of this benchmark is to time the deprecated O(N·M) path
-    // against the new incremental one — the deprecation warnings fire by design.
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    // Reference baseline — full O(N) rescan per merge — kept here only so the
+    // benchmark has something concrete to measure the incremental path against.
     const freq = countAdjacentPairsOverlappingUint32(stream);
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
     const pair = pickBestMergePair(freq);
     if (pair === null) break;
     merges.push([pair.L, pair.R]);

@@ -138,7 +138,7 @@ export function unitMergeSlot(
       `BpeLinkedTokenStream.unitMergeSlot: leftSlot ${String(leftSlot)} is not alive`,
     );
   }
-  const rightSlot = stream.next[leftSlot]!;
+  const rightSlot = stream.next[leftSlot];
   if (rightSlot === END) {
     throw new Error(
       `BpeLinkedTokenStream.unitMergeSlot: leftSlot ${String(leftSlot)} has no live successor`,
@@ -149,7 +149,7 @@ export function unitMergeSlot(
       `BpeLinkedTokenStream.unitMergeSlot: successor slot ${String(rightSlot)} is not alive`,
     );
   }
-  const afterRight = stream.next[rightSlot]!;
+  const afterRight = stream.next[rightSlot];
   stream.value[leftSlot] = mergedTokenId >>> 0;
   stream.next[leftSlot] = afterRight;
   if (afterRight !== END) {
@@ -173,9 +173,9 @@ export function extractLiveTokenIds(stream: BpeLinkedTokenStream): Uint32Array {
   let cur = stream.head;
   let i = 0;
   while (cur !== END) {
-    out[i] = stream.value[cur]!;
+    out[i] = stream.value[cur];
     i += 1;
-    cur = stream.next[cur]!;
+    cur = stream.next[cur];
   }
   if (i !== stream.liveCount) {
     throw new Error(

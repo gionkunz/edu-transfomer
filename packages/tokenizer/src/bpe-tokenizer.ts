@@ -159,16 +159,8 @@ export type BpeTrainFromFilesHooks = {
   readonly yieldToHost?: () => void | Promise<void>;
 };
 
-/** Options for **`trainFromFiles`** (disk-streamed BPE; no giant in-memory `Buffer` concat). */
+/** Options for **`trainFromFiles`** (reads each file as raw UTF-8 bytes; no giant in-memory `Buffer` concat). */
 export type BpeTrainFromFilesOptions = {
-  /**
-   * Reserved for future compatibility — historically pointed `mkdtemp` to a non-default
-   * temp parent for the per-merge token-stream files. The incremental training path no
-   * longer creates per-merge temp files, so this option is now unused; it remains in
-   * the type for source-compat.
-   */
-  readonly tempDir?: string;
-
   readonly hooks?: BpeTrainFromFilesHooks;
 };
 
@@ -366,8 +358,7 @@ export class BPETokenizer implements Tokenizer {
    * between files), materializes a single in-memory linked-list slot pool sized exactly to the
    * total byte length, then runs the incremental merge loop directly against that pool. The legacy
    * "round-trip a `u32` LE token stream through disk between merges" model is gone — every merge is
-   * an `O(K_m + P_m)` in-place operation against the slot pool, no temp files are created, and
-   * `tempDir` is now ignored.
+   * an `O(K_m + P_m)` in-place operation against the slot pool and no temp files are created.
    */
   async trainFromFiles(
     sortedAbsolutePaths: readonly string[],

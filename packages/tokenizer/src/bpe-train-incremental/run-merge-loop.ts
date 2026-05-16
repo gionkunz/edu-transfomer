@@ -174,17 +174,17 @@ function applyOneMerge(
   // Snapshot cost is `O(K_m)` with no allocation churn beyond the typed-array.
   const sites = collectOccurrencesIntoArray(index, occList, L, R);
   for (let k = 0; k < sites.length; k++) {
-    const i = sites[k]!;
+    const i = sites[k];
     // Site invalidated by an earlier merge in this same iteration (e.g. an
     // overlapping `(X, X)` adjacency that was consumed when its left neighbor
     // was merged). Skip — matches today's `r += 2` non-overlap rule.
     if (stream.alive[i] === 0) continue;
-    const j = stream.next[i]!;
+    const j = stream.next[i];
     if (j === END || stream.alive[j] === 0) continue;
     if (stream.value[i] !== L || stream.value[j] !== R) continue;
 
-    const prevSlot = stream.prev[i]!;
-    const nextSlot = stream.next[j]!;
+    const prevSlot = stream.prev[i];
+    const nextSlot = stream.next[j];
 
     // Drop the up-to-three pairs that touched slots {i, j} from the index.
     // (prev, L) is recorded at slot `prevSlot` (its pairOf entry). (L, R) is
@@ -202,10 +202,10 @@ function applyOneMerge(
 
     // Add the up-to-two new pairs that touch the new slot i.
     if (prevSlot !== END) {
-      incrementPair(index, occList, stream, stream.value[prevSlot]!, mergedId, prevSlot);
+      incrementPair(index, occList, stream, stream.value[prevSlot], mergedId, prevSlot);
     }
     if (nextSlot !== END) {
-      incrementPair(index, occList, stream, mergedId, stream.value[nextSlot]!, i);
+      incrementPair(index, occList, stream, mergedId, stream.value[nextSlot], i);
     }
   }
   return true;
@@ -253,9 +253,9 @@ export function buildInitialPairIndex(stream: BpeLinkedTokenStream): {
 
   let cur = stream.head;
   while (cur !== END) {
-    const nxt = stream.next[cur]!;
+    const nxt = stream.next[cur];
     if (nxt === END) break;
-    incrementPair(index, occList, stream, stream.value[cur]!, stream.value[nxt]!, cur);
+    incrementPair(index, occList, stream, stream.value[cur], stream.value[nxt], cur);
     cur = nxt;
   }
   return { index, occList, distinctInitialPairs: index.size };
