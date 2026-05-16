@@ -1,59 +1,41 @@
 import {
   dispatchAdd,
   dispatchAddBf16,
-  dispatchAddFp16,
   dispatchAdamWStep,
   dispatchBroadcastFillScalar,
   dispatchBroadcastFillScalarBf16,
-  dispatchBroadcastFillScalarFp16,
   dispatchCrossEntropyFromLogits,
   dispatchCrossEntropyFromLogitsBf16,
-  dispatchCrossEntropyFromLogitsFp16,
   dispatchCrossEntropyLogitsGrad,
   dispatchCrossEntropyLogitsGradBf16,
-  dispatchCrossEntropyLogitsGradFp16,
   dispatchEmbeddingGather,
   dispatchEmbeddingGatherBf16,
-  dispatchEmbeddingGatherFp16,
   dispatchEmbeddingScatterAccum,
   dispatchEmbeddingScatterAccumBf16,
-  dispatchEmbeddingScatterAccumFp16,
   dispatchGelu,
   dispatchGeluBackward,
   dispatchGeluBackwardBf16,
-  dispatchGeluBackwardFp16,
   dispatchGeluBf16,
-  dispatchGeluFp16,
   dispatchMatMul,
   dispatchMatMulBf16,
-  dispatchMatMulFp16,
   dispatchMul,
   dispatchMulBf16,
-  dispatchMulFp16,
   dispatchReduceSum,
   dispatchReduceSumBf16,
-  dispatchReduceSumFp16,
   dispatchRmsNorm,
   dispatchRmsNormBf16,
-  dispatchRmsNormFp16,
   dispatchRmsNormGradGamma,
   dispatchRmsNormGradGammaBf16,
-  dispatchRmsNormGradGammaFp16,
   dispatchRmsNormGradInput,
   dispatchRmsNormGradInputBf16,
-  dispatchRmsNormGradInputFp16,
   dispatchScale,
   dispatchScaleBf16,
-  dispatchScaleFp16,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
   dispatchSoftmaxBackwardBf16,
-  dispatchSoftmaxBackwardFp16,
   dispatchSoftmaxBf16,
-  dispatchSoftmaxFp16,
   dispatchTranspose,
   dispatchTransposeBf16,
-  dispatchTransposeFp16,
 } from '@llm-transformer-diy/gpu';
 
 import {
@@ -84,10 +66,8 @@ function dispatchMatMulD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchMatMul(ctx, registry, a, b, out, M, N, K);
-  } else if (dt === 'bf16') {
-    dispatchMatMulBf16(ctx, registry, a, b, out, M, N, K);
   } else {
-    dispatchMatMulFp16(ctx, registry, a, b, out, M, N, K);
+    dispatchMatMulBf16(ctx, registry, a, b, out, M, N, K);
   }
 }
 
@@ -102,10 +82,8 @@ function dispatchTransposeD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchTranspose(ctx, registry, src, dst, rows, cols);
-  } else if (dt === 'bf16') {
-    dispatchTransposeBf16(ctx, registry, src, dst, rows, cols);
   } else {
-    dispatchTransposeFp16(ctx, registry, src, dst, rows, cols);
+    dispatchTransposeBf16(ctx, registry, src, dst, rows, cols);
   }
 }
 
@@ -120,10 +98,8 @@ function dispatchAddD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchAdd(ctx, registry, a, b, out, n);
-  } else if (dt === 'bf16') {
-    dispatchAddBf16(ctx, registry, a, b, out, n);
   } else {
-    dispatchAddFp16(ctx, registry, a, b, out, n);
+    dispatchAddBf16(ctx, registry, a, b, out, n);
   }
 }
 
@@ -138,10 +114,8 @@ function dispatchMulD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchMul(ctx, registry, a, b, out, n);
-  } else if (dt === 'bf16') {
-    dispatchMulBf16(ctx, registry, a, b, out, n);
   } else {
-    dispatchMulFp16(ctx, registry, a, b, out, n);
+    dispatchMulBf16(ctx, registry, a, b, out, n);
   }
 }
 
@@ -156,10 +130,8 @@ function dispatchScaleD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchScale(ctx, registry, inp, out, n, k);
-  } else if (dt === 'bf16') {
-    dispatchScaleBf16(ctx, registry, inp, out, n, k);
   } else {
-    dispatchScaleFp16(ctx, registry, inp, out, n, k);
+    dispatchScaleBf16(ctx, registry, inp, out, n, k);
   }
 }
 
@@ -173,10 +145,8 @@ function dispatchGeluD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchGelu(ctx, registry, inp, out, n);
-  } else if (dt === 'bf16') {
-    dispatchGeluBf16(ctx, registry, inp, out, n);
   } else {
-    dispatchGeluFp16(ctx, registry, inp, out, n);
+    dispatchGeluBf16(ctx, registry, inp, out, n);
   }
 }
 
@@ -191,10 +161,8 @@ function dispatchSoftmaxD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchSoftmax(ctx, registry, inp, out, rows, cols);
-  } else if (dt === 'bf16') {
-    dispatchSoftmaxBf16(ctx, registry, inp, out, rows, cols);
   } else {
-    dispatchSoftmaxFp16(ctx, registry, inp, out, rows, cols);
+    dispatchSoftmaxBf16(ctx, registry, inp, out, rows, cols);
   }
 }
 
@@ -209,10 +177,8 @@ function dispatchReduceSumD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchReduceSum(ctx, registry, inp, out, rows, cols);
-  } else if (dt === 'bf16') {
-    dispatchReduceSumBf16(ctx, registry, inp, out, rows, cols);
   } else {
-    dispatchReduceSumFp16(ctx, registry, inp, out, rows, cols);
+    dispatchReduceSumBf16(ctx, registry, inp, out, rows, cols);
   }
 }
 
@@ -230,10 +196,8 @@ function dispatchRmsNormD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchRmsNorm(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
-  } else if (dt === 'bf16') {
-    dispatchRmsNormBf16(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
   } else {
-    dispatchRmsNormFp16(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
+    dispatchRmsNormBf16(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
   }
 }
 
@@ -248,10 +212,8 @@ function dispatchGeluBackwardD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchGeluBackward(ctx, registry, gradOut, inp, gradIn, n);
-  } else if (dt === 'bf16') {
-    dispatchGeluBackwardBf16(ctx, registry, gradOut, inp, gradIn, n);
   } else {
-    dispatchGeluBackwardFp16(ctx, registry, gradOut, inp, gradIn, n);
+    dispatchGeluBackwardBf16(ctx, registry, gradOut, inp, gradIn, n);
   }
 }
 
@@ -267,10 +229,8 @@ function dispatchSoftmaxBackwardD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchSoftmaxBackward(ctx, registry, gradOut, y, gradIn, rows, cols);
-  } else if (dt === 'bf16') {
-    dispatchSoftmaxBackwardBf16(ctx, registry, gradOut, y, gradIn, rows, cols);
   } else {
-    dispatchSoftmaxBackwardFp16(ctx, registry, gradOut, y, gradIn, rows, cols);
+    dispatchSoftmaxBackwardBf16(ctx, registry, gradOut, y, gradIn, rows, cols);
   }
 }
 
@@ -300,21 +260,8 @@ function dispatchRmsNormGradInputD(
       cols,
       epsilon,
     );
-  } else if (dt === 'bf16') {
-    dispatchRmsNormGradInputBf16(
-      ctx,
-      registry,
-      x,
-      gamma,
-      gammaLen,
-      gradOut,
-      gradIn,
-      rows,
-      cols,
-      epsilon,
-    );
   } else {
-    dispatchRmsNormGradInputFp16(
+    dispatchRmsNormGradInputBf16(
       ctx,
       registry,
       x,
@@ -342,10 +289,8 @@ function dispatchRmsNormGradGammaD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchRmsNormGradGamma(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
-  } else if (dt === 'bf16') {
-    dispatchRmsNormGradGammaBf16(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
   } else {
-    dispatchRmsNormGradGammaFp16(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
+    dispatchRmsNormGradGammaBf16(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
   }
 }
 
@@ -369,18 +314,8 @@ function dispatchEmbeddingScatterAccumD(
       numTokens,
       embedDim,
     );
-  } else if (dt === 'bf16') {
-    dispatchEmbeddingScatterAccumBf16(
-      ctx,
-      registry,
-      gradTokens,
-      indices,
-      gradWeights,
-      numTokens,
-      embedDim,
-    );
   } else {
-    dispatchEmbeddingScatterAccumFp16(
+    dispatchEmbeddingScatterAccumBf16(
       ctx,
       registry,
       gradTokens,
@@ -414,19 +349,8 @@ function dispatchCrossEntropyLogitsGradD(
       rows,
       cols,
     );
-  } else if (dt === 'bf16') {
-    dispatchCrossEntropyLogitsGradBf16(
-      ctx,
-      registry,
-      probs,
-      targets,
-      upstreamPerRow,
-      gradLogitsOut,
-      rows,
-      cols,
-    );
   } else {
-    dispatchCrossEntropyLogitsGradFp16(
+    dispatchCrossEntropyLogitsGradBf16(
       ctx,
       registry,
       probs,
@@ -451,10 +375,8 @@ function dispatchEmbeddingGatherD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchEmbeddingGather(ctx, registry, weights, indices, out, tokens, embedDim);
-  } else if (dt === 'bf16') {
-    dispatchEmbeddingGatherBf16(ctx, registry, weights, indices, out, tokens, embedDim);
   } else {
-    dispatchEmbeddingGatherFp16(ctx, registry, weights, indices, out, tokens, embedDim);
+    dispatchEmbeddingGatherBf16(ctx, registry, weights, indices, out, tokens, embedDim);
   }
 }
 
@@ -470,10 +392,8 @@ function dispatchCrossEntropyFromLogitsD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchCrossEntropyFromLogits(ctx, registry, logits, targets, out, rows, cols);
-  } else if (dt === 'bf16') {
-    dispatchCrossEntropyFromLogitsBf16(ctx, registry, logits, targets, out, rows, cols);
   } else {
-    dispatchCrossEntropyFromLogitsFp16(ctx, registry, logits, targets, out, rows, cols);
+    dispatchCrossEntropyFromLogitsBf16(ctx, registry, logits, targets, out, rows, cols);
   }
 }
 
@@ -487,10 +407,8 @@ function dispatchBroadcastFillScalarD(
   const { ctx, registry } = rt;
   if (dt === 'f32') {
     dispatchBroadcastFillScalar(ctx, registry, scalar, out, n);
-  } else if (dt === 'bf16') {
-    dispatchBroadcastFillScalarBf16(ctx, registry, scalar, out, n);
   } else {
-    dispatchBroadcastFillScalarFp16(ctx, registry, scalar, out, n);
+    dispatchBroadcastFillScalarBf16(ctx, registry, scalar, out, n);
   }
 }
 

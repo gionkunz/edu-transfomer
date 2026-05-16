@@ -74,3 +74,21 @@ Tasks are grouped by the three migration phases in `design.md` (inference-first 
 - [x] 9.3 Verify the full nx test run is green (`nx run-many -t test --all`) and that all WebGPU-gated 16-bit tests are skipped (not failed) when no adapter is available.
 - [x] 9.4 Run `npm run build` and `npx nx run @llm-transformer-diy/cli:prune` to make sure the pruned CLI bundle still installs and `node dist/apps/cli/main.js --help` shows the new `--dtype` flag.
 - [x] 9.5 Capture the measured VRAM / throughput results from task 7.5 in a short note in the change folder so the archive step has the evidence the success criterion requires.
+
+## 10. Pivot to bf16-only (drop fp16)
+
+After the dual-dtype implementation landed (sections 1–9), benchmarking confirmed `bf16` and `fp16` have identical memory / bandwidth wins on WebGPU. Without loss scaling — which we deliberately do not implement to keep the educational stack small — `fp16` training is unstable. `bf16` keeps `f32`'s exponent range and is stable in our reference configs. We therefore drop `fp16` entirely.
+
+- [x] 10.1 Delete every `.fp16-*.frag.wgsl` and `shared-fp16-*.wgsl` shader from `packages/gpu/src/kernels/`.
+- [x] 10.2 Drop the CPU `fp16` pack/unpack helpers; rename `bf16-fp16-pack.ts` to `bf16-pack.ts` and update the matching spec.
+- [x] 10.3 Drop `createFp16StorageBuffer`, `writeFp16Buffer`, `readFp16Buffer` from `packages/gpu/src/buffer.ts` and the buffer round-trip spec.
+- [x] 10.4 Drop the `fp16` branches in `load-core-wgsl.ts` (loader); remove the `fp16Native` plumbing.
+- [x] 10.5 Drop `CORE_KERNEL_*_FP16` IDs, `dispatch*Fp16` wrappers, and every `fp16` kernel registration in `core-kernels.ts`.
+- [x] 10.6 Stop probing `'shader-f16'` in `GpuContext.create`; drop the `fp16` case in `supportsDtype`.
+- [x] 10.7 Drop the `cpu*Fp16` reference functions from `cpu-reference.ts`.
+- [x] 10.8 Narrow `DType` / `FloatDType` in `packages/tensor` to `f32 | bf16 | u32`; drop `fp16` branches in `tensor.ts`, `ops.ts`, and the `cast` op.
+- [x] 10.9 Drop the `fp16` branches in `autograd` parameter / gradient-check, `training/adamw` spec, and `training/checkpoint` + `io/checkpoint-format`.
+- [x] 10.10 Drop `fp16` from the CLI `--dtype` choice list (`compute-dtype.ts`, `cli-program.ts`, `train.tsx` warning).
+- [x] 10.11 Update `docs/project.md`, `README.md`, and this change's `proposal.md` / `spec.md` to describe bf16 as the only 16-bit dtype.
+- [x] 10.12 Drop the `fp16` cases / cross-dtype assertions from every spec file under `packages/gpu`, `packages/tensor`, and `packages/training`.
+- [ ] 10.13 Run `nx run-many -t typecheck --all` and `nx run-many -t test --all`; fix any straggling compile errors or stale snapshots.

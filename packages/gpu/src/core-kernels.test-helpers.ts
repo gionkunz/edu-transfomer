@@ -1,62 +1,40 @@
 import {
   createBf16StorageBuffer,
   createFloat32StorageBuffer,
-  createFp16StorageBuffer,
   float32ByteLength,
   readBf16Buffer,
   readFloat32Buffer,
-  readFp16Buffer,
   writeBf16Buffer,
   writeFloat32Buffer,
-  writeFp16Buffer,
 } from './buffer';
-import {
-  unpackBf16ToFloat32,
-  unpackFp16ToFloat32,
-  packBf16FromFloat32,
-  packFp16FromFloat32,
-} from './bf16-fp16-pack';
+import { packBf16FromFloat32, unpackBf16ToFloat32 } from './bf16-pack';
 import {
   dispatchAdd,
   dispatchAddBf16,
-  dispatchAddFp16,
   dispatchGelu,
   dispatchGeluBackward,
   dispatchGeluBackwardBf16,
-  dispatchGeluBackwardFp16,
   dispatchGeluBf16,
-  dispatchGeluFp16,
   dispatchMatMul,
   dispatchMatMulBf16,
-  dispatchMatMulFp16,
   dispatchMul,
   dispatchMulBf16,
-  dispatchMulFp16,
   dispatchReduceMax,
   dispatchReduceMaxBf16,
-  dispatchReduceMaxFp16,
   dispatchReduceSum,
   dispatchReduceSumBf16,
-  dispatchReduceSumFp16,
   dispatchRmsNorm,
   dispatchRmsNormBf16,
-  dispatchRmsNormFp16,
   dispatchRmsNormGradGammaBf16,
-  dispatchRmsNormGradGammaFp16,
   dispatchRmsNormGradInputBf16,
-  dispatchRmsNormGradInputFp16,
   dispatchScale,
   dispatchScaleBf16,
-  dispatchScaleFp16,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
   dispatchSoftmaxBackwardBf16,
-  dispatchSoftmaxBackwardFp16,
   dispatchSoftmaxBf16,
-  dispatchSoftmaxFp16,
   dispatchTranspose,
   dispatchTransposeBf16,
-  dispatchTransposeFp16,
 } from './core-kernels';
 import type { GpuContext } from './device';
 import type { KernelRegistry } from './kernel-registry';
@@ -357,33 +335,20 @@ export async function smokeRmsNorm(
   );
 }
 
-/** Test-only 16-bit smoke dtype (`bf16` **u32** pack or **`fp16`** packed/native per registry). */
-export type Smoke16Dtype = 'bf16' | 'fp16';
+/** Test-only 16-bit smoke dtype — only `bf16` is supported (fp16 was dropped). */
+export type Smoke16Dtype = 'bf16';
 
-function create16(device: GPUDevice, n: number, d: Smoke16Dtype): GPUBuffer {
-  return d === 'bf16' ? createBf16StorageBuffer(device, n) : createFp16StorageBuffer(device, n);
+function writeBf16(queue: GPUQueue, buf: GPUBuffer, f32: Float32Array): void {
+  writeBf16Buffer(queue, buf, packBf16FromFloat32(f32));
 }
 
-function write16(queue: GPUQueue, buf: GPUBuffer, f32: Float32Array, d: Smoke16Dtype): void {
-  const p = d === 'bf16' ? packBf16FromFloat32(f32) : packFp16FromFloat32(f32);
-  if (d === 'bf16') {
-    writeBf16Buffer(queue, buf, p);
-  } else {
-    writeFp16Buffer(queue, buf, p);
-  }
-}
-
-async function read16(
+async function readBf16(
   device: GPUDevice,
   queue: GPUQueue,
   buf: GPUBuffer,
   n: number,
-  d: Smoke16Dtype,
 ): Promise<Float32Array> {
-  if (d === 'bf16') {
-    return unpackBf16ToFloat32(await readBf16Buffer(device, queue, buf, n));
-  }
-  return unpackFp16ToFloat32(await readFp16Buffer(device, queue, buf, n));
+  return unpackBf16ToFloat32(await readBf16Buffer(device, queue, buf, n));
 }
 
 export async function smokeMatMul16(
@@ -394,19 +359,15 @@ export async function smokeMatMul16(
   M: number,
   N: number,
   K: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufA = create16(ctx.device, M * K, dtype);
-  const bufB = create16(ctx.device, K * N, dtype);
-  const bufC = create16(ctx.device, M * N, dtype);
-  write16(ctx.queue, bufA, a, dtype);
-  write16(ctx.queue, bufB, b, dtype);
-  if (dtype === 'bf16') {
-    dispatchMatMulBf16(ctx, registry, bufA, bufB, bufC, M, N, K);
-  } else {
-    dispatchMatMulFp16(ctx, registry, bufA, bufB, bufC, M, N, K);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufC, M * N, dtype);
+  const bufA = createBf16StorageBuffer(ctx.device, M * K);
+  const bufB = createBf16StorageBuffer(ctx.device, K * N);
+  const bufC = createBf16StorageBuffer(ctx.device, M * N);
+  writeBf16(ctx.queue, bufA, a);
+  writeBf16(ctx.queue, bufB, b);
+  dispatchMatMulBf16(ctx, registry, bufA, bufB, bufC, M, N, K);
+  const out = await readBf16(ctx.device, ctx.queue, bufC, M * N);
   bufA.destroy();
   bufB.destroy();
   bufC.destroy();
@@ -419,17 +380,13 @@ export async function smokeTranspose16(
   src: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, rows * cols, dtype);
-  write16(ctx.queue, bufIn, src, dtype);
-  if (dtype === 'bf16') {
-    dispatchTransposeBf16(ctx, registry, bufIn, bufOut, rows, cols);
-  } else {
-    dispatchTransposeFp16(ctx, registry, bufIn, bufOut, rows, cols);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, rows * cols, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, rows * cols);
+  writeBf16(ctx.queue, bufIn, src);
+  dispatchTransposeBf16(ctx, registry, bufIn, bufOut, rows, cols);
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, rows * cols);
   bufIn.destroy();
   bufOut.destroy();
   return out;
@@ -441,19 +398,15 @@ export async function smokeAdd16(
   a: Float32Array,
   b: Float32Array,
   n: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufA = create16(ctx.device, n, dtype);
-  const bufB = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufA, a, dtype);
-  write16(ctx.queue, bufB, b, dtype);
-  if (dtype === 'bf16') {
-    dispatchAddBf16(ctx, registry, bufA, bufB, bufO, n);
-  } else {
-    dispatchAddFp16(ctx, registry, bufA, bufB, bufO, n);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufA = createBf16StorageBuffer(ctx.device, n);
+  const bufB = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufA, a);
+  writeBf16(ctx.queue, bufB, b);
+  dispatchAddBf16(ctx, registry, bufA, bufB, bufO, n);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufA.destroy();
   bufB.destroy();
   bufO.destroy();
@@ -466,19 +419,15 @@ export async function smokeMul16(
   a: Float32Array,
   b: Float32Array,
   n: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufA = create16(ctx.device, n, dtype);
-  const bufB = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufA, a, dtype);
-  write16(ctx.queue, bufB, b, dtype);
-  if (dtype === 'bf16') {
-    dispatchMulBf16(ctx, registry, bufA, bufB, bufO, n);
-  } else {
-    dispatchMulFp16(ctx, registry, bufA, bufB, bufO, n);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufA = createBf16StorageBuffer(ctx.device, n);
+  const bufB = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufA, a);
+  writeBf16(ctx.queue, bufB, b);
+  dispatchMulBf16(ctx, registry, bufA, bufB, bufO, n);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufA.destroy();
   bufB.destroy();
   bufO.destroy();
@@ -491,17 +440,13 @@ export async function smokeScale16(
   a: Float32Array,
   n: number,
   scale: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufA = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufA, a, dtype);
-  if (dtype === 'bf16') {
-    dispatchScaleBf16(ctx, registry, bufA, bufO, n, scale);
-  } else {
-    dispatchScaleFp16(ctx, registry, bufA, bufO, n, scale);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufA = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufA, a);
+  dispatchScaleBf16(ctx, registry, bufA, bufO, n, scale);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufA.destroy();
   bufO.destroy();
   return out;
@@ -512,17 +457,13 @@ export async function smokeGelu16(
   registry: KernelRegistry,
   a: Float32Array,
   n: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufIn, a, dtype);
-  if (dtype === 'bf16') {
-    dispatchGeluBf16(ctx, registry, bufIn, bufO, n);
-  } else {
-    dispatchGeluFp16(ctx, registry, bufIn, bufO, n);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufIn, a);
+  dispatchGeluBf16(ctx, registry, bufIn, bufO, n);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufIn.destroy();
   bufO.destroy();
   return out;
@@ -534,19 +475,15 @@ export async function smokeGeluBackward16(
   gradOut: Float32Array,
   inp: Float32Array,
   n: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufG = create16(ctx.device, n, dtype);
-  const bufI = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufG, gradOut, dtype);
-  write16(ctx.queue, bufI, inp, dtype);
-  if (dtype === 'bf16') {
-    dispatchGeluBackwardBf16(ctx, registry, bufG, bufI, bufO, n);
-  } else {
-    dispatchGeluBackwardFp16(ctx, registry, bufG, bufI, bufO, n);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufG = createBf16StorageBuffer(ctx.device, n);
+  const bufI = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufG, gradOut);
+  writeBf16(ctx.queue, bufI, inp);
+  dispatchGeluBackwardBf16(ctx, registry, bufG, bufI, bufO, n);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufG.destroy();
   bufI.destroy();
   bufO.destroy();
@@ -560,20 +497,16 @@ export async function smokeSoftmaxBackward16(
   y: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
   const n = rows * cols;
-  const bufG = create16(ctx.device, n, dtype);
-  const bufY = create16(ctx.device, n, dtype);
-  const bufO = create16(ctx.device, n, dtype);
-  write16(ctx.queue, bufG, gradOut, dtype);
-  write16(ctx.queue, bufY, y, dtype);
-  if (dtype === 'bf16') {
-    dispatchSoftmaxBackwardBf16(ctx, registry, bufG, bufY, bufO, rows, cols);
-  } else {
-    dispatchSoftmaxBackwardFp16(ctx, registry, bufG, bufY, bufO, rows, cols);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, n, dtype);
+  const bufG = createBf16StorageBuffer(ctx.device, n);
+  const bufY = createBf16StorageBuffer(ctx.device, n);
+  const bufO = createBf16StorageBuffer(ctx.device, n);
+  writeBf16(ctx.queue, bufG, gradOut);
+  writeBf16(ctx.queue, bufY, y);
+  dispatchSoftmaxBackwardBf16(ctx, registry, bufG, bufY, bufO, rows, cols);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, n);
   bufG.destroy();
   bufY.destroy();
   bufO.destroy();
@@ -588,44 +521,29 @@ export async function smokeRmsNormGradInput16(
   gradOut: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
   epsilon = 1e-6,
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufGam = create16(ctx.device, cols, dtype);
-  const bufGo = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, rows * cols, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  write16(ctx.queue, bufGam, gamma, dtype);
-  write16(ctx.queue, bufGo, gradOut, dtype);
-  if (dtype === 'bf16') {
-    dispatchRmsNormGradInputBf16(
-      ctx,
-      registry,
-      bufIn,
-      bufGam,
-      cols,
-      bufGo,
-      bufOut,
-      rows,
-      cols,
-      epsilon,
-    );
-  } else {
-    dispatchRmsNormGradInputFp16(
-      ctx,
-      registry,
-      bufIn,
-      bufGam,
-      cols,
-      bufGo,
-      bufOut,
-      rows,
-      cols,
-      epsilon,
-    );
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, rows * cols, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufGam = createBf16StorageBuffer(ctx.device, cols);
+  const bufGo = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, rows * cols);
+  writeBf16(ctx.queue, bufIn, data);
+  writeBf16(ctx.queue, bufGam, gamma);
+  writeBf16(ctx.queue, bufGo, gradOut);
+  dispatchRmsNormGradInputBf16(
+    ctx,
+    registry,
+    bufIn,
+    bufGam,
+    cols,
+    bufGo,
+    bufOut,
+    rows,
+    cols,
+    epsilon,
+  );
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, rows * cols);
   bufIn.destroy();
   bufGam.destroy();
   bufGo.destroy();
@@ -640,20 +558,16 @@ export async function smokeRmsNormGradGamma16(
   gradOut: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
   epsilon = 1e-6,
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufGo = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, cols, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  write16(ctx.queue, bufGo, gradOut, dtype);
-  if (dtype === 'bf16') {
-    dispatchRmsNormGradGammaBf16(ctx, registry, bufIn, bufGo, bufOut, rows, cols, epsilon);
-  } else {
-    dispatchRmsNormGradGammaFp16(ctx, registry, bufIn, bufGo, bufOut, rows, cols, epsilon);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, cols, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufGo = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, cols);
+  writeBf16(ctx.queue, bufIn, data);
+  writeBf16(ctx.queue, bufGo, gradOut);
+  dispatchRmsNormGradGammaBf16(ctx, registry, bufIn, bufGo, bufOut, rows, cols, epsilon);
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, cols);
   bufIn.destroy();
   bufGo.destroy();
   bufOut.destroy();
@@ -666,17 +580,13 @@ export async function smokeReduceSum16(
   data: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, rows, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  if (dtype === 'bf16') {
-    dispatchReduceSumBf16(ctx, registry, bufIn, bufOut, rows, cols);
-  } else {
-    dispatchReduceSumFp16(ctx, registry, bufIn, bufOut, rows, cols);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, rows, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, rows);
+  writeBf16(ctx.queue, bufIn, data);
+  dispatchReduceSumBf16(ctx, registry, bufIn, bufOut, rows, cols);
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, rows);
   bufIn.destroy();
   bufOut.destroy();
   return out;
@@ -688,17 +598,13 @@ export async function smokeReduceMax16(
   data: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, rows, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  if (dtype === 'bf16') {
-    dispatchReduceMaxBf16(ctx, registry, bufIn, bufOut, rows, cols);
-  } else {
-    dispatchReduceMaxFp16(ctx, registry, bufIn, bufOut, rows, cols);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, rows, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, rows);
+  writeBf16(ctx.queue, bufIn, data);
+  dispatchReduceMaxBf16(ctx, registry, bufIn, bufOut, rows, cols);
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, rows);
   bufIn.destroy();
   bufOut.destroy();
   return out;
@@ -710,17 +616,13 @@ export async function smokeSoftmax16(
   data: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufOut = create16(ctx.device, rows * cols, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  if (dtype === 'bf16') {
-    dispatchSoftmaxBf16(ctx, registry, bufIn, bufOut, rows, cols);
-  } else {
-    dispatchSoftmaxFp16(ctx, registry, bufIn, bufOut, rows, cols);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufOut, rows * cols, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufOut = createBf16StorageBuffer(ctx.device, rows * cols);
+  writeBf16(ctx.queue, bufIn, data);
+  dispatchSoftmaxBf16(ctx, registry, bufIn, bufOut, rows, cols);
+  const out = await readBf16(ctx.device, ctx.queue, bufOut, rows * cols);
   bufIn.destroy();
   bufOut.destroy();
   return out;
@@ -733,20 +635,16 @@ export async function smokeRmsNorm16(
   gamma: Float32Array,
   rows: number,
   cols: number,
-  dtype: Smoke16Dtype,
+  _dtype: Smoke16Dtype = 'bf16',
   epsilon = 1e-6,
 ): Promise<Float32Array> {
-  const bufIn = create16(ctx.device, rows * cols, dtype);
-  const bufG = create16(ctx.device, gamma.length, dtype);
-  const bufO = create16(ctx.device, rows * cols, dtype);
-  write16(ctx.queue, bufIn, data, dtype);
-  write16(ctx.queue, bufG, gamma, dtype);
-  if (dtype === 'bf16') {
-    dispatchRmsNormBf16(ctx, registry, bufIn, bufG, gamma.length, bufO, rows, cols, epsilon);
-  } else {
-    dispatchRmsNormFp16(ctx, registry, bufIn, bufG, gamma.length, bufO, rows, cols, epsilon);
-  }
-  const out = await read16(ctx.device, ctx.queue, bufO, rows * cols, dtype);
+  const bufIn = createBf16StorageBuffer(ctx.device, rows * cols);
+  const bufG = createBf16StorageBuffer(ctx.device, gamma.length);
+  const bufO = createBf16StorageBuffer(ctx.device, rows * cols);
+  writeBf16(ctx.queue, bufIn, data);
+  writeBf16(ctx.queue, bufG, gamma);
+  dispatchRmsNormBf16(ctx, registry, bufIn, bufG, gamma.length, bufO, rows, cols, epsilon);
+  const out = await readBf16(ctx.device, ctx.queue, bufO, rows * cols);
   bufIn.destroy();
   bufG.destroy();
   bufO.destroy();

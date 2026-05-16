@@ -14,12 +14,7 @@
 export const TENSOR_LAYER_MARKER: unique symbol = Symbol.for('@llm-transformer-diy/tensor');
 
 export type { Device, DType, Tensor, TensorRuntime } from './types';
-export {
-  packBf16FromFloat32,
-  packFp16FromFloat32,
-  unpackBf16ToFloat32,
-  unpackFp16ToFloat32,
-} from '@llm-transformer-diy/gpu';
+export { packBf16FromFloat32, unpackBf16ToFloat32 } from '@llm-transformer-diy/gpu';
 export {
   assertDtype,
   assertFloatDtype,

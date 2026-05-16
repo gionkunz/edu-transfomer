@@ -10,13 +10,15 @@ struct Params {
 @group(0) @binding(2) var<storage, read> b: array<u32>;
 @group(0) @binding(3) var<storage, read_write> out: array<u32>;
 
+// One thread per packed pair (one `u32` of `out`).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= params.element_count) {
+  let word_idx = gid.x;
+  let i0 = word_idx << 1u;
+  if (i0 >= params.element_count) {
     return;
   }
-  let av = load_bf16(&a, i);
-  let bv = load_bf16(&b, i);
-  store_bf16(&out, i, av * bv);
+  let av = load_bf16_pair(&a, word_idx);
+  let bv = load_bf16_pair(&b, word_idx);
+  store_bf16_pair(&out, word_idx, av * bv);
 }

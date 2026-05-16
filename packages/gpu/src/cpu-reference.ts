@@ -4,12 +4,7 @@
  * the just-allocated array's known length, so the assertions are safe.
  */
 
-import {
-  packBf16FromFloat32,
-  packFp16FromFloat32,
-  unpackBf16ToFloat32,
-  unpackFp16ToFloat32,
-} from './bf16-fp16-pack';
+import { packBf16FromFloat32, unpackBf16ToFloat32 } from './bf16-pack';
 
 /** sqrt(2/π); must match elementwise-gelu.wgsl `GELU_TANH_COEF`. */
 export const GELU_TANH_COEF = 0.7978845608028654;
@@ -411,15 +406,9 @@ export function cpuAdamWStep(
   }
 }
 
-/** Low/storage dtypes for 16-bit CPU references (matches GPU pack/unpack). */
-export type CpuRef16DType = 'bf16' | 'fp16';
-
-/** Elementwise **f32 → dtype → f32** rounding (same as GPU load/store). */
-export function roundFloat32ToDtype(src: Float32Array, dtype: CpuRef16DType): Float32Array {
-  if (dtype === 'bf16') {
-    return unpackBf16ToFloat32(packBf16FromFloat32(src));
-  }
-  return unpackFp16ToFloat32(packFp16FromFloat32(src));
+/** Elementwise **f32 → bf16 → f32** rounding (same as GPU load/store). */
+export function roundFloat32ToBf16(src: Float32Array): Float32Array {
+  return unpackBf16ToFloat32(packBf16FromFloat32(src));
 }
 
 export function cpuMatMulBf16(
@@ -429,107 +418,47 @@ export function cpuMatMulBf16(
   N: number,
   K: number,
 ): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'bf16');
-  const br = roundFloat32ToDtype(b, 'bf16');
-  return roundFloat32ToDtype(cpuMatMul(ar, br, M, N, K), 'bf16');
-}
-
-export function cpuMatMulFp16(
-  a: Float32Array,
-  b: Float32Array,
-  M: number,
-  N: number,
-  K: number,
-): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'fp16');
-  const br = roundFloat32ToDtype(b, 'fp16');
-  return roundFloat32ToDtype(cpuMatMul(ar, br, M, N, K), 'fp16');
+  const ar = roundFloat32ToBf16(a);
+  const br = roundFloat32ToBf16(b);
+  return roundFloat32ToBf16(cpuMatMul(ar, br, M, N, K));
 }
 
 export function cpuTransposeBf16(src: Float32Array, rows: number, cols: number): Float32Array {
-  const sr = roundFloat32ToDtype(src, 'bf16');
-  return roundFloat32ToDtype(cpuTranspose(sr, rows, cols), 'bf16');
-}
-
-export function cpuTransposeFp16(src: Float32Array, rows: number, cols: number): Float32Array {
-  const sr = roundFloat32ToDtype(src, 'fp16');
-  return roundFloat32ToDtype(cpuTranspose(sr, rows, cols), 'fp16');
+  return roundFloat32ToBf16(cpuTranspose(roundFloat32ToBf16(src), rows, cols));
 }
 
 export function cpuAddBf16(a: Float32Array, b: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'bf16');
-  const br = roundFloat32ToDtype(b, 'bf16');
-  return roundFloat32ToDtype(cpuAdd(ar, br, n), 'bf16');
-}
-
-export function cpuAddFp16(a: Float32Array, b: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'fp16');
-  const br = roundFloat32ToDtype(b, 'fp16');
-  return roundFloat32ToDtype(cpuAdd(ar, br, n), 'fp16');
+  const ar = roundFloat32ToBf16(a);
+  const br = roundFloat32ToBf16(b);
+  return roundFloat32ToBf16(cpuAdd(ar, br, n));
 }
 
 export function cpuMulBf16(a: Float32Array, b: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'bf16');
-  const br = roundFloat32ToDtype(b, 'bf16');
-  return roundFloat32ToDtype(cpuMul(ar, br, n), 'bf16');
-}
-
-export function cpuMulFp16(a: Float32Array, b: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'fp16');
-  const br = roundFloat32ToDtype(b, 'fp16');
-  return roundFloat32ToDtype(cpuMul(ar, br, n), 'fp16');
+  const ar = roundFloat32ToBf16(a);
+  const br = roundFloat32ToBf16(b);
+  return roundFloat32ToBf16(cpuMul(ar, br, n));
 }
 
 export function cpuScaleBf16(a: Float32Array, scale: number, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'bf16');
-  const sr = roundFloat32ToDtype(new Float32Array([scale]), 'bf16')[0] ?? 0;
-  return roundFloat32ToDtype(cpuScale(ar, sr, n), 'bf16');
-}
-
-export function cpuScaleFp16(a: Float32Array, scale: number, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'fp16');
-  const sr = roundFloat32ToDtype(new Float32Array([scale]), 'fp16')[0] ?? 0;
-  return roundFloat32ToDtype(cpuScale(ar, sr, n), 'fp16');
+  const ar = roundFloat32ToBf16(a);
+  const sr = roundFloat32ToBf16(new Float32Array([scale]))[0] ?? 0;
+  return roundFloat32ToBf16(cpuScale(ar, sr, n));
 }
 
 export function cpuGeluBf16(a: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'bf16');
-  return roundFloat32ToDtype(cpuGelu(ar, n), 'bf16');
-}
-
-export function cpuGeluFp16(a: Float32Array, n: number): Float32Array {
-  const ar = roundFloat32ToDtype(a, 'fp16');
-  return roundFloat32ToDtype(cpuGelu(ar, n), 'fp16');
+  return roundFloat32ToBf16(cpuGelu(roundFloat32ToBf16(a), n));
 }
 
 export function cpuReduceSumBf16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  return roundFloat32ToDtype(cpuReduceSum(dr, rows, cols), 'bf16');
-}
-
-export function cpuReduceSumFp16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  return roundFloat32ToDtype(cpuReduceSum(dr, rows, cols), 'fp16');
+  return roundFloat32ToBf16(cpuReduceSum(roundFloat32ToBf16(data), rows, cols));
 }
 
 export function cpuReduceMaxBf16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  return roundFloat32ToDtype(cpuReduceMax(dr, rows, cols), 'bf16');
-}
-
-export function cpuReduceMaxFp16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  return roundFloat32ToDtype(cpuReduceMax(dr, rows, cols), 'fp16');
+  return roundFloat32ToBf16(cpuReduceMax(roundFloat32ToBf16(data), rows, cols));
 }
 
 export function cpuSoftmaxBf16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  return roundFloat32ToDtype(cpuSoftmax(dr, rows, cols), 'bf16');
-}
-
-export function cpuSoftmaxFp16(data: Float32Array, rows: number, cols: number): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  return roundFloat32ToDtype(cpuSoftmax(dr, rows, cols), 'fp16');
+  return roundFloat32ToBf16(cpuSoftmax(roundFloat32ToBf16(data), rows, cols));
 }
 
 export function cpuRmsNormBf16(
@@ -539,21 +468,9 @@ export function cpuRmsNormBf16(
   cols: number,
   epsilon: number,
 ): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  const gr = roundFloat32ToDtype(gamma, 'bf16');
-  return roundFloat32ToDtype(cpuRmsNorm(dr, gr, rows, cols, epsilon), 'bf16');
-}
-
-export function cpuRmsNormFp16(
-  data: Float32Array,
-  gamma: Float32Array,
-  rows: number,
-  cols: number,
-  epsilon: number,
-): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  const gr = roundFloat32ToDtype(gamma, 'fp16');
-  return roundFloat32ToDtype(cpuRmsNorm(dr, gr, rows, cols, epsilon), 'fp16');
+  const dr = roundFloat32ToBf16(data);
+  const gr = roundFloat32ToBf16(gamma);
+  return roundFloat32ToBf16(cpuRmsNorm(dr, gr, rows, cols, epsilon));
 }
 
 export function cpuEmbeddingGatherBf16(
@@ -562,18 +479,8 @@ export function cpuEmbeddingGatherBf16(
   vocabSize: number,
   embedDim: number,
 ): Float32Array {
-  const wr = roundFloat32ToDtype(weights, 'bf16');
-  return roundFloat32ToDtype(cpuEmbeddingGather(wr, indices, vocabSize, embedDim), 'bf16');
-}
-
-export function cpuEmbeddingGatherFp16(
-  weights: Float32Array,
-  indices: Uint32Array,
-  vocabSize: number,
-  embedDim: number,
-): Float32Array {
-  const wr = roundFloat32ToDtype(weights, 'fp16');
-  return roundFloat32ToDtype(cpuEmbeddingGather(wr, indices, vocabSize, embedDim), 'fp16');
+  const wr = roundFloat32ToBf16(weights);
+  return roundFloat32ToBf16(cpuEmbeddingGather(wr, indices, vocabSize, embedDim));
 }
 
 export function cpuCrossEntropyFromLogitsBf16(
@@ -582,18 +489,8 @@ export function cpuCrossEntropyFromLogitsBf16(
   rows: number,
   cols: number,
 ): Float32Array {
-  const lr = roundFloat32ToDtype(logits, 'bf16');
-  return roundFloat32ToDtype(cpuCrossEntropyFromLogits(lr, targets, rows, cols), 'bf16');
-}
-
-export function cpuCrossEntropyFromLogitsFp16(
-  logits: Float32Array,
-  targets: Uint32Array,
-  rows: number,
-  cols: number,
-): Float32Array {
-  const lr = roundFloat32ToDtype(logits, 'fp16');
-  return roundFloat32ToDtype(cpuCrossEntropyFromLogits(lr, targets, rows, cols), 'fp16');
+  const lr = roundFloat32ToBf16(logits);
+  return roundFloat32ToBf16(cpuCrossEntropyFromLogits(lr, targets, rows, cols));
 }
 
 export function cpuGeluBackwardBf16(
@@ -601,19 +498,9 @@ export function cpuGeluBackwardBf16(
   inp: Float32Array,
   n: number,
 ): Float32Array {
-  const gr = roundFloat32ToDtype(gradOut, 'bf16');
-  const ir = roundFloat32ToDtype(inp, 'bf16');
-  return roundFloat32ToDtype(cpuGeluBackward(gr, ir, n), 'bf16');
-}
-
-export function cpuGeluBackwardFp16(
-  gradOut: Float32Array,
-  inp: Float32Array,
-  n: number,
-): Float32Array {
-  const gr = roundFloat32ToDtype(gradOut, 'fp16');
-  const ir = roundFloat32ToDtype(inp, 'fp16');
-  return roundFloat32ToDtype(cpuGeluBackward(gr, ir, n), 'fp16');
+  const gr = roundFloat32ToBf16(gradOut);
+  const ir = roundFloat32ToBf16(inp);
+  return roundFloat32ToBf16(cpuGeluBackward(gr, ir, n));
 }
 
 export function cpuSoftmaxBackwardBf16(
@@ -622,20 +509,9 @@ export function cpuSoftmaxBackwardBf16(
   rows: number,
   cols: number,
 ): Float32Array {
-  const gr = roundFloat32ToDtype(gradOut, 'bf16');
-  const yr = roundFloat32ToDtype(y, 'bf16');
-  return roundFloat32ToDtype(cpuSoftmaxBackward(gr, yr, rows, cols), 'bf16');
-}
-
-export function cpuSoftmaxBackwardFp16(
-  gradOut: Float32Array,
-  y: Float32Array,
-  rows: number,
-  cols: number,
-): Float32Array {
-  const gr = roundFloat32ToDtype(gradOut, 'fp16');
-  const yr = roundFloat32ToDtype(y, 'fp16');
-  return roundFloat32ToDtype(cpuSoftmaxBackward(gr, yr, rows, cols), 'fp16');
+  const gr = roundFloat32ToBf16(gradOut);
+  const yr = roundFloat32ToBf16(y);
+  return roundFloat32ToBf16(cpuSoftmaxBackward(gr, yr, rows, cols));
 }
 
 export function cpuRmsNormGradInputBf16(
@@ -646,24 +522,10 @@ export function cpuRmsNormGradInputBf16(
   cols: number,
   epsilon: number,
 ): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  const gr = roundFloat32ToDtype(gamma, 'bf16');
-  const gor = roundFloat32ToDtype(gradOut, 'bf16');
-  return roundFloat32ToDtype(cpuRmsNormGradInput(dr, gr, gor, rows, cols, epsilon), 'bf16');
-}
-
-export function cpuRmsNormGradInputFp16(
-  data: Float32Array,
-  gamma: Float32Array,
-  gradOut: Float32Array,
-  rows: number,
-  cols: number,
-  epsilon: number,
-): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  const gr = roundFloat32ToDtype(gamma, 'fp16');
-  const gor = roundFloat32ToDtype(gradOut, 'fp16');
-  return roundFloat32ToDtype(cpuRmsNormGradInput(dr, gr, gor, rows, cols, epsilon), 'fp16');
+  const dr = roundFloat32ToBf16(data);
+  const gr = roundFloat32ToBf16(gamma);
+  const gor = roundFloat32ToBf16(gradOut);
+  return roundFloat32ToBf16(cpuRmsNormGradInput(dr, gr, gor, rows, cols, epsilon));
 }
 
 export function cpuRmsNormGradGammaBf16(
@@ -673,21 +535,9 @@ export function cpuRmsNormGradGammaBf16(
   cols: number,
   epsilon: number,
 ): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'bf16');
-  const gor = roundFloat32ToDtype(gradOut, 'bf16');
-  return roundFloat32ToDtype(cpuRmsNormGradGamma(dr, gor, rows, cols, epsilon), 'bf16');
-}
-
-export function cpuRmsNormGradGammaFp16(
-  data: Float32Array,
-  gradOut: Float32Array,
-  rows: number,
-  cols: number,
-  epsilon: number,
-): Float32Array {
-  const dr = roundFloat32ToDtype(data, 'fp16');
-  const gor = roundFloat32ToDtype(gradOut, 'fp16');
-  return roundFloat32ToDtype(cpuRmsNormGradGamma(dr, gor, rows, cols, epsilon), 'fp16');
+  const dr = roundFloat32ToBf16(data);
+  const gor = roundFloat32ToBf16(gradOut);
+  return roundFloat32ToBf16(cpuRmsNormGradGamma(dr, gor, rows, cols, epsilon));
 }
 
 export function cpuEmbeddingScatterAccumBf16(
@@ -696,18 +546,8 @@ export function cpuEmbeddingScatterAccumBf16(
   vocabSize: number,
   embedDim: number,
 ): Float32Array {
-  const tr = roundFloat32ToDtype(gradTokens, 'bf16');
-  return roundFloat32ToDtype(cpuEmbeddingScatterAccum(tr, indices, vocabSize, embedDim), 'bf16');
-}
-
-export function cpuEmbeddingScatterAccumFp16(
-  gradTokens: Float32Array,
-  indices: Uint32Array,
-  vocabSize: number,
-  embedDim: number,
-): Float32Array {
-  const tr = roundFloat32ToDtype(gradTokens, 'fp16');
-  return roundFloat32ToDtype(cpuEmbeddingScatterAccum(tr, indices, vocabSize, embedDim), 'fp16');
+  const tr = roundFloat32ToBf16(gradTokens);
+  return roundFloat32ToBf16(cpuEmbeddingScatterAccum(tr, indices, vocabSize, embedDim));
 }
 
 export function cpuCrossEntropyLogitsGradFromProbsBf16(
@@ -717,35 +557,12 @@ export function cpuCrossEntropyLogitsGradFromProbsBf16(
   rows: number,
   cols: number,
 ): Float32Array {
-  const pr = roundFloat32ToDtype(probs, 'bf16');
-  const ur = roundFloat32ToDtype(upstream, 'bf16');
-  return roundFloat32ToDtype(
-    cpuCrossEntropyLogitsGradFromProbs(pr, targets, ur, rows, cols),
-    'bf16',
-  );
-}
-
-export function cpuCrossEntropyLogitsGradFromProbsFp16(
-  probs: Float32Array,
-  targets: Uint32Array,
-  upstream: Float32Array,
-  rows: number,
-  cols: number,
-): Float32Array {
-  const pr = roundFloat32ToDtype(probs, 'fp16');
-  const ur = roundFloat32ToDtype(upstream, 'fp16');
-  return roundFloat32ToDtype(
-    cpuCrossEntropyLogitsGradFromProbs(pr, targets, ur, rows, cols),
-    'fp16',
-  );
+  const pr = roundFloat32ToBf16(probs);
+  const ur = roundFloat32ToBf16(upstream);
+  return roundFloat32ToBf16(cpuCrossEntropyLogitsGradFromProbs(pr, targets, ur, rows, cols));
 }
 
 export function cpuBroadcastFillScalarBf16(scalar: number, n: number): Float32Array {
-  const v = roundFloat32ToDtype(new Float32Array([scalar]), 'bf16')[0] ?? 0;
-  return roundFloat32ToDtype(new Float32Array(n).fill(v), 'bf16');
-}
-
-export function cpuBroadcastFillScalarFp16(scalar: number, n: number): Float32Array {
-  const v = roundFloat32ToDtype(new Float32Array([scalar]), 'fp16')[0] ?? 0;
-  return roundFloat32ToDtype(new Float32Array(n).fill(v), 'fp16');
+  const v = roundFloat32ToBf16(new Float32Array([scalar]))[0] ?? 0;
+  return roundFloat32ToBf16(new Float32Array(n).fill(v));
 }

@@ -1,4 +1,3 @@
-// Same math as elementwise-gelu-backward.wgsl; bf16 storage via shared-bf16.
 const GELU_TANH_COEF: f32 = 0.7978845608028654;
 const GELU_CUBE_COEF: f32 = 0.044715;
 
@@ -24,11 +23,13 @@ struct Params {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= params.element_count) {
+  let word_idx = gid.x;
+  let i0 = word_idx << 1u;
+  if (i0 >= params.element_count) {
     return;
   }
-  let x = load_bf16(&inp, i);
-  let g = load_bf16(&grad_out, i) * gelu_grad_f32(x);
-  store_bf16(&grad_in, i, g);
+  let x = load_bf16_pair(&inp, word_idx);
+  let g = load_bf16_pair(&grad_out, word_idx);
+  let out = vec2<f32>(g.x * gelu_grad_f32(x.x), g.y * gelu_grad_f32(x.y));
+  store_bf16_pair(&grad_in, word_idx, out);
 }

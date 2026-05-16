@@ -9,17 +9,30 @@ struct ReduceDims {
 @group(0) @binding(1) var<storage, read> input: array<u32>;
 @group(0) @binding(2) var<storage, read_write> out: array<u32>;
 
+// One thread per packed output pair (one `u32` of `out`); accumulators stay in f32.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= dims.rows) {
+  let word_idx = gid.x;
+  let i0 = word_idx << 1u;
+  let rows = dims.rows;
+  if (i0 >= rows) {
     return;
   }
   let cols = dims.cols;
-  let base = i * cols;
-  var acc: f32 = 0.0;
+
+  var acc0: f32 = 0.0;
+  let base0 = i0 * cols;
   for (var j = 0u; j < cols; j++) {
-    acc += load_bf16(&input, base + j);
+    acc0 = acc0 + load_bf16(&input, base0 + j);
   }
-  store_bf16(&out, i, acc);
+
+  var acc1: f32 = 0.0;
+  let i1 = i0 + 1u;
+  if (i1 < rows) {
+    let base1 = i1 * cols;
+    for (var j = 0u; j < cols; j++) {
+      acc1 = acc1 + load_bf16(&input, base1 + j);
+    }
+  }
+  store_bf16_pair(&out, word_idx, vec2<f32>(acc0, acc1));
 }

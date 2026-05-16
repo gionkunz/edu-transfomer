@@ -46,3 +46,13 @@ _(none — the existing bootstrap specs (`gpu-bootstrap`, `tensor-bootstrap`, `c
 - **Tests / CI:** Each core kernel gains parameterized tests across `f32` / `bf16` / `fp16` with dtype-specific tolerances; CPU references compute in `f32` and compare against the dtype-rounded GPU output. WebGPU-gated tests continue to skip cleanly when no adapter is available.
 - **Performance / memory:** No regression on the default `f32` path. On the opt-in path, success criterion is **a measurable memory or throughput win on at least one reference config** (e.g. `small`/`medium` from `docs/project.md`) on a real WebGPU adapter.
 - **Risk:** WebGPU adapters that lack `shader-f16` (and have no native `bfloat16` extension) will refuse the bf16 / fp16 path — the capability probe + CLI flag combination is designed to surface that loudly rather than silently emulate.
+
+## Post-landing pivot: drop fp16, keep only f32 and bf16
+
+After the implementation landed (tasks 1–9 in `tasks.md`), benchmarking and a stability review made it clear that **`fp16` does not pay its way** in this project:
+
+- The packed-storage scheme makes `bf16` and `fp16` byte-for-byte equal in memory and bandwidth (both 2 bytes per element, both packed two-per-`u32` word).
+- We deliberately do not implement loss scaling — it would add training-loop complexity that does not teach anything new about transformers. Without loss scaling, `fp16` training is unstable on non-trivial models because the binary16 exponent is too narrow.
+- `bf16` keeps `f32`'s exponent range, so it trains stably without loss scaling and matches the educational mandate ("own the stack, but only one branch per concept").
+
+Section 10 in `tasks.md` captures the cleanup: every `fp16`-specific shader, kernel registration, CPU reference, pack/unpack helper, buffer helper, type-system branch, autograd / training / IO branch, CLI option, and spec case has been removed. `DType` is now `'f32' | 'bf16' | 'u32'`, and the `shader-f16` WebGPU feature probe is gone. The `spec.md` in this change reflects the final, bf16-only surface.

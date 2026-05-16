@@ -173,11 +173,6 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   dashThrottle.flush();
   const rt = await createTensorRuntime();
   assertRuntimeSupportsComputeDtype(rt.ctx, computeDtype, 'train');
-  if (computeDtype === 'fp16') {
-    console.error(
-      'train: fp16 training is unstable without loss scaling — prefer bf16 when the adapter supports it.',
-    );
-  }
   draft.gpuAdapterSummary = rt.ctx.adapterLabel;
   draft.detailLine = rt.ctx.adapterLabel;
   console.error(`train: WebGPU adapter: ${rt.ctx.adapterLabel}`);

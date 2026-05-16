@@ -55,7 +55,7 @@ export interface Operation {
  *
  * When {@link masterTensor} is non-null, it holds an **`f32`** view updated by
  * {@link import('@llm-transformer-diy/training').AdamW}; the optimizer casts
- * into {@link Variable.tensor} (bf16/fp16 compute weights) after each step.
+ * into {@link Variable.tensor} (bf16 compute weights) after each step.
  */
 export interface Parameter extends Variable {
   readonly requiresGrad: true;

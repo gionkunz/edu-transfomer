@@ -41,8 +41,8 @@ export type SaveGptCheckpointOptions = {
 
 /**
  * Writes weights for every **`collectGptParameters`** tensor at each parameter's compute **`dtype`**
- * (CPU readback per tensor, **Float32Array** logical values encoded with **`packBf16FromFloat32`** /
- * **`packFp16FromFloat32`** when needed).
+ * (CPU readback per tensor, **Float32Array** logical values encoded with **`packBf16FromFloat32`**
+ * when needed).
  */
 export async function saveGptCheckpoint(opts: SaveGptCheckpointOptions): Promise<void> {
   const params = collectGptParameters(opts.model);
@@ -191,7 +191,7 @@ export type LoadGptModelFromCheckpointOptions = {
   /** Dtype of parameter buffers; default **`f32`**. */
   readonly computeDtype?: FloatDType;
   /**
-   * When the checkpoint stores **`bf16`** / **`fp16`** tensors, set **`true`** to load them into
+   * When the checkpoint stores **`bf16`** tensors, set **`true`** to load them into
    * an **`f32`** model (host decode then **`f32`** upload).
    */
   readonly allowDtypeUpcast?: boolean;
@@ -200,8 +200,8 @@ export type LoadGptModelFromCheckpointOptions = {
 /**
  * Builds a **`GptModel`** from disk weights (**bin** + **JSON** sidecar).
  *
- * **`f32`** on-disk tensors; **`computeDtype: 'bf16'`** / **`'fp16'`** narrows weights on load.
- * **`allowDtypeUpcast`**: load **16-bit** checkpoints into an **`f32`** model.
+ * **`f32`** on-disk tensors; **`computeDtype: 'bf16'`** narrows weights on load.
+ * **`allowDtypeUpcast`**: load **bf16** checkpoints into an **`f32`** model.
  */
 export async function loadGptModelFromCheckpoint(
   rt: TensorRuntime,

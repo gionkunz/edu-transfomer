@@ -29,25 +29,18 @@ import {
 import {
   cpuReduceMax,
   cpuReduceMaxBf16,
-  cpuReduceMaxFp16,
   cpuReduceSum,
   cpuReduceSumBf16,
-  cpuReduceSumFp16,
   cpuRmsNorm,
   cpuRmsNormBf16,
-  cpuRmsNormFp16,
   cpuRmsNormGradGamma,
   cpuRmsNormGradGammaBf16,
-  cpuRmsNormGradGammaFp16,
   cpuRmsNormGradInput,
   cpuRmsNormGradInputBf16,
-  cpuRmsNormGradInputFp16,
   cpuSoftmax,
   cpuSoftmaxBf16,
-  cpuSoftmaxFp16,
   cpuSoftmaxBackward,
   cpuSoftmaxBackwardBf16,
-  cpuSoftmaxBackwardFp16,
 } from './cpu-reference';
 import { createFloat32StorageBuffer, readFloat32Buffer, writeFloat32Buffer } from './buffer';
 import { GpuContext, probeWebGpu, supportsDtype } from './device';
@@ -62,8 +55,8 @@ function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5
   }
 }
 
-function dtypeDecimalPlaces(d: 'bf16' | 'fp16'): number {
-  return d === 'bf16' ? 3 : 2;
+function dtypeDecimalPlaces(_d: 'bf16'): number {
+  return 3;
 }
 
 describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
@@ -167,7 +160,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
     bGgm.destroy();
   });
 
-  const dtypes16 = ['bf16', 'fp16'] as const;
+  const dtypes16 = ['bf16'] as const;
   for (const d16 of dtypes16) {
     it(`reduce_sum matches CPU (${d16})`, async () => {
       if (!supportsDtype(ctx, d16)) {
@@ -175,11 +168,11 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       }
       const places = dtypeDecimalPlaces(d16);
       const a = Float32Array.from({ length: 3 * 5 }, (_, i) => i * 0.5 - 3);
-      const cpuA = d16 === 'bf16' ? cpuReduceSumBf16(a, 3, 5) : cpuReduceSumFp16(a, 3, 5);
+      const cpuA = cpuReduceSumBf16(a, 3, 5);
       expectCloseVec(await smokeReduceSum16(ctx, registry, a, 3, 5, d16), cpuA, places);
 
       const b = Float32Array.from({ length: 16 }, (_, i) => Math.sin(i * 0.3));
-      const cpuB = d16 === 'bf16' ? cpuReduceSumBf16(b, 1, 16) : cpuReduceSumFp16(b, 1, 16);
+      const cpuB = cpuReduceSumBf16(b, 1, 16);
       expectCloseVec(await smokeReduceSum16(ctx, registry, b, 1, 16, d16), cpuB, places);
     });
 
@@ -189,11 +182,11 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       }
       const places = dtypeDecimalPlaces(d16);
       const a = Float32Array.from({ length: 3 * 5 }, (_, i) => Math.sin(i * 0.7) * 4);
-      const cpuA = d16 === 'bf16' ? cpuReduceMaxBf16(a, 3, 5) : cpuReduceMaxFp16(a, 3, 5);
+      const cpuA = cpuReduceMaxBf16(a, 3, 5);
       expectCloseVec(await smokeReduceMax16(ctx, registry, a, 3, 5, d16), cpuA, places);
 
       const b = Float32Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? -i : i));
-      const cpuB = d16 === 'bf16' ? cpuReduceMaxBf16(b, 1, 16) : cpuReduceMaxFp16(b, 1, 16);
+      const cpuB = cpuReduceMaxBf16(b, 1, 16);
       expectCloseVec(await smokeReduceMax16(ctx, registry, b, 1, 16, d16), cpuB, places);
     });
 
@@ -204,7 +197,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       const places = dtypeDecimalPlaces(d16);
       const sumPlaces = Math.max(0, places - 2);
       const data = Float32Array.from({ length: 2 * 4 }, (_, i) => Math.sin(i * 0.4));
-      const cpuRef = d16 === 'bf16' ? cpuSoftmaxBf16(data, 2, 4) : cpuSoftmaxFp16(data, 2, 4);
+      const cpuRef = cpuSoftmaxBf16(data, 2, 4);
       const got = await smokeSoftmax16(ctx, registry, data, 2, 4, d16);
       const eltPlaces = Math.min(places, 2);
       expectCloseVec(got, cpuRef, eltPlaces);
@@ -227,7 +220,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       for (let i = 0; i < got.length; i++) {
         expect(Number.isFinite(got[i])).toBe(true);
       }
-      const cpuRef = d16 === 'bf16' ? cpuSoftmaxBf16(data, 1, 3) : cpuSoftmaxFp16(data, 1, 3);
+      const cpuRef = cpuSoftmaxBf16(data, 1, 3);
       expectCloseVec(got, cpuRef, places);
     });
 
@@ -239,10 +232,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       const data = Float32Array.from({ length: 2 * 4 }, (_, i) => (i + 1) * 0.25);
       const gamma = new Float32Array([0.5, 1, 1.5, 2]);
       const epsilon = 1e-6;
-      const cpuRef =
-        d16 === 'bf16'
-          ? cpuRmsNormBf16(data, gamma, 2, 4, epsilon)
-          : cpuRmsNormFp16(data, gamma, 2, 4, epsilon);
+      const cpuRef = cpuRmsNormBf16(data, gamma, 2, 4, epsilon);
       expectCloseVec(
         await smokeRmsNorm16(ctx, registry, data, gamma, 2, 4, d16, epsilon),
         cpuRef,
@@ -258,13 +248,9 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       const rows = 2;
       const cols = 4;
       const logits = Float32Array.from({ length: rows * cols }, (_, i) => Math.sin(i * 0.5));
-      const yCpu =
-        d16 === 'bf16' ? cpuSoftmaxBf16(logits, rows, cols) : cpuSoftmaxFp16(logits, rows, cols);
+      const yCpu = cpuSoftmaxBf16(logits, rows, cols);
       const gradOut = Float32Array.from({ length: rows * cols }, (_, i) => (i % 3) * 0.25 - 0.12);
-      const cpuRef =
-        d16 === 'bf16'
-          ? cpuSoftmaxBackwardBf16(gradOut, yCpu, rows, cols)
-          : cpuSoftmaxBackwardFp16(gradOut, yCpu, rows, cols);
+      const cpuRef = cpuSoftmaxBackwardBf16(gradOut, yCpu, rows, cols);
       expectCloseVec(
         await smokeSoftmaxBackward16(ctx, registry, gradOut, yCpu, rows, cols, d16),
         cpuRef,
@@ -283,10 +269,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
       const data = Float32Array.from({ length: rows * cols }, (_, i) => (i + 1) * 0.2 - 1);
       const gamma = Float32Array.from({ length: cols }, (_, j) => 0.8 + j * 0.1);
       const gradOut = Float32Array.from({ length: rows * cols }, (_, i) => Math.sin(i * 0.31));
-      const gxiRef =
-        d16 === 'bf16'
-          ? cpuRmsNormGradInputBf16(data, gamma, gradOut, rows, cols, epsilon)
-          : cpuRmsNormGradInputFp16(data, gamma, gradOut, rows, cols, epsilon);
+      const gxiRef = cpuRmsNormGradInputBf16(data, gamma, gradOut, rows, cols, epsilon);
       expectCloseVec(
         await smokeRmsNormGradInput16(
           ctx,
@@ -302,10 +285,7 @@ describe.skipIf(!webgpuAvailable)('reduction-norm-kernels (GPU)', () => {
         gxiRef,
         places,
       );
-      const ggmRef =
-        d16 === 'bf16'
-          ? cpuRmsNormGradGammaBf16(data, gradOut, rows, cols, epsilon)
-          : cpuRmsNormGradGammaFp16(data, gradOut, rows, cols, epsilon);
+      const ggmRef = cpuRmsNormGradGammaBf16(data, gradOut, rows, cols, epsilon);
       expectCloseVec(
         await smokeRmsNormGradGamma16(ctx, registry, data, gradOut, rows, cols, d16, epsilon),
         ggmRef,

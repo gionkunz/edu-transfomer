@@ -1,11 +1,14 @@
 /**
- * 16-bit kernel WGSL uses three storage layouts, each prepended from disk before the per-kernel
+ * 16-bit kernel WGSL uses one storage layout, prepended from disk before the per-kernel
  * `*.frag.wgsl` body by {@link ./load-core-wgsl.ts}:
  *
- * - **bf16** — `shared-bf16.wgsl` (`array<u32>`, one bf16 in low 16 bits per index — avoids RMW races)
- * - **fp16 packed** — `shared-fp16-packed.wgsl` (`unpack2x16float` / `pack2x16float`, one f16 per u32)
- * - **fp16 native** — `shared-fp16-native.wgsl` (`enable f16`, `array<f16>`), compiled only when
- *   `GPUDevice.features` includes `shader-f16`.
+ * - **bf16** — `shared-bf16.wgsl` (`array<u32>`, two packed bf16 scalars per `u32` word).
+ *   Race-free writes rely on "one thread per pair" dispatch — see the doc comment in
+ *   `shared-bf16.wgsl` and `softmax.bf16.frag.wgsl` for the disjoint-word invariant.
+ *
+ * `fp16` storage was removed: bf16 matches fp16's memory and bandwidth wins while keeping
+ * f32's exponent range (no loss scaling needed during training). See
+ * `docs/project.md` → Numerical Stability for the rationale.
  */
 
 export {};

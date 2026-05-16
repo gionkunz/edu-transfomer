@@ -7,10 +7,10 @@ export function parseOptionalComputeDtype(raw: string | undefined, flagLabel: st
     return 'f32';
   }
   const v = raw.trim().toLowerCase();
-  if (v === 'f32' || v === 'bf16' || v === 'fp16') {
+  if (v === 'f32' || v === 'bf16') {
     return v;
   }
-  throw new Error(`${flagLabel}: expected f32, bf16, or fp16 (got ${JSON.stringify(raw)})`);
+  throw new Error(`${flagLabel}: expected f32 or bf16 (got ${JSON.stringify(raw)})`);
 }
 
 /**

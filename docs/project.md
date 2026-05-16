@@ -53,7 +53,7 @@ Build a transformer-based language model engine from scratch in **TypeScript** f
 | Linting           | ESLint + Prettier                                                                                                                                                          |
 | Package manager   | npm                                                                                                                                                                        |
 | GPU strategy      | GPU-only (hard requirement — fail loudly if no adapter)                                                                                                                    |
-| Checkpoint format | Binary `.bin` (packed float tensors: **`f32`**, **`bf16`**, **`fp16`**) + `.json` sidecar (config + per-tensor dtype manifest)                                             |
+| Checkpoint format | Binary `.bin` (packed float tensors: **`f32`**, **`bf16`**) + `.json` sidecar (config + per-tensor dtype manifest)                                                         |
 
 ---
 
@@ -731,7 +731,7 @@ model-output/
 
 ### Binary layout
 
-Tensors are concatenated in **lexical order** of their manifest keys. Each tensor occupies **`Π(shape) × bytesPerElement(dtype)`** bytes (`2` for **`bf16`** / **`fp16`**, `4` for **`f32`**). **Padding** with zero bytes follows each tensor so the next tensor starts on a **4-byte boundary** (so pure **`f32`** checkpoints remain byte-for‑byte compatible with the pre–16-bit layout, where every payload length is already a multiple of 4). **Legacy manifests** may omit **`dtype`** on each tensor entry; readers treat that as **`f32`**.
+Tensors are concatenated in **lexical order** of their manifest keys. Each tensor occupies **`Π(shape) × bytesPerElement(dtype)`** bytes (`2` for **`bf16`**, `4` for **`f32`**). **Padding** with zero bytes follows each tensor so the next tensor starts on a **4-byte boundary** (so pure **`f32`** checkpoints remain byte-for‑byte compatible with the pre–16-bit layout, where every payload length is already a multiple of 4). **Legacy manifests** may omit **`dtype`** on each tensor entry; readers treat that as **`f32`**.
 
 ---
 
@@ -739,20 +739,20 @@ Tensors are concatenated in **lexical order** of their manifest keys. Each tenso
 
 ### 16-bit dtypes (compute & checkpoints)
 
-- **Master weights (training):** Optimizer state (**AdamW** moments) stays in **`f32`**. When parameters use **`bf16`** / **`fp16`** compute buffers, an optional **`f32` master** copy receives the update, then values are cast back into the compute tensor so small steps are not fully lost to 16-bit rounding.
+- **Master weights (training):** Optimizer state (**AdamW** moments) stays in **`f32`**. When parameters use **`bf16`** compute buffers, an optional **`f32` master** copy receives the update, then values are cast back into the compute tensor so small steps are not fully lost to 16-bit rounding.
 - **Accumulators in kernels:** Reductions and matmul inner products accumulate in **`f32`** where the WGSL uses an explicit wider accumulator; results are rounded to the storage dtype at the end of the kernel.
-- **`bf16` vs `fp16`:** **`bf16`** has a much wider exponent range (same as **`f32`**), which is usually safer for training without loss scaling. **`fp16`** is narrower; **`llm train --dtype fp16`** prints a warning that training is unstable without loss scaling—prefer **`bf16`** when possible.
-- **Capability probe:** **`supportsDtype`** on **`GpuContext`** documents whether a dtype may be used; **`bf16`** is always available via packed storage; **`fp16`** follows the project’s WebGPU / `shader-f16` rules. CLI commands call **`assertRuntimeSupportsComputeDtype`** after creating the tensor runtime.
+- **Why `bf16` is the only 16-bit dtype:** **`bf16`** keeps the same exponent range as **`f32`**, so training is stable without loss scaling. **`fp16`** was dropped because we never implemented loss scaling, its memory and bandwidth wins are identical to **`bf16`**'s, and the extra mantissa precision is rarely worth the instability for this educational stack. The single packed storage layout (two **`bf16`** scalars per `u32` word) is described in `packages/gpu/src/kernels/shared-bf16.wgsl`.
+- **Capability probe:** **`supportsDtype`** on **`GpuContext`** documents whether a dtype may be used; **`bf16`** is always available via packed storage (no extra WebGPU features required). CLI commands call **`assertRuntimeSupportsComputeDtype`** after creating the tensor runtime.
 
-**Checkpoint load policy:** Manifest **`dtype`** must be **`f32`**, **`bf16`**, or **`fp16`** (or omitted → **`f32`**). **`f32`** checkpoints into a **`bf16`** / **`fp16`** model narrow weights via **`createFromArray`**. A **16-bit checkpoint → `f32` model** requires **`{ allowDtypeUpcast: true }`** in code or **`--allow-dtype-upcast`** on **`llm generate` / `chat`**. Mismatched 16-bit kinds (e.g. checkpoint **`bf16`**, model **`fp16`**) are rejected.
+**Checkpoint load policy:** Manifest **`dtype`** must be **`f32`** or **`bf16`** (or omitted → **`f32`**). **`f32`** checkpoints into a **`bf16`** model narrow weights via **`createFromArray`**. A **`bf16` checkpoint → `f32` model** requires **`{ allowDtypeUpcast: true }`** in code or **`--allow-dtype-upcast`** on **`llm generate` / `chat`**.
 
 **CLI dtype flags:**
 
-| Command                            | Flag                          | Meaning                                                          |
-| ---------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
-| **`llm train`**                    | **`--dtype f32\|bf16\|fp16`** | Parameter / forward compute dtype (default **`f32`**).           |
-| **`llm generate`**, **`llm chat`** | **`--dtype …`**               | Runtime model dtype; must fit the checkpoint / cast rules above. |
-| **`llm generate`**, **`llm chat`** | **`--allow-dtype-upcast`**    | Allow a 16-bit checkpoint to load into an **`f32`** model.       |
+| Command                            | Flag                       | Meaning                                                          |
+| ---------------------------------- | -------------------------- | ---------------------------------------------------------------- |
+| **`llm train`**                    | **`--dtype f32\|bf16`**    | Parameter / forward compute dtype (default **`f32`**).           |
+| **`llm generate`**, **`llm chat`** | **`--dtype …`**            | Runtime model dtype; must fit the checkpoint / cast rules above. |
+| **`llm generate`**, **`llm chat`** | **`--allow-dtype-upcast`** | Allow a **`bf16`** checkpoint to load into an **`f32`** model.   |
 
 ### Common pathology cheatsheet
 

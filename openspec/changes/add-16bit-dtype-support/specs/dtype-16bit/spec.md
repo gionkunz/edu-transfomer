@@ -2,19 +2,19 @@
 
 ## ADDED Requirements
 
-### Requirement: Tensor dtype enum is widened to include bf16 and fp16
+### Requirement: Tensor dtype enum is widened to include bf16
 
-The implementation SHALL widen the `DType` type exported by `@llm-transformer-diy/tensor` to `'f32' | 'bf16' | 'fp16' | 'u32'`. The default `Tensor.dtype` for every existing call site that does not explicitly pass a dtype SHALL remain `'f32'`. The implementation SHALL NOT introduce any new `Device` value (still `'gpu'` only) and SHALL NOT make `Tensor` mutable; `Tensor.dtype` SHALL remain a `readonly` field on the record.
+The implementation SHALL widen the `DType` type exported by `@llm-transformer-diy/tensor` to `'f32' | 'bf16' | 'u32'`. The default `Tensor.dtype` for every existing call site that does not explicitly pass a dtype SHALL remain `'f32'`. The implementation SHALL NOT introduce any new `Device` value (still `'gpu'` only) and SHALL NOT make `Tensor` mutable; `Tensor.dtype` SHALL remain a `readonly` field on the record. `'fp16'` is intentionally not part of the dtype enum — see the design notes for the rationale (no loss scaling, `bf16` matches `fp16`'s memory/bandwidth wins while keeping `f32`'s exponent range).
 
 #### Scenario: Default dtype is f32 for existing constructors
 
 - **WHEN** a consumer calls `createZeros(rt, shape)` or `createFromArray(rt, data, shape)` without passing a dtype argument
 - **THEN** the returned `Tensor` has `dtype === 'f32'`
 
-#### Scenario: Constructors accept bf16 and fp16 as trailing dtype argument
+#### Scenario: Constructors accept bf16 as trailing dtype argument
 
-- **WHEN** a consumer calls `createZeros(rt, shape, 'bf16')` or `createZeros(rt, shape, 'fp16')` on a runtime whose adapter supports the requested dtype
-- **THEN** the returned `Tensor` has `dtype` equal to the requested dtype and `length === productOfShape(shape)`
+- **WHEN** a consumer calls `createZeros(rt, shape, 'bf16')` on a runtime
+- **THEN** the returned `Tensor` has `dtype === 'bf16'` and `length === productOfShape(shape)`
 
 #### Scenario: u32 indices tensors are unchanged
 
@@ -23,30 +23,25 @@ The implementation SHALL widen the `DType` type exported by `@llm-transformer-di
 
 ---
 
-### Requirement: GpuContext probes shader-f16 and exposes a per-dtype capability check
+### Requirement: GpuContext exposes a per-dtype capability check
 
-The implementation SHALL extend `GpuBootstrapOptions` with optional `requiredFeatures` and `optionalFeatures` lists forwarded to `adapter.requestDevice`. By default, `'shader-f16'` SHALL be requested as an optional feature. The implementation SHALL record the granted features on `GpuContext` as `grantedFeatures: ReadonlySet<GPUFeatureName>` and SHALL expose a free function or method `supportsDtype(ctx, dtype)` that returns `true` for every dtype the runtime can honor. `bf16` SHALL always be reported as supported (the implementation emulates it via `u16`-packed storage and in-shader expansion). `fp16` SHALL be reported as supported when either `shader-f16` was granted or the implementation's `unpack2x16float`-based fallback is enabled. `f32` and `u32` SHALL always be reported as supported.
+The implementation SHALL extend `GpuBootstrapOptions` with optional `requiredFeatures` and `optionalFeatures` lists forwarded to `adapter.requestDevice`. The implementation SHALL record the granted features on `GpuContext` as `grantedFeatures: ReadonlySet<GPUFeatureName>` and SHALL expose a free function `supportsDtype(ctx, dtype)` that returns `true` for every dtype the runtime can honor. `f32`, `u32`, and `bf16` SHALL always be reported as supported (bf16 is emulated via packed `u32` storage and in-shader expansion; no WebGPU feature is required).
 
 #### Scenario: bf16 is always supported
 
 - **WHEN** `supportsDtype(ctx, 'bf16')` is queried on any successfully constructed `GpuContext`
 - **THEN** the result is `true`
 
-#### Scenario: fp16 is supported when shader-f16 is granted
-
-- **WHEN** `GpuContext.create` is called on an adapter that grants `shader-f16` and `supportsDtype(ctx, 'fp16')` is queried
-- **THEN** the result is `true` and `ctx.grantedFeatures.has('shader-f16')` is `true`
-
 #### Scenario: Requested-but-unsupported required feature fails loudly
 
-- **WHEN** `GpuContext.create` is called with `requiredFeatures: ['shader-f16']` on an adapter that does not grant `shader-f16`
+- **WHEN** `GpuContext.create` is called with a `requiredFeatures` entry that the adapter does not grant
 - **THEN** the call rejects with an `Error` whose message identifies the missing feature
 
 ---
 
-### Requirement: CPU bit-level pack and unpack helpers cover bf16 and fp16
+### Requirement: CPU bit-level pack and unpack helpers cover bf16
 
-The implementation SHALL expose CPU pack/unpack helper functions from `@llm-transformer-diy/gpu`: `packBf16FromFloat32`, `unpackBf16ToFloat32`, `packFp16FromFloat32`, and `unpackFp16ToFloat32`. Pack helpers SHALL accept a `Float32Array` input plus a target `Uint16Array` (or return a fresh one) of matching length. Bf16 pack SHALL truncate the low 16 mantissa bits using round-to-nearest-even semantics; fp16 pack SHALL implement IEEE-754 binary16 round-to-nearest-even including subnormals and `±Inf` / `NaN`. Unpack helpers SHALL produce a `Float32Array` whose elements equal the dtype-rounded value of every input element.
+The implementation SHALL expose CPU pack/unpack helper functions from `@llm-transformer-diy/gpu`: `packBf16FromFloat32` and `unpackBf16ToFloat32`. The pack helper SHALL accept a `Float32Array` input plus a target `Uint16Array` (or return a fresh one) of matching length and SHALL truncate the low 16 mantissa bits using round-to-nearest-even semantics. The unpack helper SHALL produce a `Float32Array` whose elements equal the bf16-rounded value of every input element.
 
 #### Scenario: bf16 pack-then-unpack round-trips representable values exactly
 
@@ -58,21 +53,11 @@ The implementation SHALL expose CPU pack/unpack helper functions from `@llm-tran
 - **WHEN** a value whose dropped 17th mantissa bit is set with all lower bits zero is packed
 - **THEN** the packed bf16 word equals the input rounded so the low retained mantissa bit is `0`
 
-#### Scenario: fp16 pack saturates beyond binary16 dynamic range
-
-- **WHEN** a positive value greater than the binary16 maximum (e.g. `1e30`) is passed to `packFp16FromFloat32`
-- **THEN** the corresponding packed word equals `+Inf` in binary16 (`0x7C00`) and `unpackFp16ToFloat32` of that word equals `Infinity`
-
-#### Scenario: fp16 pack preserves NaN
-
-- **WHEN** a `NaN` value is passed to `packFp16FromFloat32`
-- **THEN** `unpackFp16ToFloat32` of the resulting word returns `NaN`
-
 ---
 
 ### Requirement: 16-bit storage buffer helpers allocate and round-trip dtype-sized payloads
 
-The implementation SHALL expose `createBf16StorageBuffer(device, elementCount)` and `createFp16StorageBuffer(device, elementCount)` returning a `GPUBuffer` of byte length `elementCount * 2` rounded up to WGSL's 4-byte alignment when required. The implementation SHALL expose paired `writeBf16Buffer` / `writeFp16Buffer` (accepting a `Uint16Array` payload produced by the CPU pack helpers) and `readBf16Buffer` / `readFp16Buffer` (returning a `Uint16Array`). `bytesPerElement(dtype)` SHALL return `4` for `f32` / `u32` and `2` for `bf16` / `fp16`.
+The implementation SHALL expose `createBf16StorageBuffer(device, elementCount)` returning a `GPUBuffer` whose byte length is `ceil(elementCount / 2) * 4` (two bf16 scalars packed per `u32` word, WGSL 4-byte aligned). The implementation SHALL expose paired `writeBf16Buffer` (accepting a `Uint16Array` payload produced by `packBf16FromFloat32`) and `readBf16Buffer` (returning a `Uint16Array`). `bytesPerElement(dtype)` SHALL return `4` for `f32` / `u32` and `2` for `bf16`.
 
 #### Scenario: Bf16 buffer round-trip preserves the packed payload
 
@@ -81,24 +66,19 @@ The implementation SHALL expose `createBf16StorageBuffer(device, elementCount)` 
 
 #### Scenario: bytesPerElement matches the dtype
 
-- **WHEN** `bytesPerElement('bf16')` and `bytesPerElement('fp16')` are evaluated
-- **THEN** both equal `2`, while `bytesPerElement('f32')` and `bytesPerElement('u32')` both equal `4`
+- **WHEN** `bytesPerElement('bf16')` is evaluated
+- **THEN** the result equals `2`, while `bytesPerElement('f32')` and `bytesPerElement('u32')` both equal `4`
 
 ---
 
-### Requirement: Core WGSL kernels register bf16 and fp16 variants under suffixed IDs
+### Requirement: Core WGSL kernels register bf16 variants under suffixed IDs
 
-For each kernel currently registered under `core.<name>` (matmul, add, mul, scale, gelu, gelu_backward, softmax, softmax_backward, rmsnorm, rmsnorm_grad_input, rmsnorm_grad_gamma, embedding_gather, embedding_scatter_accum, cross_entropy_from_logits, cross_entropy_logits_grad, reduce_sum, reduce_max, transpose, broadcast_fill_scalar), the implementation SHALL register two additional pipelines under the stable identifiers `core.<name>.bf16` and `core.<name>.fp16`. The existing `core.<name>` identifier SHALL retain exact `f32` semantics. Each variant SHALL bind storage in the matching dtype (bf16 via `u16` packed in `array<u32>`, fp16 via `array<f16>` when `shader-f16` is granted or `array<u32>` with `unpack2x16float` otherwise). Reductions and matmul inner accumulators SHALL accumulate into `f32` regardless of the input dtype, narrowing only on store.
+For each kernel currently registered under `core.<name>` (matmul, add, mul, scale, gelu, gelu_backward, softmax, softmax_backward, rmsnorm, rmsnorm_grad_input, rmsnorm_grad_gamma, embedding_gather, embedding_scatter_accum, cross_entropy_from_logits, cross_entropy_logits_grad, reduce_sum, reduce_max, transpose, broadcast_fill_scalar), the implementation SHALL register a sibling pipeline under the stable identifier `core.<name>.bf16`. The existing `core.<name>` identifier SHALL retain exact `f32` semantics. Each bf16 variant SHALL bind storage as `array<u32>` with two bf16 scalars packed per word (low half = element `2k`, high half = element `2k + 1`); per-thread work SHALL be dispatched on a per-pair basis so that no two threads RMW the same word, except for scatter-accumulation kernels which SHALL use `atomicCompareExchangeWeak` to update half-words atomically. Reductions and matmul inner accumulators SHALL accumulate into `f32` regardless of the input dtype, narrowing only on store.
 
 #### Scenario: Bf16 matmul agrees with the f32 reference within bf16 tolerance
 
 - **WHEN** tests dispatch `core.matmul.bf16` on small integer-valued operands with WebGPU available
 - **THEN** the readback, unpacked to `Float32Array`, equals the CPU `f32` reference rounded element-wise to bf16, within a documented bf16-specific floating-point tolerance
-
-#### Scenario: Fp16 matmul agrees with the f32 reference within fp16 tolerance
-
-- **WHEN** tests dispatch `core.matmul.fp16` on small operands with WebGPU available
-- **THEN** the readback, unpacked to `Float32Array`, equals the CPU `f32` reference rounded element-wise to fp16, within a documented fp16-specific floating-point tolerance
 
 #### Scenario: f32 kernels remain registered under the unsuffixed identifier
 
@@ -129,13 +109,13 @@ The op functions exported from `@llm-transformer-diy/tensor` (`matmul`, `add`, `
 #### Scenario: f32 default path remains byte-identical
 
 - **WHEN** any op function is called with operands at `dtype === 'f32'`
-- **THEN** the dispatched kernel ID equals the existing `core.<name>` (no `.bf16` / `.fp16` suffix) and the numerical output is identical to the pre-change behavior
+- **THEN** the dispatched kernel ID equals the existing `core.<name>` (no `.bf16` suffix) and the numerical output is identical to the pre-change behavior
 
 ---
 
 ### Requirement: Explicit cast op converts between dtypes without gradient
 
-The implementation SHALL expose a tensor-layer free function `cast(rt, t, dtype)` that returns a freshly allocated `Tensor` containing the elementwise dtype conversion of `t`. The op SHALL dispatch a dedicated WGSL kernel registered under `core.cast.<from>.<to>` (with at least the pairs `f32→bf16`, `bf16→f32`, `f32→fp16`, `fp16→f32` registered). When called with `t.dtype === dtype`, `cast` SHALL return a freshly allocated independent copy at the same dtype. The autograd layer SHALL NOT register a backward Operation for `cast` in this scope.
+The implementation SHALL expose a tensor-layer free function `cast(rt, t, dtype)` that returns a freshly allocated `Tensor` containing the elementwise dtype conversion of `t`. The op SHALL dispatch a dedicated WGSL kernel registered under `core.cast.<from>.<to>` (with the pairs `f32→bf16` and `bf16→f32` registered). When called with `t.dtype === dtype`, `cast` SHALL return a freshly allocated independent copy at the same dtype. The autograd layer SHALL NOT register a backward Operation for `cast` in this scope.
 
 #### Scenario: cast round-trips f32 through bf16 with documented rounding loss
 
@@ -151,7 +131,7 @@ The implementation SHALL expose a tensor-layer free function `cast(rt, t, dtype)
 
 ### Requirement: Autograd allocates grad tensors at the forward dtype
 
-The `@llm-transformer-diy/autograd` layer SHALL allocate `Variable.grad` at the same `dtype` as the variable's forward `tensor`. Every `Operation.backward(rt, gradOutput)` implementation SHALL produce `Tensor | null` entries whose dtype matches the corresponding input variable's dtype. Mixed-dtype accumulation across the graph SHALL be prohibited at the same boundary as forward dispatch (Decision 9). Gradient-check tests SHALL parameterize over `f32`, `bf16`, and `fp16`, using dtype-specific tolerances (looser for `bf16` and `fp16` than for `f32`).
+The `@llm-transformer-diy/autograd` layer SHALL allocate `Variable.grad` at the same `dtype` as the variable's forward `tensor`. Every `Operation.backward(rt, gradOutput)` implementation SHALL produce `Tensor | null` entries whose dtype matches the corresponding input variable's dtype. Mixed-dtype accumulation across the graph SHALL be prohibited at the same boundary as forward dispatch. Gradient-check tests SHALL parameterize over `f32` and `bf16`, using dtype-specific tolerances (looser for `bf16` than for `f32`).
 
 #### Scenario: backward dtype matches forward dtype
 
@@ -167,7 +147,7 @@ The `@llm-transformer-diy/autograd` layer SHALL allocate `Variable.grad` at the 
 
 ### Requirement: Mixed-precision training keeps an f32 master tensor and f32 Adam moments
 
-The `Parameter` record in `@llm-transformer-diy/autograd` SHALL optionally carry a `masterTensor: Tensor | null` field. When present, `masterTensor.dtype` SHALL equal `'f32'`. `AdamW` SHALL operate on `masterTensor` (or `tensor` when no master is set), SHALL allocate its first and second moment tensors at `dtype === 'f32'` regardless of the compute parameter dtype, and SHALL after each step cast the updated `f32` master values back into the compute parameter `tensor` via the `core.cast.f32.<bf16|fp16>` kernel. `ParameterRegistry.zeroGrad`, `clipGradNorm`, and `totalParams` SHALL continue to operate as one parameter per registered entry regardless of whether a master tensor is present.
+The `Parameter` record in `@llm-transformer-diy/autograd` SHALL optionally carry a `masterTensor: Tensor | null` field. When present, `masterTensor.dtype` SHALL equal `'f32'`. `AdamW` SHALL operate on `masterTensor` (or `tensor` when no master is set), SHALL allocate its first and second moment tensors at `dtype === 'f32'` regardless of the compute parameter dtype, and SHALL after each step cast the updated `f32` master values back into the compute parameter `tensor` via the `core.cast.f32.bf16` kernel. `ParameterRegistry.zeroGrad`, `clipGradNorm`, and `totalParams` SHALL continue to operate as one parameter per registered entry regardless of whether a master tensor is present.
 
 #### Scenario: Bf16 parameter with master keeps f32 moments
 
@@ -188,7 +168,7 @@ The `Parameter` record in `@llm-transformer-diy/autograd` SHALL optionally carry
 
 ### Requirement: Checkpoint sidecar carries per-tensor dtype and is backward compatible
 
-The `@llm-transformer-diy/io` checkpoint sidecar's `tensors[name]` entries SHALL accept and persist a `dtype` field with values restricted to `'f32' | 'bf16' | 'fp16'`. The binary payload offset and stride for each tensor SHALL be computed as `productOfShape(shape) * bytesPerElement(dtype)`. When reading a sidecar that omits `dtype` for a tensor, the loader SHALL interpret that tensor as `'f32'`. When the runtime cannot satisfy the on-disk dtype (per `supportsDtype`), the loader SHALL throw an `Error` whose message names the tensor and the offending dtype, unless the caller passes an explicit "allow upcast to f32" option.
+The `@llm-transformer-diy/io` checkpoint sidecar's `tensors[name]` entries SHALL accept and persist a `dtype` field with values restricted to `'f32' | 'bf16'`. The binary payload offset and stride for each tensor SHALL be computed as `productOfShape(shape) * bytesPerElement(dtype)`. When reading a sidecar that omits `dtype` for a tensor, the loader SHALL interpret that tensor as `'f32'`. When the runtime cannot satisfy the on-disk dtype (per `supportsDtype`), the loader SHALL throw an `Error` whose message names the tensor and the offending dtype, unless the caller passes an explicit "allow upcast to f32" option.
 
 #### Scenario: Existing checkpoints (no dtype field) load as f32
 
@@ -200,49 +180,39 @@ The `@llm-transformer-diy/io` checkpoint sidecar's `tensors[name]` entries SHALL
 - **WHEN** a model whose parameters are at `dtype === 'bf16'` is saved and then loaded into a fresh model
 - **THEN** the loaded compute tensor's GPU buffer, read back and unpacked, equals the pre-save tensor's read-back-and-unpacked values bit-for-bit
 
-#### Scenario: Loader refuses unsupported dtype without explicit upcast
+#### Scenario: Loader refuses an unknown dtype string
 
-- **WHEN** a checkpoint declares `dtype === 'fp16'` for some tensor and the runtime's `supportsDtype('fp16')` is `false`, and the caller passes no upcast option
-- **THEN** the loader throws an `Error` naming the tensor and the unsupported dtype, and does not allocate a partial model
+- **WHEN** a checkpoint declares an unknown `dtype` value for some tensor
+- **THEN** the loader throws an `Error` naming the tensor and the offending dtype, and does not allocate a partial model
 
 ---
 
 ### Requirement: CLI exposes an opt-in --dtype flag and fails loudly when unsupported
 
-The `llm` CLI's `train` and `generate` subcommands SHALL accept an optional `--dtype <f32|bf16|fp16>` flag, defaulting to `'f32'`. When the flag is omitted, the CLI SHALL behave byte-identically to its pre-change behavior. When the flag is set to a non-`f32` value, the CLI SHALL probe the adapter via `supportsDtype` immediately after `GpuContext.create` and SHALL exit with a non-zero status and a clear human-readable error if the requested dtype is unsupported. When `train --dtype fp16` is requested, the CLI SHALL emit a single-line warning that fp16 training is unstable without loss scaling and recommend `bf16`.
+The `llm` CLI's `train` and `generate` subcommands SHALL accept an optional `--dtype <f32|bf16>` flag, defaulting to `'f32'`. When the flag is omitted, the CLI SHALL behave byte-identically to its pre-change behavior. When the flag is set to `'bf16'`, the CLI SHALL probe the adapter via `supportsDtype` immediately after `GpuContext.create` and SHALL exit with a non-zero status and a clear human-readable error if the requested dtype is unsupported.
 
 #### Scenario: Default invocation uses f32
 
 - **WHEN** the user runs `llm generate --model ./model/` (or `llm train --data … --config tiny`) with no `--dtype` flag
 - **THEN** every allocation, kernel dispatch, and checkpoint read goes through the `f32` path and the command behaves identically to the pre-change behavior
 
-#### Scenario: Bf16 training is accepted when supported
+#### Scenario: Bf16 training is accepted
 
-- **WHEN** the user runs `llm train --data … --config tiny --dtype bf16` on an adapter where `supportsDtype('bf16')` is `true`
+- **WHEN** the user runs `llm train --data … --config tiny --dtype bf16`
 - **THEN** the model parameters are created at `bf16` with `f32` master weights, `AdamW` is constructed with `f32` moments, and the training loop completes a step without error
 
-#### Scenario: Unsupported dtype exits non-zero with a clear error
+#### Scenario: Unknown dtype value exits non-zero with a clear error
 
-- **WHEN** the user runs `llm generate --model ./model/ --dtype fp16` on an adapter where `supportsDtype('fp16')` is `false`
-- **THEN** the process exits with a non-zero status code, prints a message naming the adapter and the unsupported dtype, and does not load model weights
-
-#### Scenario: Train --dtype fp16 emits a stability warning
-
-- **WHEN** the user runs `llm train --data … --dtype fp16` on a supported adapter
-- **THEN** the CLI prints a single warning line referencing fp16 training instability and recommending bf16, then continues
+- **WHEN** the user runs `llm generate --model ./model/ --dtype fp16` (or any other value outside `f32|bf16`)
+- **THEN** the process exits with a non-zero status code, prints a message naming the rejected dtype and the allowed values, and does not load model weights
 
 ---
 
 ### Requirement: WebGPU-gated tests for 16-bit dtypes remain non-fatal without an adapter
 
-Automated tests that exercise the bf16 / fp16 paths on the GPU SHALL follow the same policy as `gpu-bootstrap`, `core-wgsl-kernels`, `reduction-norm-kernels`, and `tensor-bootstrap`: if no usable WebGPU adapter is available, GPU-specific dtype tests SHALL be skipped or otherwise gated so the package test command still exits successfully. CPU-side pack/unpack helper tests SHALL run regardless of WebGPU availability.
+Automated tests that exercise the bf16 paths on the GPU SHALL follow the same policy as `gpu-bootstrap`, `core-wgsl-kernels`, `reduction-norm-kernels`, and `tensor-bootstrap`: if no usable WebGPU adapter is available, GPU-specific dtype tests SHALL be skipped or otherwise gated so the package test command still exits successfully. CPU-side pack/unpack helper tests SHALL run regardless of WebGPU availability.
 
 #### Scenario: Suite passes without WebGPU
 
 - **WHEN** the package test suite runs in an environment without a usable WebGPU adapter
-- **THEN** GPU-dependent bf16 / fp16 tests do not fail the suite solely due to missing GPU hardware or stack, while the pure-CPU pack/unpack and bytesPerElement tests still run and pass
-
-#### Scenario: Suite skips fp16 GPU tests on adapters without fp16 support
-
-- **WHEN** the package test suite runs against an adapter where `supportsDtype('fp16')` is `false`
-- **THEN** the fp16 GPU tests are skipped (not failed) and the bf16 tests still run and pass
+- **THEN** GPU-dependent bf16 tests do not fail the suite solely due to missing GPU hardware or stack, while the pure-CPU pack/unpack and bytesPerElement tests still run and pass

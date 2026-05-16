@@ -1,14 +1,27 @@
 /**
- * Byte length of a **bf16** / **fp16** GPU storage vector of **`elementCount`** scalars.
- * Each scalar occupies one **`u32`** (low 16 bits) so parallel kernels never RMW the same word.
+ * Number of **`u32`** words used to store **`elementCount`** packed bf16 scalars.
+ * Two scalars are packed per word (low / high 16 bits); odd counts round up with a
+ * zero-padded high half so the trailing word is still safely addressable.
  */
-export function bf16Fp16ElementsByteLength(elementCount: number): number {
-  return elementCount * 4;
+export function bf16WordCount(elementCount: number): number {
+  return (elementCount + 1) >>> 1;
 }
 
-/** Same as {@link bf16Fp16ElementsByteLength} — buffers are already 4-byte aligned per element. */
-export function bf16Fp16StorageBufferByteLength(elementCount: number): number {
-  return elementCount * 4;
+/**
+ * Byte length of a **bf16** GPU storage vector of **`elementCount`** scalars.
+ * Two scalars pack into one **`u32`** word ⇒ `ceil(N/2) * 4` bytes. This is the genuine
+ * 16-bit-per-element storage we exploit for VRAM and bandwidth savings; safe concurrent
+ * writes are achieved by dispatching one thread per pair (each thread owns one whole word)
+ * for ordinary kernels, or by half-word `atomicCompareExchangeWeak` RMW for accumulators
+ * (see `embedding-scatter-accum.bf16.frag.wgsl`).
+ */
+export function bf16ElementsByteLength(elementCount: number): number {
+  return bf16WordCount(elementCount) * 4;
+}
+
+/** Same byte length as {@link bf16ElementsByteLength}; alias for call-site clarity. */
+export function bf16StorageBufferByteLength(elementCount: number): number {
+  return bf16ElementsByteLength(elementCount);
 }
 
 /** Byte length for a float32 vector of `elementCount` elements. */
@@ -106,48 +119,51 @@ export async function readUint32Buffer(
   return new Uint32Array(copy.buffer, copy.byteOffset, copy.byteLength / 4);
 }
 
-/** Storage buffer sized with {@link bf16Fp16StorageBufferByteLength}. */
+/** Storage buffer sized with {@link bf16StorageBufferByteLength}. */
 export function createBf16StorageBuffer(device: GPUDevice, elementCount: number): GPUBuffer {
   return device.createBuffer({
-    size: bf16Fp16StorageBufferByteLength(elementCount),
+    size: bf16StorageBufferByteLength(elementCount),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
 }
 
-/** Same layout as {@link createBf16StorageBuffer} — distinct helpers for call-site clarity. */
-export function createFp16StorageBuffer(device: GPUDevice, elementCount: number): GPUBuffer {
-  return createBf16StorageBuffer(device, elementCount);
-}
-
+/**
+ * Upload **`data`** as **bf16** storage (low/high halves of each **`u32`** word).
+ *
+ * **`data[2k]`** → low 16 bits of word `k`, **`data[2k+1]`** → high 16 bits. Odd lengths
+ * leave the trailing high half zero so callers can size buffers with
+ * {@link bf16StorageBufferByteLength} without worrying about the parity of N.
+ */
 export function writeBf16Buffer(
   queue: GPUQueue,
   buffer: GPUBuffer,
   data: Uint16Array,
   bufferOffset = 0,
 ): void {
-  const words = new Uint32Array(data.length);
-  for (let i = 0; i < data.length; i++) {
-    words[i] = data[i] & 0xffff;
+  const wordCount = bf16WordCount(data.length);
+  const words = new Uint32Array(wordCount);
+  const lastFull = data.length & ~1;
+  for (let i = 0; i < lastFull; i += 2) {
+    words[i >>> 1] = (data[i] & 0xffff) | ((data[i + 1] & 0xffff) << 16);
+  }
+  if (data.length & 1) {
+    words[wordCount - 1] = data[lastFull] & 0xffff;
   }
   queue.writeBuffer(buffer, bufferOffset, words.buffer, words.byteOffset, words.byteLength);
 }
 
-export function writeFp16Buffer(
-  queue: GPUQueue,
-  buffer: GPUBuffer,
-  data: Uint16Array,
-  bufferOffset = 0,
-): void {
-  writeBf16Buffer(queue, buffer, data, bufferOffset);
-}
-
+/**
+ * Read back **`elementCount`** packed bf16 scalars. Returns a **`Uint16Array`** of length
+ * **`elementCount`** containing the raw bf16 bit patterns; trailing zero-padding of the
+ * underlying buffer (when **`elementCount`** is odd) is hidden from the caller.
+ */
 export async function readBf16Buffer(
   device: GPUDevice,
   queue: GPUQueue,
   source: GPUBuffer,
   elementCount: number,
 ): Promise<Uint16Array> {
-  const byteLength = bf16Fp16ElementsByteLength(elementCount);
+  const byteLength = bf16ElementsByteLength(elementCount);
   const readback = device.createBuffer({
     size: byteLength,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
@@ -163,17 +179,14 @@ export async function readBf16Buffer(
   readback.unmap();
 
   const out = new Uint16Array(elementCount);
-  for (let i = 0; i < elementCount; i++) {
-    out[i] = words[i] & 0xffff;
+  const lastFull = elementCount & ~1;
+  for (let i = 0; i < lastFull; i += 2) {
+    const w = words[i >>> 1];
+    out[i] = w & 0xffff;
+    out[i + 1] = (w >>> 16) & 0xffff;
+  }
+  if (elementCount & 1) {
+    out[lastFull] = words[words.length - 1] & 0xffff;
   }
   return out;
-}
-
-export async function readFp16Buffer(
-  device: GPUDevice,
-  queue: GPUQueue,
-  source: GPUBuffer,
-  elementCount: number,
-): Promise<Uint16Array> {
-  return readBf16Buffer(device, queue, source, elementCount);
 }

@@ -15,14 +15,14 @@ export type GpuBootstrapOptions = {
   requiredFeatures?: GPUFeatureName[];
   /**
    * Optional features requested when supported by the adapter (intersected with **`adapter.features`**).
-   * Defaults to **`['shader-f16']`**. Unsupported optional features are silently omitted — the created
+   * Defaults to **`[]`**. Unsupported optional features are silently omitted — the created
    * **`GPUDevice.features`** is the source of truth for what was granted.
    */
   optionalFeatures?: GPUFeatureName[];
 };
 
 /** Dtypes with packed GPU storage handled by this repo (mirrors tensor **`DType`** without a package edge). */
-export type GpuStorageDType = 'f32' | 'bf16' | 'fp16' | 'u32';
+export type GpuStorageDType = 'f32' | 'bf16' | 'u32';
 
 /** Heuristic: adapter label / info often marks LLVMpipe, SwiftShader, or explicit “software”. */
 export function gpuAdapterLikelyCpuOnly(adapterLabel: string): boolean {
@@ -58,16 +58,17 @@ export function formatGpuAdapterLabel(adapter: GPUAdapter): string {
 }
 
 /**
- * Whether **`dtype`** can be used with **`GpuContext`**: **`bf16`** is always supported (emulated via
- * **u16** packing); **`fp16`** is supported when **`shader-f16`** is granted **or** via the
- * **`unpack2x16float`** packed path (always enabled in our WGSL). **`f32`** / **`u32`** are universal.
+ * Whether **`dtype`** can be used with **`GpuContext`**: all current storage dtypes are universal
+ * — **`bf16`** uses two-scalars-per-`u32` packing in `array<u32>`, **`f32`** / **`u32`** are native.
+ *
+ * The `ctx` parameter is unused today; it is kept so callers can switch on adapter capabilities
+ * in the future (e.g. a future int8 storage path conditional on `subgroups` or similar features).
  */
-export function supportsDtype(ctx: GpuContext, dtype: GpuStorageDType): boolean {
+export function supportsDtype(_ctx: GpuContext, dtype: GpuStorageDType): boolean {
   switch (dtype) {
     case 'f32':
     case 'u32':
     case 'bf16':
-    case 'fp16':
       return true;
     default: {
       const _e: never = dtype;
@@ -155,7 +156,7 @@ export class GpuContext {
     const isLikelyCpuSoftwareAdapter = gpuAdapterLikelyCpuOnly(adapterLabel);
 
     const required = options?.requiredFeatures ?? [];
-    const optional = options?.optionalFeatures ?? ['shader-f16'];
+    const optional = options?.optionalFeatures ?? [];
     const deviceFeatures = collectDeviceFeatures(adapter, required, optional);
 
     let device: GPUDevice;

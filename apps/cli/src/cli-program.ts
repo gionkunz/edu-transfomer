@@ -143,7 +143,7 @@ export function createCliProgram(): Command {
       `global L2 grad clip (0 or Infinity = off; default ${String(TRAIN_DEFAULT_MAX_GRAD_NORM)})`,
       String(TRAIN_DEFAULT_MAX_GRAD_NORM),
     )
-    .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16 | fp16', 'f32')
+    .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16', 'f32')
     .action(async (opts) => {
       const tokenCacheRaw = opts.tokenCache as string | undefined;
       const tokenCacheBase =
@@ -181,7 +181,7 @@ export function createCliProgram(): Command {
     .option('--max-new-tokens <n>', 'tokens to sample after prompt', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
-    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16 | fp16', 'f32')
+    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16', 'f32')
     .option(
       '--allow-dtype-upcast',
       'allow checkpoints whose manifest dtypes differ from --dtype (16-bit → f32; OpenSpec §8)',
@@ -230,7 +230,7 @@ export function createCliProgram(): Command {
     .option('--max-new-tokens <n>', 'tokens to sample per assistant reply', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
-    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16 | fp16', 'f32')
+    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16', 'f32')
     .option(
       '--allow-dtype-upcast',
       'allow checkpoints whose manifest dtypes differ from --dtype (16-bit → f32; OpenSpec §8)',

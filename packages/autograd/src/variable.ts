@@ -52,7 +52,7 @@ export function createParameter(tensor: Tensor): Parameter {
 }
 
 /**
- * Trainable weights at **`computeDtype`** (bf16 / fp16) with a parallel **`f32`**
+ * Trainable weights at **`computeDtype`** (bf16) with a parallel **`f32`**
  * {@link Parameter.masterTensor} for optimizer state. Forward / backward use
  * {@link Parameter.tensor}; {@link import('@llm-transformer-diy/training').AdamW}
  * updates `masterTensor` then casts into `tensor`.

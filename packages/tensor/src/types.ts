@@ -2,8 +2,8 @@
 
 import type { GpuContext, KernelRegistry } from '@llm-transformer-diy/gpu';
 
-/** Scalar element dtypes for **`Tensor`** GPU storage (`bf16` / `fp16` use 16-bit packed buffers). */
-export type DType = 'f32' | 'bf16' | 'fp16' | 'u32';
+/** Scalar element dtypes for **`Tensor`** GPU storage (`bf16` uses 16-bit packed buffers). */
+export type DType = 'f32' | 'bf16' | 'u32';
 
 /** Single supported storage backend for now — see `tensor-bootstrap` proposal. */
 export type Device = 'gpu';

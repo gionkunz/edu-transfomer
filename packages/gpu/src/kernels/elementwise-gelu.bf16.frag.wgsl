@@ -19,10 +19,11 @@ struct Params {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= params.element_count) {
+  let word_idx = gid.x;
+  let i0 = word_idx << 1u;
+  if (i0 >= params.element_count) {
     return;
   }
-  let x = load_bf16(&inp, i);
-  store_bf16(&out, i, gelu_f32(x));
+  let x = load_bf16_pair(&inp, word_idx);
+  store_bf16_pair(&out, word_idx, vec2<f32>(gelu_f32(x.x), gelu_f32(x.y)));
 }

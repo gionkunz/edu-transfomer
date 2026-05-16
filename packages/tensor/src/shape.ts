@@ -1,16 +1,15 @@
 import type { DType, Tensor } from './types';
 
-/** Float compute dtypes (`bf16` / `fp16` / `f32`); excludes index tensors (`u32`). */
+/** Float compute dtypes (`bf16` / `f32`); excludes index tensors (`u32`). */
 export type FloatDType = Exclude<DType, 'u32'>;
 
-/** Byte size of one scalar in **`dtype`** for **host** packing / logical element size (`2` for **`bf16`** / **`fp16`**, `4` for **`f32`** / **`u32`**). */
+/** Byte size of one scalar in **`dtype`** for **host** packing / logical element size (`2` for **`bf16`**, `4` for **`f32`** / **`u32`**). */
 export function bytesPerElement(dtype: DType): number {
   switch (dtype) {
     case 'f32':
     case 'u32':
       return 4;
     case 'bf16':
-    case 'fp16':
       return 2;
     default: {
       const _exhaustive: never = dtype;

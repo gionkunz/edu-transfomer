@@ -10,23 +10,36 @@ struct MatMulDims {
 @group(0) @binding(2) var<storage, read> B: array<u32>;
 @group(0) @binding(3) var<storage, read_write> C: array<u32>;
 
+// One thread per packed output pair (one `u32` of `C`). Each thread accumulates
+// in f32 and rounds to bf16 once at the end (preserves the wider-accumulator
+// promise from `docs/project.md`).
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+  let word_idx = gid.x;
+  let out_i0 = word_idx << 1u;
   let M = dims.M;
   let N = dims.N;
   let K = dims.K;
   let total = M * N;
-  if (idx >= total) {
+  if (out_i0 >= total) {
     return;
   }
-  let row = idx / N;
-  let col = idx % N;
-  var sum = 0.0;
-  for (var k = 0u; k < K; k++) {
-    let a = load_bf16(&A, row * K + k);
-    let b = load_bf16(&B, k * N + col);
-    sum += a * b;
+  let row0 = out_i0 / N;
+  let col0 = out_i0 % N;
+
+  var sum0: f32 = 0.0;
+  for (var k: u32 = 0u; k < K; k++) {
+    sum0 = sum0 + load_bf16(&A, row0 * K + k) * load_bf16(&B, k * N + col0);
   }
-  store_bf16(&C, idx, sum);
+
+  var sum1: f32 = 0.0;
+  let out_i1 = out_i0 + 1u;
+  if (out_i1 < total) {
+    let row1 = out_i1 / N;
+    let col1 = out_i1 % N;
+    for (var k: u32 = 0u; k < K; k++) {
+      sum1 = sum1 + load_bf16(&A, row1 * K + k) * load_bf16(&B, k * N + col1);
+    }
+  }
+  store_bf16_pair(&C, word_idx, vec2<f32>(sum0, sum1));
 }

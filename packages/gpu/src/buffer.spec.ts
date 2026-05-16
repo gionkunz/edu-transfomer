@@ -5,14 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   createBf16StorageBuffer,
   createFloat32StorageBuffer,
-  createFp16StorageBuffer,
   float32ByteLength,
   readBf16Buffer,
   readFloat32Buffer,
-  readFp16Buffer,
   writeBf16Buffer,
   writeFloat32Buffer,
-  writeFp16Buffer,
 } from './buffer';
 import { GpuContext, probeWebGpu } from './device';
 
@@ -45,17 +42,6 @@ describe.skipIf(!webgpuAvailable)('buffer I/O', () => {
     const src = new Uint16Array([0x3f80, 0x4000, 0xbf80, 0, 0x7c00]);
     writeBf16Buffer(ctx.queue, buf, src);
     const out = await readBf16Buffer(ctx.device, ctx.queue, buf, n);
-    expect(out).toEqual(src);
-    buf.destroy();
-  });
-
-  it('writeFp16Buffer / readFp16Buffer round-trip Uint16 payload', async () => {
-    const ctx = await GpuContext.create();
-    const n = 3;
-    const buf = createFp16StorageBuffer(ctx.device, n);
-    const src = new Uint16Array([0x3c00, 0x0000, 0x7c00]);
-    writeFp16Buffer(ctx.queue, buf, src);
-    const out = await readFp16Buffer(ctx.device, ctx.queue, buf, n);
     expect(out).toEqual(src);
     buf.destroy();
   });

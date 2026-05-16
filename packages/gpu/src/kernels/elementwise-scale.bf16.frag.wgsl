@@ -10,10 +10,11 @@ struct ScaleParams {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= scale_params.element_count) {
+  let word_idx = gid.x;
+  let i0 = word_idx << 1u;
+  if (i0 >= scale_params.element_count) {
     return;
   }
-  let av = load_bf16(&a, i);
-  store_bf16(&out, i, av * scale_params.scale);
+  let pair = load_bf16_pair(&a, word_idx);
+  store_bf16_pair(&out, word_idx, pair * scale_params.scale);
 }

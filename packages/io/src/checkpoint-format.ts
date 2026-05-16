@@ -6,9 +6,7 @@ import path from 'node:path';
 import {
   bytesPerElement,
   packBf16FromFloat32,
-  packFp16FromFloat32,
   unpackBf16ToFloat32,
-  unpackFp16ToFloat32,
   type FloatDType,
 } from '@llm-transformer-diy/tensor';
 
@@ -83,8 +81,8 @@ function parseManifestDtype(tensorName: string, raw: unknown): CheckpointDtype {
   const v = raw === undefined || raw === null ? 'f32' : raw;
   assert(typeof v === 'string', `checkpoint json: tensors["${tensorName}"].dtype must be a string`);
   assert(
-    v === 'f32' || v === 'bf16' || v === 'fp16',
-    `checkpoint json: tensors["${tensorName}"].dtype must be f32, bf16, or fp16 (got ${JSON.stringify(v)})`,
+    v === 'f32' || v === 'bf16',
+    `checkpoint json: tensors["${tensorName}"].dtype must be f32 or bf16 (got ${JSON.stringify(v)})`,
   );
   return v;
 }
@@ -103,11 +101,7 @@ function encodeTensorPayload(name: string, payload: TensorPayload): Uint8Array {
   if (dtype === 'f32') {
     return new Uint8Array(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength);
   }
-  if (dtype === 'bf16') {
-    const packed = packBf16FromFloat32(payload.data);
-    return new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength);
-  }
-  const packed = packFp16FromFloat32(payload.data);
+  const packed = packBf16FromFloat32(payload.data);
   return new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength);
 }
 
@@ -337,7 +331,7 @@ export function unpackPackedCheckpoint(
     assert(slice.byteOffset % 2 === 0, `checkpoint unpack: misaligned 16-bit slice for "${name}"`);
     const nHalf = slice.byteLength / 2;
     const u16 = new Uint16Array(slice.buffer, slice.byteOffset, nHalf);
-    out[name] = entry.dtype === 'bf16' ? unpackBf16ToFloat32(u16) : unpackFp16ToFloat32(u16);
+    out[name] = unpackBf16ToFloat32(u16);
   }
 
   return out;

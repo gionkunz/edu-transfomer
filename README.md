@@ -56,16 +56,16 @@ pnpm run cli:unlink-global
 
 After linking, **`llm`** exposes (among others):
 
-| Command                               | Role                                                                                                                                                                                                                                |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`llm tokenizer train`**             | Fit **BPE** on text files matched by **`--data` globs**; write tokenizer JSON                                                                                                                                                       |
-| **`llm tokenizer encode` / `decode`** | Tiny encode/decode utilities (stdout; no fullscreen TUI)                                                                                                                                                                            |
-| **`llm train`**                       | Load corpus + tokenizer → **WebGPU** training → checkpoint dir (**wolf-tui** dashboard, including corpus **BPE encode** progress where applicable). Optional **`--dtype f32\|bf16\|fp16`** (default **`f32`**) for compute weights. |
-| **`llm generate`**                    | Single prompt, streaming **wolf-tui**; **`--dtype`** and optional **`--allow-dtype-upcast`** for checkpoint vs runtime dtype.                                                                                                       |
-| **`llm chat`**                        | Multi-turn **wolf-tui** (same sampling flags flavour as **`generate`)**; same dtype flags as **`generate`**.                                                                                                                        |
-| **`llm inspect`**                     | Checkpoint / **`model.json`** summary on stdout                                                                                                                                                                                     |
+| Command                               | Role                                                                                                                                                                                                                          |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`llm tokenizer train`**             | Fit **BPE** on text files matched by **`--data` globs**; write tokenizer JSON                                                                                                                                                 |
+| **`llm tokenizer encode` / `decode`** | Tiny encode/decode utilities (stdout; no fullscreen TUI)                                                                                                                                                                      |
+| **`llm train`**                       | Load corpus + tokenizer → **WebGPU** training → checkpoint dir (**wolf-tui** dashboard, including corpus **BPE encode** progress where applicable). Optional **`--dtype f32\|bf16`** (default **`f32`**) for compute weights. |
+| **`llm generate`**                    | Single prompt, streaming **wolf-tui**; **`--dtype`** and optional **`--allow-dtype-upcast`** for checkpoint vs runtime dtype.                                                                                                 |
+| **`llm chat`**                        | Multi-turn **wolf-tui** (same sampling flags flavour as **`generate`)**; same dtype flags as **`generate`**.                                                                                                                  |
+| **`llm inspect`**                     | Checkpoint / **`model.json`** summary on stdout                                                                                                                                                                               |
 
-For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16` / `fp16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading 16-bit checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
+For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading **`bf16`** checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
 
 Built-in GPT shape **presets** for **`llm train --config`** (vocab comes from tokenizer only): **`tiny`**, **`small`**. Otherwise pass a **`GptConfig` JSON path**—see **`config/medium.json`** and **`config/medium-longctx.json`** in this repo (`vocabSize` in the file **must agree** with the tokenizer’s **`vocabSize`**).
 
@@ -101,6 +101,92 @@ llm train --data 'corpus/real/pg*.txt' --tokenizer out/tok-8000.json --config co
 - **`--token-cache`** — optional base path for a **joined-corpus token id cache** (skips giant re-encodes across runs); use **`--rebuild-token-cache`** with **`--token-cache`** to force rebuild.
 
 Alternative **`--config tiny`** / **`small`** skips custom JSON presets.
+
+---
+
+## Example: push harder for lower loss, faster
+
+The defaults are **conservative** so a fresh checkout converges _somewhere_ on most adapters. To actually drive loss down on a given corpus, escalate a few knobs together. Run **`llm train --help`** to see the full list and current defaults; the relevant ones are:
+
+| Flag                  | Default | What it does                                                                                  |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| **`--steps`**         | `100`   | Optimizer steps. More steps = more loss progress (until you overfit).                         |
+| **`--seq-len`**       | `32`    | Tokens per training slice → tokens of LM signal per step. Must be **`≤ maxSeqLen`** in cfg.   |
+| **`--lr-max`**        | `1e-4`  | Peak LR after warmup (cosine schedule). Bigger = faster early progress, easier to diverge.    |
+| **`--lr-min`**        | `1e-5`  | Cosine floor LR. Set to `~lrMax/10` for a real decay; raise to keep learning late in the run. |
+| **`--weight-decay`**  | `0.01`  | AdamW decoupled L2 (regularization). `0` to disable; `0.05–0.1` for stronger regularization.  |
+| **`--max-grad-norm`** | `0.5`   | Global grad-norm clip. Looser (`1.0`) lets bigger updates through; `0`/`Infinity` disables.   |
+| **`--dtype`**         | `f32`   | `bf16` ≈ 2× throughput on capable adapters (more steps in the same wall time).                |
+| **`--config`**        | —       | Bigger shape (more layers / wider `dModel`) raises the loss ceiling you can reach.            |
+| **`--token-cache`**   | —       | Keep this between runs so you don’t re-BPE the corpus on every escalation.                    |
+
+### Step 1 — bigger context, more steps, real LR decay
+
+Compared to the earlier example: same `medium-longctx` shape, but **`--seq-len 1024`** (matches `maxSeqLen`), **5×** more steps, and a **10×** LR range so cosine actually decays.
+
+```bash
+llm train \
+  --data 'corpus/real/pg*.txt' \
+  --tokenizer out/tok-8000.json \
+  --config config/medium-longctx.json \
+  --out out/medium-longctx-push1 \
+  --token-cache out/cache/my-corpus \
+  --steps 250000 \
+  --seq-len 1024 \
+  --lr-max 3e-4 \
+  --lr-min 3e-5
+```
+
+### Step 2 — push the optimizer + use bf16 for throughput
+
+Larger peak LR and a looser grad clip mean more loss-per-step **when it doesn’t diverge**; **`--dtype bf16`** gives you roughly **2×** more steps per minute on capable adapters, which is usually the bigger win.
+
+```bash
+llm train \
+  --data 'corpus/real/pg*.txt' \
+  --tokenizer out/tok-8000.json \
+  --config config/medium-longctx.json \
+  --out out/medium-longctx-push2 \
+  --token-cache out/cache/my-corpus \
+  --steps 400000 \
+  --seq-len 1024 \
+  --lr-max 6e-4 \
+  --lr-min 6e-5 \
+  --weight-decay 0.05 \
+  --max-grad-norm 1.0 \
+  --dtype bf16
+```
+
+### Step 3 — raise the ceiling with a bigger model
+
+When the loss curve flattens and **train loss is still high**, you’re capacity-bound, not optimizer-bound. Drop a deeper / wider config beside `config/medium-longctx.json` (same `vocabSize`, same `maxSeqLen` you train at) and reuse the same token cache:
+
+```json
+// config/large-longctx.json (must keep vocabSize = tokenizer vocab)
+{ "vocabSize": 8000, "maxSeqLen": 1024, "dModel": 384, "nHeads": 12, "dFf": 1536, "nLayers": 6 }
+```
+
+```bash
+llm train \
+  --data 'corpus/real/pg*.txt' \
+  --tokenizer out/tok-8000.json \
+  --config config/large-longctx.json \
+  --out out/large-longctx-push \
+  --token-cache out/cache/my-corpus \
+  --steps 400000 \
+  --seq-len 1024 \
+  --lr-max 4e-4 \
+  --lr-min 4e-5 \
+  --dtype bf16
+```
+
+### Caveats when pushing
+
+- **Divergence**: if loss spikes to `NaN`/`Inf` or stops decreasing after a few hundred steps, **halve `--lr-max`** before changing anything else. Bigger models usually need a **smaller** peak LR than tiny ones.
+- **`--dtype bf16`** halves memory and bandwidth versus **`f32`** while keeping **`f32`**'s exponent range, so it trains stably without loss scaling; **`fp16`** is intentionally not supported.
+- **Disabling clipping** (`--max-grad-norm 0` or `Infinity`) is fine for short experiments but risky on long runs; the trainer message at startup tells you which mode is active.
+- **`--seq-len` must be `≤ maxSeqLen`** in the GPT config, otherwise training fails fast on bounds.
+- **Always pass `--token-cache <base>`** when iterating — re-encoding a real corpus can dwarf the actual training time on the first run.
 
 ---
 

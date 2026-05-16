@@ -1,26 +1,20 @@
 import {
-  bf16Fp16StorageBufferByteLength,
+  bf16StorageBufferByteLength,
   createBf16StorageBuffer,
   createFloat32StorageBuffer,
   createUint32StorageBuffer,
   dispatchCastBf16ToF32,
-  dispatchCastFp16ToF32,
   dispatchCastF32ToBf16,
-  dispatchCastF32ToFp16,
   float32ByteLength,
   packBf16FromFloat32,
-  packFp16FromFloat32,
   readBf16Buffer,
   readFloat32Buffer,
-  readFp16Buffer,
   readUint32Buffer,
   uint32ByteLength,
   writeBf16Buffer,
   writeFloat32Buffer,
-  writeFp16Buffer,
   writeUint32Buffer,
   unpackBf16ToFloat32,
-  unpackFp16ToFloat32,
 } from '@llm-transformer-diy/gpu';
 
 import {
@@ -42,8 +36,7 @@ export function gpuStorageByteLength(length: number, dtype: DType): number {
     case 'u32':
       return uint32ByteLength(length);
     case 'bf16':
-    case 'fp16':
-      return bf16Fp16StorageBufferByteLength(length);
+      return bf16StorageBufferByteLength(length);
     default: {
       const _e: never = dtype;
       return _e;
@@ -96,7 +89,6 @@ export function allocateContiguousBuffer(
     case 'f32':
       return createFloat32StorageBuffer(rt.ctx.device, length);
     case 'bf16':
-    case 'fp16':
       return createBf16StorageBuffer(rt.ctx.device, length);
     default: {
       const _e: never = dtype;
@@ -142,10 +134,8 @@ export function createFromArray(
   const buffer = allocateContiguousBuffer(rt, length, dtype);
   if (dtype === 'f32') {
     writeFloat32Buffer(rt.ctx.queue, buffer, data);
-  } else if (dtype === 'bf16') {
-    writeBf16Buffer(rt.ctx.queue, buffer, packBf16FromFloat32(data));
   } else {
-    writeFp16Buffer(rt.ctx.queue, buffer, packFp16FromFloat32(data));
+    writeBf16Buffer(rt.ctx.queue, buffer, packBf16FromFloat32(data));
   }
   return makeContiguousTensor(shape, buffer, dtype);
 }
@@ -185,19 +175,12 @@ export async function toArray(rt: TensorRuntime, t: Tensor): Promise<Float32Arra
   if (t.dtype === 'f32') {
     return readFloat32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, float32ByteLength(t.length));
   }
-  if (t.dtype === 'bf16') {
-    return unpackBf16ToFloat32(
-      await readBf16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length),
-    );
-  }
-  return unpackFp16ToFloat32(await readFp16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length));
+  return unpackBf16ToFloat32(await readBf16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length));
 }
 
 /**
  * Copy **`t`** to **`dtype`** (new buffer). Same dtype performs a full GPU buffer copy
  * (non-aliasing). **`u32`** is not supported.
- *
- * **`bf16` ↔ `fp16`** uses an **`f32`** temporary on the device (two dispatches).
  */
 export function cast(rt: TensorRuntime, t: Tensor, dtype: FloatDType): Tensor {
   if (t.dtype === 'u32') {
@@ -213,32 +196,11 @@ export function cast(rt: TensorRuntime, t: Tensor, dtype: FloatDType): Tensor {
     return makeContiguousTensor(t.shape, buf, dtype);
   }
 
-  if (t.dtype === 'bf16' && dtype === 'fp16') {
-    const f32Buf = allocateContiguousBuffer(rt, n, 'f32');
-    dispatchCastBf16ToF32(rt.ctx, rt.registry, t.buffer, f32Buf, n);
-    const out = allocateContiguousBuffer(rt, n, 'fp16');
-    dispatchCastF32ToFp16(rt.ctx, rt.registry, f32Buf, out, n);
-    f32Buf.destroy();
-    return makeContiguousTensor(t.shape, out, 'fp16');
-  }
-  if (t.dtype === 'fp16' && dtype === 'bf16') {
-    const f32Buf = allocateContiguousBuffer(rt, n, 'f32');
-    dispatchCastFp16ToF32(rt.ctx, rt.registry, t.buffer, f32Buf, n);
-    const out = allocateContiguousBuffer(rt, n, 'bf16');
-    dispatchCastF32ToBf16(rt.ctx, rt.registry, f32Buf, out, n);
-    f32Buf.destroy();
-    return makeContiguousTensor(t.shape, out, 'bf16');
-  }
-
   const out = allocateContiguousBuffer(rt, n, dtype);
   if (t.dtype === 'f32' && dtype === 'bf16') {
     dispatchCastF32ToBf16(rt.ctx, rt.registry, t.buffer, out, n);
   } else if (t.dtype === 'bf16' && dtype === 'f32') {
     dispatchCastBf16ToF32(rt.ctx, rt.registry, t.buffer, out, n);
-  } else if (t.dtype === 'f32' && dtype === 'fp16') {
-    dispatchCastF32ToFp16(rt.ctx, rt.registry, t.buffer, out, n);
-  } else if (t.dtype === 'fp16' && dtype === 'f32') {
-    dispatchCastFp16ToF32(rt.ctx, rt.registry, t.buffer, out, n);
   } else {
     throw new Error(`cast: unsupported conversion ${t.dtype} → ${dtype}`);
   }

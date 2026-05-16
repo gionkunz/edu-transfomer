@@ -10,18 +10,30 @@ struct GatherDims {
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
 @group(0) @binding(3) var<storage, read_write> out: array<u32>;
 
+// One thread per packed output pair (one `u32` of `out`). Each thread emits one
+// row tile of 2 consecutive embedding dimensions — both sides of the pair come
+// from the same token row, so `vi` is computed once per word.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let tid = gid.x;
+  let word_idx = gid.x;
+  let out_i0 = word_idx << 1u;
   let ed = dims.embed_dim;
   let total = dims.num_tokens * ed;
-  if (tid >= total) {
+  if (out_i0 >= total) {
     return;
   }
-  let token = tid / ed;
-  let d = tid % ed;
-  let vi = indices[token];
-  let widx = vi * ed + d;
-  let v = load_bf16(&weights, widx);
-  store_bf16(&out, tid, v);
+  let token0 = out_i0 / ed;
+  let d0 = out_i0 % ed;
+  let vi0 = indices[token0];
+  let lo = load_bf16(&weights, vi0 * ed + d0);
+
+  var hi: f32 = 0.0;
+  let out_i1 = out_i0 + 1u;
+  if (out_i1 < total) {
+    let token1 = out_i1 / ed;
+    let d1 = out_i1 % ed;
+    let vi1 = indices[token1];
+    hi = load_bf16(&weights, vi1 * ed + d1);
+  }
+  store_bf16_pair(&out, word_idx, vec2<f32>(lo, hi));
 }

@@ -11,15 +11,7 @@ struct Dims {
 @group(0) @binding(3) var<storage, read> upstream: array<u32>;
 @group(0) @binding(4) var<storage, read_write> grad_logits: array<u32>;
 
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let ix = gid.x;
-  let rows = dims.rows;
-  let cols = dims.cols;
-  let total = rows * cols;
-  if (ix >= total) {
-    return;
-  }
+fn ce_grad_at(ix: u32, cols: u32) -> f32 {
   let row = ix / cols;
   let col = ix % cols;
   let tgt = targets[row];
@@ -29,5 +21,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (col == tgt) {
     g = g - u;
   }
-  store_bf16(&grad_logits, ix, g);
+  return g;
+}
+
+// One thread per packed output pair (one `u32` of `grad_logits`).
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let word_idx = gid.x;
+  let ix0 = word_idx << 1u;
+  let cols = dims.cols;
+  let total = dims.rows * cols;
+  if (ix0 >= total) {
+    return;
+  }
+  let lo = ce_grad_at(ix0, cols);
+  var hi: f32 = 0.0;
+  let ix1 = ix0 + 1u;
+  if (ix1 < total) {
+    hi = ce_grad_at(ix1, cols);
+  }
+  store_bf16_pair(&grad_logits, word_idx, vec2<f32>(lo, hi));
 }
