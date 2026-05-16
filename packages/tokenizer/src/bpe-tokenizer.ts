@@ -1,5 +1,15 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
+import {
+  materializeFilesIntoSlotPool,
+  materializeUtf8BytesIntoSlotPool,
+  materializeUtf8BytesIntoSlotPoolSync,
+} from './bpe-train-incremental/materialize';
+import {
+  buildInitialPairIndex,
+  runIncrementalMergeLoop,
+  runIncrementalMergeLoopSync,
+} from './bpe-train-incremental/run-merge-loop';
 import type { Tokenizer } from './types';
 
 export interface BPETokenizerOptions {
@@ -95,10 +105,6 @@ function assertValidSpecials(specials: readonly string[]): void {
   }
 }
 
-function pairKey(L: number, R: number): string {
-  return `${String(L)}\0${String(R)}`;
-}
-
 /** Merge lookup tables use **`outer.get(L).get(R)`** so **`encode`** does not allocate a string per adjacent pair probe. */
 type PairNestedNumberMap = Map<number, Map<number, number>>;
 
@@ -115,12 +121,70 @@ function nestedNumberSet(m: PairNestedNumberMap, a: number, b: number, v: number
   row.set(b, v);
 }
 
-function concatByteSeq(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-}
+/** Payload for **`onMergeComplete`** during BPE training (RAM **`train`** / **`trainAsync`** or **`trainFromFiles`**). */
+export type BpeTrainMergeCompleteEvent = {
+  readonly mergeIndex: number;
+  readonly newVocabId: number;
+  /** **`Uint32Array` backing buffer size** (**`4`** bytes per token slot) for the post-merge logical stream. */
+  readonly tokenStreamBytes: bigint;
+};
+
+/** Progress / UI hooks for **`trainFromFiles`** (optional). */
+export type BpeTrainFromFilesHooks = {
+  /**
+   * Corpus UTF-8 bytes read (**excludes** synthetic **`\\n`** between files).
+   * Throttled during streaming reads; guaranteed final call at end with exact total.
+   */
+  readonly onCorpusUtf8Bytes?: (cumulativeUtf8Bytes: bigint) => void;
+
+  /**
+   * Fires **exactly once** per training run, immediately after the initial pair-frequency
+   * table has been built from the materialized corpus and before the first merge.
+   * The argument is the count of distinct adjacent pairs observed in the initial scan.
+   */
+  readonly onPairIndexBuilt?: (distinctInitialPairs: number) => void;
+
+  readonly onMergeComplete?: (evt: BpeTrainMergeCompleteEvent) => void;
+
+  /**
+   * Bytes occupied by the materialized linked-list slot pool, in `u32`-equivalent
+   * units (i.e. `liveCount * 4`). With incremental in-place merges, the per-merge
+   * file rewrite is gone — this callback fires **once** at the end of the
+   * materialization phase. Subsequent stream-size signal is conveyed via
+   * `onMergeComplete.tokenStreamBytes`.
+   */
+  readonly onTokenStreamBytesWritten?: (cumulativeTokenFileBytes: bigint) => void;
+
+  /** Event-loop yields for TUIs (**Ctrl+C**) / repaint — **after every merge** **and** between materialize stripes / per disk-stream chunk. */
+  readonly yieldToHost?: () => void | Promise<void>;
+};
+
+/** Options for **`trainFromFiles`** (disk-streamed BPE; no giant in-memory `Buffer` concat). */
+export type BpeTrainFromFilesOptions = {
+  /**
+   * Reserved for future compatibility — historically pointed `mkdtemp` to a non-default
+   * temp parent for the per-merge token-stream files. The incremental training path no
+   * longer creates per-merge temp files, so this option is now unused; it remains in
+   * the type for source-compat.
+   */
+  readonly tempDir?: string;
+
+  readonly hooks?: BpeTrainFromFilesHooks;
+};
+
+/**
+ * Hooks for in-memory **`train`** / **`trainAsync`**.
+ * Prefer **`trainAsync`** when **`yieldToHost`** is async (**TUIs**, cooperative **Ctrl+C**).
+ */
+export type BpeTrainHooks = Pick<
+  BpeTrainFromFilesHooks,
+  'onMergeComplete' | 'onPairIndexBuilt' | 'yieldToHost'
+>;
+
+/** Options for **`BPETokenizer.train`** (optional **`3rd`** arg). */
+export type BpeTrainOptions = {
+  readonly hooks?: BpeTrainHooks;
+};
 
 interface BPETokenizerJsonV1 {
   readonly kind: typeof JSON_KIND;
@@ -156,18 +220,13 @@ export class BPETokenizer implements Tokenizer {
     return this.activeVocabCount;
   }
 
-  train(text: string, vocabSizeRequested: number): void {
+  /**
+   * Build the initial vocab byte rows: specials at ids `0 .. S-1`, then the 256
+   * single-byte tokens at ids `S .. S+255`. Returns the rows and the floor `S + 256`.
+   */
+  private buildInitialVocabRows(): { rows: Uint8Array[]; floor: number; S: number } {
     const S = this.specialTokens.length;
     const floor = S + 256;
-    if (!Number.isFinite(vocabSizeRequested) || vocabSizeRequested < floor) {
-      throw new Error(
-        `BPETokenizer.train: vocabSize ${String(vocabSizeRequested)} is less than required minimum ${String(floor)} (specialTokens=${String(S)} + 256 byte tokens)`,
-      );
-    }
-
-    const bytes = this.textEncoder.encode(text);
-    let stream = bytes.length === 0 ? new Uint32Array(0) : Uint32Array.from(bytes, (b) => S + b);
-
     const rows: Uint8Array[] = [];
     for (let i = 0; i < S; i++) {
       const tok = this.specialTokens[i];
@@ -177,56 +236,195 @@ export class BPETokenizer implements Tokenizer {
     for (let b = 0; b < 256; b++) {
       rows[S + b] = new Uint8Array([b]);
     }
+    return { rows, floor, S };
+  }
 
-    let nextId = floor;
-    const mergesList: [number, number][] = [];
+  private assertVocabCapAtLeastFloor(
+    vocabSizeRequested: number,
+    floor: number,
+    label: string,
+  ): void {
+    if (!Number.isFinite(vocabSizeRequested) || vocabSizeRequested < floor) {
+      throw new Error(
+        `${label}: vocabSize ${String(vocabSizeRequested)} is less than required minimum ${String(floor)} (specialTokens=${String(this.specialTokens.length)} + 256 byte tokens)`,
+      );
+    }
+  }
 
-    while (nextId < vocabSizeRequested) {
-      const freq = countAdjacentPairsOverlapping(stream);
+  /** Synchronous RAM training (**`Tokenizer.train`** shape + optional **`3rd`**-arg hooks). */
+  train(text: string, vocabSizeRequested: number, options?: BpeTrainOptions): void {
+    const bytes = this.textEncoder.encode(text);
+    this.runRamTrainingSync(bytes, vocabSizeRequested, options);
+  }
 
-      let bestFreq = -1;
-      let bestL = Infinity;
-      let bestR = Infinity;
-      let foundPair = false;
+  /** Byte-level training on UTF-8 bytes (same semantics as **`train(chunksAsString)`**). */
+  trainOnUtf8Bytes(
+    corpusUtf8: Uint8Array,
+    vocabSizeRequested: number,
+    options?: BpeTrainOptions,
+  ): void {
+    this.runRamTrainingSync(corpusUtf8, vocabSizeRequested, options);
+  }
 
-      for (const [k, c] of freq) {
-        if (c < 2) continue;
-        const ix = k.indexOf('\0');
-        const L = Number(k.slice(0, ix));
-        const R = Number(k.slice(ix + 1));
-        const better =
-          !foundPair ||
-          c > bestFreq ||
-          (c === bestFreq && (L < bestL || (L === bestL && R < bestR)));
+  /**
+   * Async RAM training on raw UTF-8 bytes (avoids a giant JS string + duplicate **`encode`** buffer).
+   * Yields **after each materialize stripe** **and after every merge** (**`yieldToHost`**) so stdin /
+   * **`SIGINT`** can run during long merge passes.
+   */
+  async trainAsyncOnUtf8Bytes(
+    corpusUtf8: Uint8Array,
+    vocabSizeRequested: number,
+    options?: BpeTrainOptions,
+  ): Promise<void> {
+    await this.runRamTrainingAsync(corpusUtf8, vocabSizeRequested, options);
+  }
 
-        if (better) {
-          foundPair = true;
-          bestFreq = c;
-          bestL = L;
-          bestR = R;
-        }
-      }
+  /**
+   * Async RAM training: same merges as **`train`**, plus **`yieldToHost`** **after materialize stripes**
+   * **and after every merge** (**`train(text)`** still encodes UTF-8 in one shot up front).
+   */
+  async trainAsync(
+    text: string,
+    vocabSizeRequested: number,
+    options?: BpeTrainOptions,
+  ): Promise<void> {
+    const bytes = this.textEncoder.encode(text);
+    await this.runRamTrainingAsync(bytes, vocabSizeRequested, options);
+  }
 
-      if (!foundPair || bestL === Infinity || bestR === Infinity) {
-        break;
-      }
+  /** Sync RAM training core (no microtask hops). Backs `train` and `trainOnUtf8Bytes`. */
+  private runRamTrainingSync(
+    corpusUtf8: Uint8Array,
+    vocabSizeRequested: number,
+    options?: BpeTrainOptions,
+  ): void {
+    const { rows, floor, S } = this.buildInitialVocabRows();
+    this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
 
-      const L = bestL;
-      const R = bestR;
-      const lb = rows[L];
-      const rb = rows[R];
-      if (lb === undefined || rb === undefined) {
-        throw new Error(
-          `BPETokenizer.train: internal vocab hole for ids ${String(L)}, ${String(R)}`,
-        );
-      }
+    const stream = materializeUtf8BytesIntoSlotPoolSync(corpusUtf8, S);
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
 
-      rows[nextId] = concatByteSeq(lb, rb);
-      mergesList.push([L, R]);
-      stream = rewriteGreedy(stream, L, R, nextId);
-      nextId += 1;
+    const result = runIncrementalMergeLoopSync({
+      stream,
+      index,
+      occList,
+      rows,
+      vocabCap: vocabSizeRequested,
+      nextIdInitial: floor,
+      hooks: {
+        ...(options?.hooks?.onMergeComplete !== undefined
+          ? { onMergeComplete: options.hooks.onMergeComplete }
+          : {}),
+      },
+    });
+
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+  }
+
+  /** Async RAM training core. Backs `trainAsync` and `trainAsyncOnUtf8Bytes`. */
+  private async runRamTrainingAsync(
+    corpusUtf8: Uint8Array,
+    vocabSizeRequested: number,
+    options?: BpeTrainOptions,
+  ): Promise<void> {
+    const { rows, floor, S } = this.buildInitialVocabRows();
+    this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
+
+    const stream = await materializeUtf8BytesIntoSlotPool(corpusUtf8, S, {
+      ...(options?.hooks?.yieldToHost !== undefined
+        ? { yieldToHost: options.hooks.yieldToHost }
+        : {}),
+    });
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
+
+    const result = await runIncrementalMergeLoop({
+      stream,
+      index,
+      occList,
+      rows,
+      vocabCap: vocabSizeRequested,
+      nextIdInitial: floor,
+      hooks: {
+        ...(options?.hooks?.onMergeComplete !== undefined
+          ? { onMergeComplete: options.hooks.onMergeComplete }
+          : {}),
+        ...(options?.hooks?.yieldToHost !== undefined
+          ? { yieldToHost: options.hooks.yieldToHost }
+          : {}),
+      },
+    });
+
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+  }
+
+  /**
+   * Byte-level BPE training on many files **without** loading the full corpus as one JS string.
+   *
+   * Reads each path as **raw UTF-8 bytes** (same as training on joined file contents with **`\n`**
+   * between files), materializes a single in-memory linked-list slot pool sized exactly to the
+   * total byte length, then runs the incremental merge loop directly against that pool. The legacy
+   * "round-trip a `u32` LE token stream through disk between merges" model is gone — every merge is
+   * an `O(K_m + P_m)` in-place operation against the slot pool, no temp files are created, and
+   * `tempDir` is now ignored.
+   */
+  async trainFromFiles(
+    sortedAbsolutePaths: readonly string[],
+    vocabSizeRequested: number,
+    options?: BpeTrainFromFilesOptions,
+  ): Promise<void> {
+    if (sortedAbsolutePaths.length === 0) {
+      throw new Error('BPETokenizer.trainFromFiles: at least one file path is required');
     }
 
+    const { rows, floor, S } = this.buildInitialVocabRows();
+    this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.trainFromFiles');
+
+    const stream = await materializeFilesIntoSlotPool(sortedAbsolutePaths, S, {
+      ...(options?.hooks?.onCorpusUtf8Bytes !== undefined
+        ? { onCorpusUtf8Bytes: options.hooks.onCorpusUtf8Bytes }
+        : {}),
+      ...(options?.hooks?.onTokenStreamBytesWritten !== undefined
+        ? { onTokenStreamBytesWritten: options.hooks.onTokenStreamBytesWritten }
+        : {}),
+      ...(options?.hooks?.yieldToHost !== undefined
+        ? { yieldToHost: options.hooks.yieldToHost }
+        : {}),
+    });
+    if (options?.hooks?.yieldToHost !== undefined) {
+      await options.hooks.yieldToHost();
+    }
+
+    const { index, occList, distinctInitialPairs } = buildInitialPairIndex(stream);
+    options?.hooks?.onPairIndexBuilt?.(distinctInitialPairs);
+
+    const result = await runIncrementalMergeLoop({
+      stream,
+      index,
+      occList,
+      rows,
+      vocabCap: vocabSizeRequested,
+      nextIdInitial: floor,
+      hooks: {
+        ...(options?.hooks?.onMergeComplete !== undefined
+          ? { onMergeComplete: options.hooks.onMergeComplete }
+          : {}),
+        ...(options?.hooks?.yieldToHost !== undefined
+          ? { yieldToHost: options.hooks.yieldToHost }
+          : {}),
+      },
+    });
+
+    this.finalizeBpeTraining(rows, result.mergesList, result.nextId, floor);
+  }
+
+  private finalizeBpeTraining(
+    rows: Uint8Array[],
+    mergesList: [number, number][],
+    nextId: number,
+    floor: number,
+  ): void {
     this.vocabByteRows = rows;
     this.mergesRecorded = mergesList;
 
@@ -568,37 +766,6 @@ export class BPETokenizer implements Tokenizer {
       throw new Error('BPETokenizer: call train() or load() before encode/decode/save');
     }
   }
-}
-
-function countAdjacentPairsOverlapping(stream: Uint32Array): Map<string, number> {
-  const freq = new Map<string, number>();
-  for (let i = 0; i < stream.length - 1; i++) {
-    const L = stream[i];
-    const R = stream[i + 1];
-    if (L === undefined || R === undefined) continue;
-    const pk = pairKey(L, R);
-    freq.set(pk, (freq.get(pk) ?? 0) + 1);
-  }
-  return freq;
-}
-
-function rewriteGreedy(stream: Uint32Array, L: number, R: number, newId: number): Uint32Array {
-  const tmp: number[] = [];
-  let i = 0;
-  while (i < stream.length) {
-    const cur = stream[i];
-    if (cur === undefined) {
-      throw new Error('BPETokenizer.rewriteGreedy: index out of range');
-    }
-    if (i + 1 < stream.length && stream[i] === L && stream[i + 1] === R) {
-      tmp.push(newId);
-      i += 2;
-    } else {
-      tmp.push(cur);
-      i += 1;
-    }
-  }
-  return Uint32Array.from(tmp);
 }
 
 function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonV1 {

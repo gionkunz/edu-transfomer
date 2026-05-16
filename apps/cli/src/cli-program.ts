@@ -4,7 +4,8 @@ import { exitCliError } from './cli-errors';
 import { runChatCommand } from './cmd/chat';
 import { runGenerateCommand } from './cmd/generate';
 import { runInspect } from './cmd/inspect';
-import { runTokenizerDecode, runTokenizerEncode, runTokenizerTrain } from './cmd/tokenizer';
+import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
+import { runTokenizerTrain } from './cmd/tokenizer-train';
 import { runTrainCommand } from './cmd/train';
 
 function collectStrings(value: string, prev: string[]): string[] {
@@ -31,11 +32,17 @@ export function createCliProgram(): Command {
     )
     .requiredOption('--vocab-size <n>', 'target vocab size', (v) => Number(v))
     .requiredOption('--out <path>', 'output tokenizer json path')
+    .option(
+      '--disk-stream',
+      'stream corpus to a temp u32 file (very large data; avoids JS max string length / RAM limits; slower)',
+      false,
+    )
     .action(async (opts) => {
       await runTokenizerTrain({
         dataGlobs: opts.data as string[],
         vocabSize: opts.vocabSize as number,
         outPath: opts.out as string,
+        diskStream: Boolean(opts.diskStream),
       });
     });
 

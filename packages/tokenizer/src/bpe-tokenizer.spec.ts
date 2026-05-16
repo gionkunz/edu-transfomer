@@ -112,11 +112,69 @@ describe('BPETokenizer', () => {
     expect(tok.decode(tok.encode(corpus))).toBe(corpus);
   });
 
-  it('round-trips short ASCII corpus', () => {
-    const corpus = 'the quick brown fox\n';
-    const tok = new BPETokenizer();
-    tok.train(corpus, 320);
-    expect(tok.decode(tok.encode(corpus))).toBe(corpus);
+  it('trainFromFiles matches train() on corpus joined like CLI (newline between files)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'bpe-train-disk-parity-'));
+    try {
+      const f1 = path.join(dir, 'a.txt');
+      const f2 = path.join(dir, 'b.txt');
+      await writeFile(f1, 'hello ');
+      await writeFile(f2, 'world');
+      const abs = [f1, f2].map((p) => path.resolve(p));
+
+      const v = 400;
+      const tMem = new BPETokenizer();
+      const tDisk = new BPETokenizer();
+      tMem.train('hello \nworld', v);
+      await tDisk.trainFromFiles(abs, v);
+
+      expect(tDisk.vocabSize).toBe(tMem.vocabSize);
+
+      const probes = ['hello \nworld', 'hello ', 'world', 'héllo', ''];
+      for (const p of probes) {
+        expect(tDisk.encode(p)).toEqual(tMem.encode(p));
+      }
+      for (const p of probes.filter((x) => x !== '')) {
+        expect(tDisk.decode(tDisk.encode(p))).toBe(tMem.decode(tMem.encode(p)));
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('trainAsync agrees with sync train()', async () => {
+    const corpus = 'abababcccdd extra';
+    const cap = 320;
+    const tSync = new BPETokenizer();
+    const tAsync = new BPETokenizer();
+    tSync.train(corpus, cap);
+    await tAsync.trainAsync(corpus, cap);
+    expect(tAsync.vocabSize).toBe(tSync.vocabSize);
+    expect(tAsync.encode(corpus)).toEqual(tSync.encode(corpus));
+  });
+
+  it('trainOnUtf8Bytes matches train() on the same UTF-8 bytes', () => {
+    const corpus = 'hello \n世界 abab';
+    const cap = 340;
+    const enc = new TextEncoder();
+    const bytes = enc.encode(corpus);
+    const tStr = new BPETokenizer();
+    const tBytes = new BPETokenizer();
+    tStr.train(corpus, cap);
+    tBytes.trainOnUtf8Bytes(bytes, cap);
+    expect(tBytes.vocabSize).toBe(tStr.vocabSize);
+    expect(tBytes.encode(corpus)).toEqual(tStr.encode(corpus));
+  });
+
+  it('trainAsyncOnUtf8Bytes matches train()', async () => {
+    const corpus = 'the quick brown fox';
+    const cap = 320;
+    const bytes = new TextEncoder().encode(corpus);
+    const a = new BPETokenizer();
+    const b = new BPETokenizer();
+    a.train(corpus, cap);
+    await b.trainAsyncOnUtf8Bytes(bytes, cap);
+    expect(b.vocabSize).toBe(a.vocabSize);
+    expect(b.encode(corpus)).toEqual(a.encode(corpus));
   });
 
   it('decode utf8 replace matches fatal for well-formed merged text', () => {

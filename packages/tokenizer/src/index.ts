@@ -1,5 +1,10 @@
 export {
   BPETokenizer,
+  type BpeTrainFromFilesHooks,
+  type BpeTrainFromFilesOptions,
+  type BpeTrainHooks,
+  type BpeTrainMergeCompleteEvent,
+  type BpeTrainOptions,
   type BPETokenizerOptions,
   type BpeDecodeOptions,
   type BpeEncodeHooks,
