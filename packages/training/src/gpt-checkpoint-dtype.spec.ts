@@ -39,7 +39,7 @@ function maxAbsDiff(a: Float32Array, b: Float32Array): number {
   expect(a.length).toBe(b.length);
   let m = 0;
   for (let i = 0; i < a.length; i++) {
-    m = Math.max(m, Math.abs(a[i]! - b[i]!));
+    m = Math.max(m, Math.abs(a[i] - b[i]));
   }
   return m;
 }
@@ -180,12 +180,12 @@ describe.skipIf(!webgpuAvailable)('Checkpoint load with bf16 compute dtype', () 
       const names = gptParameterTensorNames(modelF32);
       const params = collectGptParameters(modelF32);
       for (let i = 0; i < names.length; i++) {
-        const name = names[i]!;
-        const p = params[i]!;
+        const name = names[i];
+        const p = params[i];
         const h = await toArray(rt, p.tensor);
         const ref = fromDisk[name];
         expect(ref).toBeDefined();
-        expect(maxAbsDiff(h, ref!)).toBeLessThan(1e-6);
+        expect(maxAbsDiff(h, ref)).toBeLessThan(1e-6);
       }
 
       disposeGptModel(modelBf16);

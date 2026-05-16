@@ -135,8 +135,8 @@ describe('packPackedCheckpoint / unpackPackedCheckpoint', () => {
     expect(sidecar.tensors.f?.offset).toBe(0);
     expect(sidecar.tensors.h?.offset).toBe(4);
     const back = unpackPackedCheckpoint(bin, sidecar);
-    expect(Array.from(back['h']!)).toEqual([1, 2, 3]);
-    expect(Array.from(back['f']!)).toEqual([42]);
+    expect(Array.from(back['h'])).toEqual([1, 2, 3]);
+    expect(Array.from(back['f'])).toEqual([42]);
   });
 });
 

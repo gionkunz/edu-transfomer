@@ -134,7 +134,7 @@ async function concatCorpusAsUtf8Bytes(
       total += BigInt(sepByte.length);
     }
     const buf = await readFile(p);
-    chunks.push(buf as Buffer);
+    chunks.push(buf);
     total += BigInt(buf.length);
     opts?.onAccumulatedUtf8Bytes?.(total);
   }
@@ -182,7 +182,7 @@ function ramTrainFailureHint(e: unknown): Error {
     lower.includes('out of memory')
   ) {
     return new Error(
-      `${msg}\ntokenizer train: corpus may exceed the Node/V8 usable heap — try **--disk-stream**, or increase heap (**NODE_OPTIONS=\"--max-old-space-size=...\"**) — RAM BPE peaks around **~(5–9)×** corpus UTF‑8 (**u32 token stream**, merge buffers, bookkeeping)`,
+      `${msg}\ntokenizer train: corpus may exceed the Node/V8 usable heap — try **--disk-stream**, or increase heap (**NODE_OPTIONS="--max-old-space-size=..."**) — RAM BPE peaks around **~(5–9)×** corpus UTF‑8 (**u32 token stream**, merge buffers, bookkeeping)`,
     );
   }
   return e instanceof Error ? e : new Error(msg);
@@ -243,10 +243,13 @@ async function tokenizerTrainPlain(opts: RunTokenizerTrainOpts): Promise<void> {
               );
             }
           },
-          yieldToHost: async () =>
+          yieldToHost: async () => {
             await new Promise<void>((r) => {
-              globalThis.setImmediate(() => r());
-            }),
+              globalThis.setImmediate(() => {
+                r();
+              });
+            });
+          },
         },
       });
     } catch (e) {
@@ -353,10 +356,13 @@ async function tokenizerTrainRamTui(opts: RunTokenizerTrainOpts): Promise<void> 
             vm.streamMiB = bigToApproxMiB(ev.tokenStreamBytes);
             paint();
           },
-          yieldToHost: async () =>
+          yieldToHost: async () => {
             await new Promise<void>((r) => {
-              globalThis.setImmediate(() => r());
-            }),
+              globalThis.setImmediate(() => {
+                r();
+              });
+            });
+          },
         },
       });
     } catch (e) {
@@ -474,10 +480,13 @@ async function tokenizerTrainDiskStreamTui(opts: RunTokenizerTrainOpts): Promise
           vm.streamMiB = bigToApproxMiB(ev.tokenStreamBytes);
           paint();
         },
-        yieldToHost: async () =>
+        yieldToHost: async () => {
           await new Promise<void>((r) => {
-            globalThis.setImmediate(() => r());
-          }),
+            globalThis.setImmediate(() => {
+              r();
+            });
+          });
+        },
       },
     });
 

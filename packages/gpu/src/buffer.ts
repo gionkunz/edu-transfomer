@@ -127,7 +127,7 @@ export function writeBf16Buffer(
 ): void {
   const words = new Uint32Array(data.length);
   for (let i = 0; i < data.length; i++) {
-    words[i] = data[i]! & 0xffff;
+    words[i] = data[i] & 0xffff;
   }
   queue.writeBuffer(buffer, bufferOffset, words.buffer, words.byteOffset, words.byteLength);
 }
@@ -164,7 +164,7 @@ export async function readBf16Buffer(
 
   const out = new Uint16Array(elementCount);
   for (let i = 0; i < elementCount; i++) {
-    out[i] = words[i]! & 0xffff;
+    out[i] = words[i] & 0xffff;
   }
   return out;
 }

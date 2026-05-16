@@ -124,18 +124,22 @@ function fakeTensorWithDtype(shape: readonly number[], dtype: Tensor['dtype']): 
 
 describe('assertFloatDtype', () => {
   it('throws on u32', () => {
-    expect(() => assertFloatDtype(fakeTensorWithDtype([3], 'u32'))).toThrow(/float dtype/);
+    expect(() => {
+      assertFloatDtype(fakeTensorWithDtype([3], 'u32'));
+    }).toThrow(/float dtype/);
   });
 
   it('accepts bf16', () => {
-    expect(() => assertFloatDtype(fakeTensorWithDtype([2], 'bf16'))).not.toThrow();
+    expect(() => {
+      assertFloatDtype(fakeTensorWithDtype([2], 'bf16'));
+    }).not.toThrow();
   });
 });
 
 describe('assertSameDtype', () => {
   it('throws when dtypes differ', () => {
-    expect(() =>
-      assertSameDtype(fakeTensorWithDtype([2], 'f32'), fakeTensorWithDtype([2], 'bf16')),
-    ).toThrow(/dtype mismatch/);
+    expect(() => {
+      assertSameDtype(fakeTensorWithDtype([2], 'f32'), fakeTensorWithDtype([2], 'bf16'));
+    }).toThrow(/dtype mismatch/);
   });
 });

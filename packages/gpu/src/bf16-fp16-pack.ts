@@ -41,7 +41,7 @@ export function unpackBf16ToFloat32(src: Uint16Array, dst?: Float32Array): Float
   }
   const outView = new DataView(out.buffer, out.byteOffset, out.byteLength);
   for (let i = 0; i < src.length; i++) {
-    outView.setUint32(i * 4, (src[i]! << 16) >>> 0, true);
+    outView.setUint32(i * 4, (src[i] << 16) >>> 0, true);
   }
   return out;
 }
@@ -136,7 +136,7 @@ export function unpackFp16ToFloat32(src: Uint16Array, dst?: Float32Array): Float
     throw new Error('unpackFp16ToFloat32: dst shorter than src');
   }
   for (let i = 0; i < src.length; i++) {
-    out[i] = float16BitsToFloat32(src[i]!);
+    out[i] = float16BitsToFloat32(src[i]);
   }
   return out;
 }

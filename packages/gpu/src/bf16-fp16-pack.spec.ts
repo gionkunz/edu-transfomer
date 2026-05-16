@@ -23,8 +23,8 @@ describe('bf16 pack/unpack (CPU)', () => {
     const f32 = new Float32Array(1);
     const u32 = new DataView(f32.buffer);
     u32.setUint32(0, 0x3f800001, true);
-    const half = packBf16FromFloat32(f32)[0]!;
-    const back = unpackBf16ToFloat32(new Uint16Array([half]))[0]!;
+    const half = packBf16FromFloat32(f32)[0];
+    const back = unpackBf16ToFloat32(new Uint16Array([half]))[0];
     expect(back).toBe(1);
   });
 });

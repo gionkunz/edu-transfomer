@@ -4,7 +4,9 @@ import { assertCorpusTokenIdsInVocab } from './lm-batch';
 
 describe('assertCorpusTokenIdsInVocab', () => {
   it('accepts empty corpus', () => {
-    expect(() => assertCorpusTokenIdsInVocab(new Uint32Array(0), 100)).not.toThrow();
+    expect(() => {
+      assertCorpusTokenIdsInVocab(new Uint32Array(0), 100);
+    }).not.toThrow();
   });
 
   it('accepts ids in range', () => {
@@ -12,9 +14,9 @@ describe('assertCorpusTokenIdsInVocab', () => {
   });
 
   it('rejects id >= vocabSize', () => {
-    expect(() => assertCorpusTokenIdsInVocab(Uint32Array.of(0, 8000, 1), 8000)).toThrow(
-      /corpus token id 8000/,
-    );
+    expect(() => {
+      assertCorpusTokenIdsInVocab(Uint32Array.of(0, 8000, 1), 8000);
+    }).toThrow(/corpus token id 8000/);
   });
 });
 

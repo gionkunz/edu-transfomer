@@ -79,7 +79,9 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
     const moments = opt as unknown as { m: Map<typeof w, { dtype: string }> };
     expect(moments.m.get(w)?.dtype).toBe('f32');
 
-    const castRef = cast(rt, w.masterTensor!, 'bf16');
+    const master = w.masterTensor;
+    if (master === null) throw new Error('expected masterTensor for bf16 parameter');
+    const castRef = cast(rt, master, 'bf16');
     try {
       const got = await toArray(rt, w.tensor);
       const exp = await toArray(rt, castRef);
@@ -91,7 +93,7 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
     }
 
     destroy(w.tensor);
-    destroy(w.masterTensor!);
+    destroy(master);
     opt.dispose();
   });
 
@@ -115,7 +117,9 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
     opt.step();
     const moments = opt as unknown as { m: Map<typeof w, { dtype: string }> };
     expect(moments.m.get(w)?.dtype).toBe('f32');
-    const castRef = cast(rt, w.masterTensor!, 'fp16');
+    const master = w.masterTensor;
+    if (master === null) throw new Error('expected masterTensor for fp16 parameter');
+    const castRef = cast(rt, master, 'fp16');
     try {
       const got = await toArray(rt, w.tensor);
       const exp = await toArray(rt, castRef);
@@ -126,7 +130,7 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
       destroy(castRef);
     }
     destroy(w.tensor);
-    destroy(w.masterTensor!);
+    destroy(master);
     opt.dispose();
   });
 });
