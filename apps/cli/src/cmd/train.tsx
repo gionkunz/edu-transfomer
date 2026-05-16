@@ -5,17 +5,19 @@ import path from 'node:path';
 import { createParameterRegistry } from '@llm-transformer-diy/autograd';
 import { discoverTrainingFiles } from '@llm-transformer-diy/io';
 import { collectGptParameters, createGptModel } from '@llm-transformer-diy/model';
-import { destroy } from '@llm-transformer-diy/tensor';
+import { destroy, type FloatDType } from '@llm-transformer-diy/tensor';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 import {
   AdamW,
   Trainer,
+  assertCorpusTokenIdsInVocab,
   createLmBatch,
   getCosineLr,
   registerModelParameters,
   saveGptCheckpoint,
 } from '@llm-transformer-diy/training';
 
+import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
 import { resolveTrainConfig } from '../config-presets';
 import { createTensorRuntime } from '../runtime';
 import { primeTuiTerminalCanvas } from '../tui-prime';
@@ -38,7 +40,13 @@ import {
 } from './train-dash-model';
 import { TrainDashboardView } from './train-dashboard';
 
-export async function runTrainCommand(opts: {
+/** Defaults for **`llm train`** (override with flags). */
+export const TRAIN_DEFAULT_LR_MAX = 1e-4;
+export const TRAIN_DEFAULT_LR_MIN = 1e-5;
+export const TRAIN_DEFAULT_WEIGHT_DECAY = 0.01;
+export const TRAIN_DEFAULT_MAX_GRAD_NORM = 0.5;
+
+export type RunTrainCommandOpts = {
   readonly dataGlobs: string[];
   readonly outDir: string;
   readonly tokenizerPath: string;
@@ -47,7 +55,67 @@ export async function runTrainCommand(opts: {
   readonly seqLen: number;
   readonly tokenCacheBase?: string;
   readonly rebuildTokenCache?: boolean;
-}): Promise<void> {
+  /** Peak LR after linear warmup; cosine decay toward **`lrMin`**. */
+  readonly lrMax: number;
+  readonly lrMin: number;
+  /** AdamW decoupled weight decay **`λ`** (0 disables). */
+  readonly weightDecay: number;
+  /**
+   * Global L2 grad clip threshold; **`0`** or **`Infinity`** disables clipping (risky on long runs).
+   */
+  readonly maxGradNorm: number;
+  /** Forward / parameter compute dtype (`'f32'` default). */
+  readonly computeDtype: FloatDType;
+};
+
+function resolveTrainOptimHyperparams(opts: RunTrainCommandOpts): {
+  lrMax: number;
+  lrMin: number;
+  weightDecay: number;
+  maxGradNorm: number;
+} {
+  const { lrMax, lrMin, weightDecay, maxGradNorm } = opts;
+
+  if (!Number.isFinite(lrMax) || !Number.isFinite(lrMin) || !Number.isFinite(weightDecay)) {
+    throw new Error(
+      'train: lr-max, lr-min, and weight-decay must be finite numbers (check CLI flags)',
+    );
+  }
+  if (!Number.isFinite(maxGradNorm) && maxGradNorm !== Number.POSITIVE_INFINITY) {
+    throw new Error('train: max-grad-norm must be finite or Infinity (check CLI flags)');
+  }
+
+  if (!(lrMax > 0)) {
+    throw new Error(`train: lr-max must be > 0 (got ${String(lrMax)})`);
+  }
+  if (!(lrMin >= 0) || !(lrMin <= lrMax)) {
+    throw new Error(
+      `train: lr-min must satisfy 0 ≤ lr-min ≤ lr-max (got ${String(lrMin)} vs max ${String(lrMax)})`,
+    );
+  }
+  if (!(weightDecay >= 0)) {
+    throw new Error(`train: weight-decay must be ≥ 0 (got ${String(weightDecay)})`);
+  }
+  const clipOff = maxGradNorm === 0 || maxGradNorm === Number.POSITIVE_INFINITY;
+  if (!clipOff) {
+    if (!(maxGradNorm > 0)) {
+      throw new Error(
+        `train: max-grad-norm must be > 0, or 0/Infinity to disable clipping (got ${String(maxGradNorm)})`,
+      );
+    }
+  }
+
+  return {
+    lrMax,
+    lrMin,
+    weightDecay,
+    maxGradNorm: clipOff ? Number.POSITIVE_INFINITY : maxGradNorm,
+  };
+}
+
+export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> {
+  const computeDtype = opts.computeDtype;
+  const optim = resolveTrainOptimHyperparams(opts);
   const outAbsDisplay = path.resolve(opts.outDir);
   const draft: TrainDashboardDraft = createInitialTrainDashboardDraft({
     outDirDisplay: outAbsDisplay,
@@ -58,19 +126,45 @@ export async function runTrainCommand(opts: {
 
   type RenderInstance = ReturnType<typeof render>;
   const dashRef: { inst?: RenderInstance } = {};
+  const toggleTrainingPause = (): void => {
+    if (draft.phase !== 'training') return;
+    const nowMs = Date.now();
+    if (draft.trainingPaused) {
+      draft.trainingPaused = false;
+      if (draft.trainingPauseBeganAtMs !== null) {
+        draft.trainingPausedAccumMs += nowMs - draft.trainingPauseBeganAtMs;
+        draft.trainingPauseBeganAtMs = null;
+      }
+    } else {
+      draft.trainingPaused = true;
+      draft.trainingPauseBeganAtMs = nowMs;
+    }
+    dashThrottle.flush();
+  };
   const paintDashboard = (): void => {
     if (dashRef.inst === undefined) return;
-    dashRef.inst.rerender(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />);
+    dashRef.inst.rerender(
+      <TrainDashboardView
+        snapshot={finalizeTrainDashboardDraft(draft)}
+        onToggleTrainingPause={toggleTrainingPause}
+      />,
+    );
   };
   const dashThrottle = createTrainDashboardThrottle(96, paintDashboard);
 
   draft.phase = 'starting';
   draft.detailLine = 'mounting dashboard';
   primeTuiTerminalCanvas();
-  dashRef.inst = render(<TrainDashboardView snapshot={finalizeTrainDashboardDraft(draft)} />, {
-    exitOnCtrlC: true,
-    patchConsole: true,
-  });
+  dashRef.inst = render(
+    <TrainDashboardView
+      snapshot={finalizeTrainDashboardDraft(draft)}
+      onToggleTrainingPause={toggleTrainingPause}
+    />,
+    {
+      exitOnCtrlC: true,
+      patchConsole: true,
+    },
+  );
   dashThrottle.flush();
 
   draft.phase = 'gpu_init';
@@ -78,9 +172,16 @@ export async function runTrainCommand(opts: {
   console.error('train: initializing WebGPU runtime…');
   dashThrottle.flush();
   const rt = await createTensorRuntime();
+  assertRuntimeSupportsComputeDtype(rt.ctx, computeDtype, 'train');
+  if (computeDtype === 'fp16') {
+    console.error(
+      'train: fp16 training is unstable without loss scaling — prefer bf16 when the adapter supports it.',
+    );
+  }
   draft.gpuAdapterSummary = rt.ctx.adapterLabel;
   draft.detailLine = rt.ctx.adapterLabel;
   console.error(`train: WebGPU adapter: ${rt.ctx.adapterLabel}`);
+  console.error(`train: compute dtype: ${computeDtype}`);
   if (rt.ctx.isLikelyCpuSoftwareAdapter) {
     const stderrMsg =
       'WebGPU reports a software adapter (e.g. LLVMpipe). Work runs on CPU. For NVIDIA on Linux: install the proprietary driver + Vulkan ICD so `vulkaninfo` lists your GPU (not only llvmpipe). You can point loaders at the NVIDIA ICD with e.g. VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json (path varies). On Windows use native Node; WSL often falls back to software unless GPU + Vulkan are wired for your stack.';
@@ -263,7 +364,7 @@ export async function runTrainCommand(opts: {
             pessimisticMergeRemaining: remain,
             mergesPerSec: mergesPerSecEma,
             pessimisticEtaSec: eta,
-            mergeProgressPct: mergeProgressPct(initialTokForEncode, ev.mergeIteration),
+            mergeProgressPct: mergeProgressPct(initialTokForEncode, ev.tokenCount),
           };
         }
         dashThrottle.schedule();
@@ -316,36 +417,42 @@ export async function runTrainCommand(opts: {
     );
   }
 
+  assertCorpusTokenIdsInVocab(tokenIds, gptCfg.vocabSize);
+
   draft.phase = 'build_model';
   draft.detailLine = `layers=${String(gptCfg.nLayers)} d_model inferred`;
   dashThrottle.flush();
-  const model = createGptModel(rt, gptCfg);
+  const model = createGptModel(rt, gptCfg, { dtype: computeDtype });
   const reg = createParameterRegistry();
   registerModelParameters(reg, collectGptParameters(model));
-  const opt = new AdamW(rt, reg, { lr: 3e-4, weightDecay: 0.1 });
+  const opt = new AdamW(rt, reg, { lr: optim.lrMax, weightDecay: optim.weightDecay });
 
   const totalSteps = opts.steps;
   const schedule = {
-    lrMax: 3e-4,
-    lrMin: 1e-5,
+    lrMax: optim.lrMax,
+    lrMin: optim.lrMin,
     warmupSteps: Math.min(10, Math.max(1, Math.floor(totalSteps / 10))),
     totalSteps,
   };
 
   draft.phase = 'trainer_init';
-  draft.detailLine = `AdamW · cosine ${String(schedule.warmupSteps)} warmup`;
+  draft.detailLine = `AdamW · lr ${String(optim.lrMax)}→${String(optim.lrMin)} · wd ${String(optim.weightDecay)} · clip ${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`;
   dashThrottle.flush();
   const trainer = new Trainer(rt, model, reg, opt, {
-    maxGradNorm: 1.0,
+    maxGradNorm: optim.maxGradNorm,
     schedule,
   });
 
-  draft.archSummary = `${String(gptCfg.nLayers)}L · d${String(model.config.dModel)} · V${String(model.config.vocabSize)}`;
+  draft.archSummary = `${String(gptCfg.nLayers)}L · d${String(model.config.dModel)} · V${String(model.config.vocabSize)} · ${computeDtype}`;
   draft.phase = 'training';
+  draft.trainingPhaseStartedAtMs = Date.now();
   draft.trainLrDisplay = schedule.lrMax;
   draft.detailLine = 'optimizer stepping (GPU shader warmup may pause step 1)';
   dashThrottle.flush();
 
+  console.error(
+    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`,
+  );
   console.error(
     'train: first optimizer step often waits on GPU shader/pipeline warmup (minutes on some setups).',
   );
@@ -354,6 +461,12 @@ export async function runTrainCommand(opts: {
 
   try {
     for (let s = 0; s < totalSteps; s++) {
+      while (draft.trainingPaused) {
+        await new Promise<void>((r) => {
+          globalThis.setTimeout(r, 120);
+        });
+        dashThrottle.schedule();
+      }
       if (s === 0) {
         console.error('train: step 1/' + String(totalSteps) + '…');
       }
@@ -373,6 +486,9 @@ export async function runTrainCommand(opts: {
       draft.recentLosses.push(loss);
       dashThrottle.flush();
     }
+    draft.trainingPaused = false;
+    draft.trainingPauseBeganAtMs = null;
+    draft.trainingWallStoppedAtMs = Date.now();
     dashThrottle.flush();
 
     draft.phase = 'save_checkpoint';

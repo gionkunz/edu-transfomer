@@ -1,4 +1,4 @@
-import { createFromArray } from '@llm-transformer-diy/tensor';
+import { createFromArray, floatDtypeOf } from '@llm-transformer-diy/tensor';
 import type { TensorRuntime } from '@llm-transformer-diy/tensor';
 
 import type { Variable } from './types';
@@ -53,7 +53,7 @@ export function backward(rt: TensorRuntime, output: Variable): void {
   if (output.grad === null) {
     const ones = new Float32Array(output.tensor.length);
     ones.fill(1);
-    const onesTensor = createFromArray(rt, ones, output.tensor.shape);
+    const onesTensor = createFromArray(rt, ones, output.tensor.shape, floatDtypeOf(output.tensor));
     // Route through accumulateGrad so the direct-assignment branch keeps the
     // grep audit clean: only accumulateGrad and zeroGrad write Variable.grad.
     accumulateGrad(rt, output, onesTensor);

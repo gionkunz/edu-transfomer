@@ -3,6 +3,7 @@ import {
   broadcastFillFromScalar as tensorBroadcastFillFromScalar,
   crossEntropyLogitsGrad as tensorCrossEntropyLogitsGrad,
   crossEntropyRowsFromLogits as tensorCrossEntropyRowsFromLogits,
+  destroy,
   embedding as tensorEmbedding,
   gelu as tensorGelu,
   geluBackward as tensorGeluBackward,
@@ -131,21 +132,16 @@ export function gelu(rt: TensorRuntime, x: Variable): Variable {
 /**
  * Row-wise RMSNorm (`gamma: [cols]`) with autograd. Uses dedicated backward kernels.
  */
-export function rmsnorm(
-  rt: TensorRuntime,
-  x: Variable,
-  gamma: Variable,
-  epsilon = 1e-6,
-): Variable {
+export function rmsnorm(rt: TensorRuntime, x: Variable, gamma: Variable, epsilon = 1e-6): Variable {
   const out = tensorRmsnorm(rt, x.tensor, gamma.tensor, epsilon);
   return liftOp(out, [x, gamma], () => ({
     name: 'rmsnorm',
     inputs: [x, gamma],
     backward: (rtBackward, gradOutput) => [
-      x.requiresGrad ? tensorRmsnormGradInput(rtBackward, gradOutput, x.tensor, gamma.tensor, epsilon) : null,
-      gamma.requiresGrad
-        ? tensorRmsnormGradGamma(rtBackward, gradOutput, x.tensor, epsilon)
+      x.requiresGrad
+        ? tensorRmsnormGradInput(rtBackward, gradOutput, x.tensor, gamma.tensor, epsilon)
         : null,
+      gamma.requiresGrad ? tensorRmsnormGradGamma(rtBackward, gradOutput, x.tensor, epsilon) : null,
     ],
   }));
 }
@@ -246,12 +242,18 @@ export function crossEntropyRowsFromLogits(
   return liftOp(losses, [logits, targets], () => ({
     name: 'cross_entropy_rows_logits',
     inputs: [logits, targets],
-    backward: (rtBackward, gradOutput) => [
-      logits.requiresGrad
-        ? tensorCrossEntropyLogitsGrad(rtBackward, probsTensor, targets.tensor, gradOutput)
-        : null,
-      null,
-    ],
+    backward: (rtBackward, gradOutput) => {
+      try {
+        return [
+          logits.requiresGrad
+            ? tensorCrossEntropyLogitsGrad(rtBackward, probsTensor, targets.tensor, gradOutput)
+            : null,
+          null,
+        ];
+      } finally {
+        destroy(probsTensor);
+      }
+    },
   }));
 }
 

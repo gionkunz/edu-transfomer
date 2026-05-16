@@ -95,6 +95,8 @@ function SetupStepperRail(props: { readonly phase: TrainPipelinePhase }): React.
 
 export type TrainDashboardViewProps = {
   readonly snapshot: TrainDashboardSnapshot;
+  /** Toggle training pause; only honored while **`phase === 'training'`** (caller checks). */
+  readonly onToggleTrainingPause?: () => void;
 };
 
 export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactElement {
@@ -106,6 +108,9 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
     }
     if (key.ctrl && input === 'c') {
       process.exit(0);
+    }
+    if (input === 'p' && snap.phase === 'training' && props.onToggleTrainingPause !== undefined) {
+      props.onToggleTrainingPause();
     }
   });
 
@@ -119,8 +124,10 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
       : 0;
 
   const etaSec =
-    snap.trainStepCompleted > 0 && snap.trainStepCompleted < snap.totalTrainSteps
-      ? ((snap.totalTrainSteps - snap.trainStepCompleted) * snap.nowElapsedSec) /
+    snap.trainStepCompleted > 0 &&
+    snap.trainStepCompleted < snap.totalTrainSteps &&
+    snap.trainWallActiveSec > 0
+      ? ((snap.totalTrainSteps - snap.trainStepCompleted) * snap.trainWallActiveSec) /
         snap.trainStepCompleted
       : null;
   const etaStr = etaSec !== null && Number.isFinite(etaSec) ? `~${formatDurationSec(etaSec)}` : '—';
@@ -176,6 +183,12 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
         <Box style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }}>
           <Text style={{ color: 'gray' }}>{'Phase '}</Text>
           <Badge color="yellow">{PHASE_LABEL[snap.phase]}</Badge>
+          {snap.phase === 'training' && snap.trainingPaused ? (
+            <>
+              <Text>{'  '}</Text>
+              <Badge color="red">{'PAUSED'}</Badge>
+            </>
+          ) : null}
           {snap.detailLine.trim().length > 0 ? (
             <Text style={{ color: 'gray' }}>{` · ${snap.detailLine}`}</Text>
           ) : null}
@@ -237,7 +250,7 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
                     <ProgressBar value={snap.encodeProgress.mergeProgressPct} />
                     <Text
                       style={{ color: 'gray' }}
-                    >{`${snap.encodeProgress.mergeProgressPct.toFixed(1)}% (worst-case bound; may finish sooner)`}</Text>
+                    >{`${snap.encodeProgress.mergeProgressPct.toFixed(1)}% length-reduction vs post-expand tokens (pass budget is “rem” below)`}</Text>
                   </Box>
                   <Text style={{ marginTop: 1 }}>
                     {`${formatPassThroughput(snap.encodeProgress.mergesPerSec)} · ETA ${formatPessimisticEta(snap.encodeProgress.pessimisticEtaSec)} (pessimistic)`}
@@ -275,7 +288,7 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
             <Text style={{ color: 'gray' }}>{'Training progress'}</Text>
             <ProgressBar value={trainProgressPct} />
             <Text style={{ color: 'gray' }}>
-              {`${trainProgressPct.toFixed(0)}% · wall ${formatDurationSec(snap.nowElapsedSec)} · ETA ${etaStr}`}
+              {`${trainProgressPct.toFixed(0)}% · train wall ${formatDurationSec(snap.trainWallActiveSec)} · ETA ${etaStr}`}
             </Text>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
@@ -310,7 +323,9 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
       ) : null}
 
       <Text style={{ color: 'gray', marginTop: 1 }}>
-        {'Ctrl+C / q quit · stderr still shows GPU / encode diagnostics'}
+        {snap.phase === 'training'
+          ? 'p pause/resume GPU · Ctrl+C / q quit · stderr still shows GPU / encode diagnostics'
+          : 'Ctrl+C / q quit · stderr still shows GPU / encode diagnostics'}
       </Text>
     </Box>
   );

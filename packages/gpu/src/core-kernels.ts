@@ -3,86 +3,172 @@ import type { KernelRegistry } from './kernel-registry';
 import {
   loadAdamWStepWgsl,
   loadBroadcastFillScalarWgsl,
+  loadBroadcastFillScalarWgslBf16,
+  loadBroadcastFillScalarWgslFp16,
+  loadCastBf16ToF32Wgsl,
+  loadCastFp16ToF32Wgsl,
+  loadCastF32ToBf16Wgsl,
+  loadCastF32ToFp16Wgsl,
   loadCrossEntropyFromLogitsWgsl,
+  loadCrossEntropyFromLogitsWgslBf16,
+  loadCrossEntropyFromLogitsWgslFp16,
   loadCrossEntropyLogitsGradWgsl,
+  loadCrossEntropyLogitsGradWgslBf16,
+  loadCrossEntropyLogitsGradWgslFp16,
   loadElementwiseAddWgsl,
+  loadElementwiseAddWgslBf16,
+  loadElementwiseAddWgslFp16,
   loadElementwiseGeluBackwardWgsl,
+  loadElementwiseGeluBackwardWgslBf16,
+  loadElementwiseGeluBackwardWgslFp16,
   loadElementwiseGeluWgsl,
+  loadElementwiseGeluWgslBf16,
+  loadElementwiseGeluWgslFp16,
   loadElementwiseMulWgsl,
+  loadElementwiseMulWgslBf16,
+  loadElementwiseMulWgslFp16,
   loadElementwiseScaleWgsl,
+  loadElementwiseScaleWgslBf16,
+  loadElementwiseScaleWgslFp16,
   loadEmbeddingGatherWgsl,
+  loadEmbeddingGatherWgslBf16,
+  loadEmbeddingGatherWgslFp16,
   loadEmbeddingScatterAccumWgsl,
+  loadEmbeddingScatterAccumWgslBf16,
+  loadEmbeddingScatterAccumWgslFp16,
   loadMatMulWgsl,
+  loadMatMulWgslBf16,
+  loadMatMulWgslFp16,
   loadReduceMaxWgsl,
+  loadReduceMaxWgslBf16,
+  loadReduceMaxWgslFp16,
   loadReduceSumWgsl,
+  loadReduceSumWgslBf16,
+  loadReduceSumWgslFp16,
   loadRmsNormGradGammaWgsl,
+  loadRmsNormGradGammaWgslBf16,
+  loadRmsNormGradGammaWgslFp16,
   loadRmsNormGradInputWgsl,
+  loadRmsNormGradInputWgslBf16,
+  loadRmsNormGradInputWgslFp16,
   loadRmsNormWgsl,
+  loadRmsNormWgslBf16,
+  loadRmsNormWgslFp16,
   loadSoftmaxBackwardWgsl,
+  loadSoftmaxBackwardWgslBf16,
+  loadSoftmaxBackwardWgslFp16,
   loadSoftmaxWgsl,
+  loadSoftmaxWgslBf16,
+  loadSoftmaxWgslFp16,
   loadTransposeWgsl,
+  loadTransposeWgslBf16,
+  loadTransposeWgslFp16,
 } from './kernels/load-core-wgsl';
 import { type ComputeBindingDesc, createSimpleComputePipeline } from './pipeline';
 
 /** Naive matmul: row-major A (M×K), B (K×N), output C (M×N). */
 export const CORE_KERNEL_MATMUL = 'core.matmul';
+export const CORE_KERNEL_MATMUL_BF16 = 'core.matmul.bf16';
+export const CORE_KERNEL_MATMUL_FP16 = 'core.matmul.fp16';
 
 /** Row-major transpose: src rows×cols → dst cols×rows. */
 export const CORE_KERNEL_TRANSPOSE = 'core.transpose';
+export const CORE_KERNEL_TRANSPOSE_BF16 = 'core.transpose.bf16';
+export const CORE_KERNEL_TRANSPOSE_FP16 = 'core.transpose.fp16';
 
 /** Elementwise add on equal-length 1D f32 buffers. */
 export const CORE_KERNEL_ADD = 'core.add';
+export const CORE_KERNEL_ADD_BF16 = 'core.add.bf16';
+export const CORE_KERNEL_ADD_FP16 = 'core.add.fp16';
 
 /** Elementwise multiply on equal-length 1D f32 buffers. */
 export const CORE_KERNEL_MUL = 'core.mul';
+export const CORE_KERNEL_MUL_BF16 = 'core.mul.bf16';
+export const CORE_KERNEL_MUL_FP16 = 'core.mul.fp16';
 
 /** out[i] = a[i] * scale (uniform scalar). */
 export const CORE_KERNEL_SCALE = 'core.scale';
+export const CORE_KERNEL_SCALE_BF16 = 'core.scale.bf16';
+export const CORE_KERNEL_SCALE_FP16 = 'core.scale.fp16';
 
 /** GELU activation per element (tanh formulation; see cpu-reference.ts). */
 export const CORE_KERNEL_GELU = 'core.gelu';
+export const CORE_KERNEL_GELU_BF16 = 'core.gelu.bf16';
+export const CORE_KERNEL_GELU_FP16 = 'core.gelu.fp16';
 
 /** Upstream gradient times GELU derivative w.r.t. forward input (elementwise). */
 export const CORE_KERNEL_GELU_BACKWARD = 'core.gelu_backward';
+export const CORE_KERNEL_GELU_BACKWARD_BF16 = 'core.gelu_backward.bf16';
+export const CORE_KERNEL_GELU_BACKWARD_FP16 = 'core.gelu_backward.fp16';
 
 /** Row-wise sum of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
 export const CORE_KERNEL_REDUCE_SUM = 'core.reduce_sum';
+export const CORE_KERNEL_REDUCE_SUM_BF16 = 'core.reduce_sum.bf16';
+export const CORE_KERNEL_REDUCE_SUM_FP16 = 'core.reduce_sum.fp16';
 
 /** Row-wise max of row-major [rows, cols] f32 matrix → [rows] f32 vector. */
 export const CORE_KERNEL_REDUCE_MAX = 'core.reduce_max';
+export const CORE_KERNEL_REDUCE_MAX_BF16 = 'core.reduce_max.bf16';
+export const CORE_KERNEL_REDUCE_MAX_FP16 = 'core.reduce_max.fp16';
 
 /** Numerically-stable row-wise softmax of [rows, cols] f32 matrix (two-pass per row). */
 export const CORE_KERNEL_SOFTMAX = 'core.softmax';
+export const CORE_KERNEL_SOFTMAX_BF16 = 'core.softmax.bf16';
+export const CORE_KERNEL_SOFTMAX_FP16 = 'core.softmax.fp16';
 
 /** Jacobian–vector product for row-wise softmax (grad w.r.t. logits). */
 export const CORE_KERNEL_SOFTMAX_BACKWARD = 'core.softmax_backward';
+export const CORE_KERNEL_SOFTMAX_BACKWARD_BF16 = 'core.softmax_backward.bf16';
+export const CORE_KERNEL_SOFTMAX_BACKWARD_FP16 = 'core.softmax_backward.fp16';
 
 /** Row-wise RMSNorm of [rows, cols] f32 matrix with learned `gamma: [cols]`. */
 export const CORE_KERNEL_RMSNORM = 'core.rmsnorm';
+export const CORE_KERNEL_RMSNORM_BF16 = 'core.rmsnorm.bf16';
+export const CORE_KERNEL_RMSNORM_FP16 = 'core.rmsnorm.fp16';
 
 /** ∂L/∂x for RMSNorm (reads γ, grad_out; writes grad_input). */
 export const CORE_KERNEL_RMSNORM_GRAD_INPUT = 'core.rmsnorm_grad_input';
+export const CORE_KERNEL_RMSNORM_GRAD_INPUT_BF16 = 'core.rmsnorm_grad_input.bf16';
+export const CORE_KERNEL_RMSNORM_GRAD_INPUT_FP16 = 'core.rmsnorm_grad_input.fp16';
 
 /** ∂L/∂γ for RMSNorm (column reductions). */
 export const CORE_KERNEL_RMSNORM_GRAD_GAMMA = 'core.rmsnorm_grad_gamma';
+export const CORE_KERNEL_RMSNORM_GRAD_GAMMA_BF16 = 'core.rmsnorm_grad_gamma.bf16';
+export const CORE_KERNEL_RMSNORM_GRAD_GAMMA_FP16 = 'core.rmsnorm_grad_gamma.fp16';
 
 /** Row-major gather of `[vocab, embed]` by u32 indices → `[tokens, embed]`. */
 export const CORE_KERNEL_EMBEDDING_GATHER = 'core.embedding_gather';
+export const CORE_KERNEL_EMBEDDING_GATHER_BF16 = 'core.embedding_gather.bf16';
+export const CORE_KERNEL_EMBEDDING_GATHER_FP16 = 'core.embedding_gather.fp16';
 
 /**
  * Atomic accumulation of `[tokens, embed]` token gradients into `[vocab, embed]` dense
  * grad backing (must start zero-filled).
  */
 export const CORE_KERNEL_EMBEDDING_SCATTER_ACCUM = 'core.embedding_scatter_accum';
+export const CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_BF16 = 'core.embedding_scatter_accum.bf16';
+export const CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_FP16 = 'core.embedding_scatter_accum.fp16';
 
 /** Stable per-example cross-entropy from raw logits `[rows, classes]`. */
 export const CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS = 'core.cross_entropy_from_logits';
+export const CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_BF16 = 'core.cross_entropy_from_logits.bf16';
+export const CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_FP16 = 'core.cross_entropy_from_logits.fp16';
 
 /** ∂L/∂logits given softmax probs and upstream per-row grads. */
 export const CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD = 'core.cross_entropy_logits_grad';
+export const CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_BF16 = 'core.cross_entropy_logits_grad.bf16';
+export const CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_FP16 = 'core.cross_entropy_logits_grad.fp16';
 
 /** `out[i] = scalar[0]` for length `n` (broadcast from a `[1]` buffer). */
 export const CORE_KERNEL_BROADCAST_FILL_SCALAR = 'core.broadcast_fill_scalar';
+export const CORE_KERNEL_BROADCAST_FILL_SCALAR_BF16 = 'core.broadcast_fill_scalar.bf16';
+export const CORE_KERNEL_BROADCAST_FILL_SCALAR_FP16 = 'core.broadcast_fill_scalar.fp16';
+
+/** Elementwise dtype cast: `out[i] = cast(inp[i])` (linear buffers). */
+export const CORE_KERNEL_CAST_F32_BF16 = 'core.cast.f32.bf16';
+export const CORE_KERNEL_CAST_BF16_F32 = 'core.cast.bf16.f32';
+export const CORE_KERNEL_CAST_F32_FP16 = 'core.cast.f32.fp16';
+export const CORE_KERNEL_CAST_FP16_F32 = 'core.cast.fp16.f32';
 
 /** Fused AdamW: in-place θ, m, v; read-only gradient buffer. */
 export const CORE_KERNEL_ADAMW_STEP = 'core.adamw_step';
@@ -90,24 +176,66 @@ export const CORE_KERNEL_ADAMW_STEP = 'core.adamw_step';
 /** All core numeric kernels registered by {@link registerCoreKernels}. */
 export const CORE_KERNEL_IDS = [
   CORE_KERNEL_MATMUL,
+  CORE_KERNEL_MATMUL_BF16,
+  CORE_KERNEL_MATMUL_FP16,
   CORE_KERNEL_TRANSPOSE,
+  CORE_KERNEL_TRANSPOSE_BF16,
+  CORE_KERNEL_TRANSPOSE_FP16,
   CORE_KERNEL_ADD,
+  CORE_KERNEL_ADD_BF16,
+  CORE_KERNEL_ADD_FP16,
   CORE_KERNEL_MUL,
+  CORE_KERNEL_MUL_BF16,
+  CORE_KERNEL_MUL_FP16,
   CORE_KERNEL_SCALE,
+  CORE_KERNEL_SCALE_BF16,
+  CORE_KERNEL_SCALE_FP16,
   CORE_KERNEL_GELU,
+  CORE_KERNEL_GELU_BF16,
+  CORE_KERNEL_GELU_FP16,
   CORE_KERNEL_GELU_BACKWARD,
+  CORE_KERNEL_GELU_BACKWARD_BF16,
+  CORE_KERNEL_GELU_BACKWARD_FP16,
   CORE_KERNEL_REDUCE_SUM,
+  CORE_KERNEL_REDUCE_SUM_BF16,
+  CORE_KERNEL_REDUCE_SUM_FP16,
   CORE_KERNEL_REDUCE_MAX,
+  CORE_KERNEL_REDUCE_MAX_BF16,
+  CORE_KERNEL_REDUCE_MAX_FP16,
   CORE_KERNEL_SOFTMAX,
+  CORE_KERNEL_SOFTMAX_BF16,
+  CORE_KERNEL_SOFTMAX_FP16,
   CORE_KERNEL_SOFTMAX_BACKWARD,
+  CORE_KERNEL_SOFTMAX_BACKWARD_BF16,
+  CORE_KERNEL_SOFTMAX_BACKWARD_FP16,
   CORE_KERNEL_RMSNORM,
+  CORE_KERNEL_RMSNORM_BF16,
+  CORE_KERNEL_RMSNORM_FP16,
   CORE_KERNEL_RMSNORM_GRAD_INPUT,
+  CORE_KERNEL_RMSNORM_GRAD_INPUT_BF16,
+  CORE_KERNEL_RMSNORM_GRAD_INPUT_FP16,
   CORE_KERNEL_RMSNORM_GRAD_GAMMA,
+  CORE_KERNEL_RMSNORM_GRAD_GAMMA_BF16,
+  CORE_KERNEL_RMSNORM_GRAD_GAMMA_FP16,
   CORE_KERNEL_EMBEDDING_GATHER,
+  CORE_KERNEL_EMBEDDING_GATHER_BF16,
+  CORE_KERNEL_EMBEDDING_GATHER_FP16,
   CORE_KERNEL_EMBEDDING_SCATTER_ACCUM,
+  CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_BF16,
+  CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_FP16,
   CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
+  CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_BF16,
+  CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_FP16,
   CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD,
+  CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_BF16,
+  CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_FP16,
   CORE_KERNEL_BROADCAST_FILL_SCALAR,
+  CORE_KERNEL_BROADCAST_FILL_SCALAR_BF16,
+  CORE_KERNEL_BROADCAST_FILL_SCALAR_FP16,
+  CORE_KERNEL_CAST_F32_BF16,
+  CORE_KERNEL_CAST_BF16_F32,
+  CORE_KERNEL_CAST_F32_FP16,
+  CORE_KERNEL_CAST_FP16_F32,
   CORE_KERNEL_ADAMW_STEP,
 ] as const;
 
@@ -139,6 +267,10 @@ function workgroupCount(elementCount: number): number {
  * layout per kernel is documented in the `bindings(...)` calls below.
  */
 export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry): void {
+  // `array<f16>` native kernels assume 2-byte stride; our storage uses one `u32` per scalar
+  // (see `shared-bf16.wgsl` / `shared-fp16-packed.wgsl`) so parallel writes do not RMW the
+  // same word. Keep packed `array<u32>` shaders until native variants match this layout.
+  const fp16Native = false;
   const make = (code: string, kinds: Kind[]): GPUComputePipeline =>
     createSimpleComputePipeline(device, {
       code,
@@ -151,22 +283,63 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
     CORE_KERNEL_MATMUL,
     make(loadMatMulWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
   );
+  registry.register(
+    CORE_KERNEL_MATMUL_BF16,
+    make(loadMatMulWgslBf16(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_MATMUL_FP16,
+    make(loadMatMulWgslFp16(fp16Native), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
 
   // transpose: uniform(rows,cols), readonly src, storage dst
   registry.register(
     CORE_KERNEL_TRANSPOSE,
     make(loadTransposeWgsl(), ['uniform', 'read-only-storage', 'storage']),
   );
+  registry.register(
+    CORE_KERNEL_TRANSPOSE_BF16,
+    make(loadTransposeWgslBf16(), ['uniform', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_TRANSPOSE_FP16,
+    make(loadTransposeWgslFp16(fp16Native), ['uniform', 'read-only-storage', 'storage']),
+  );
 
   // elementwise binary (add, mul): uniform(n), readonly a, readonly b, storage out
   const ewBinaryKinds: Kind[] = ['uniform', 'read-only-storage', 'read-only-storage', 'storage'];
   registry.register(CORE_KERNEL_ADD, make(loadElementwiseAddWgsl(), ewBinaryKinds));
+  registry.register(CORE_KERNEL_ADD_BF16, make(loadElementwiseAddWgslBf16(), ewBinaryKinds));
+  registry.register(
+    CORE_KERNEL_ADD_FP16,
+    make(loadElementwiseAddWgslFp16(fp16Native), ewBinaryKinds),
+  );
   registry.register(CORE_KERNEL_MUL, make(loadElementwiseMulWgsl(), ewBinaryKinds));
+  registry.register(CORE_KERNEL_MUL_BF16, make(loadElementwiseMulWgslBf16(), ewBinaryKinds));
+  registry.register(
+    CORE_KERNEL_MUL_FP16,
+    make(loadElementwiseMulWgslFp16(fp16Native), ewBinaryKinds),
+  );
 
   // elementwise unary (scale, gelu): uniform(n[, scale]), readonly in, storage out
   const ewUnaryKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
   registry.register(CORE_KERNEL_SCALE, make(loadElementwiseScaleWgsl(), ewUnaryKinds));
+  registry.register(CORE_KERNEL_SCALE_BF16, make(loadElementwiseScaleWgslBf16(), ewUnaryKinds));
+  registry.register(
+    CORE_KERNEL_SCALE_FP16,
+    make(loadElementwiseScaleWgslFp16(fp16Native), ewUnaryKinds),
+  );
   registry.register(CORE_KERNEL_GELU, make(loadElementwiseGeluWgsl(), ewUnaryKinds));
+  registry.register(CORE_KERNEL_GELU_BF16, make(loadElementwiseGeluWgslBf16(), ewUnaryKinds));
+  registry.register(
+    CORE_KERNEL_GELU_FP16,
+    make(loadElementwiseGeluWgslFp16(fp16Native), ewUnaryKinds),
+  );
 
   // elementwise gelu backward: uniform(n), readonly grad_out, readonly inp, storage grad_in
   const ewGeluBackwardKinds: Kind[] = [
@@ -179,12 +352,32 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
     CORE_KERNEL_GELU_BACKWARD,
     make(loadElementwiseGeluBackwardWgsl(), ewGeluBackwardKinds),
   );
+  registry.register(
+    CORE_KERNEL_GELU_BACKWARD_BF16,
+    make(loadElementwiseGeluBackwardWgslBf16(), ewGeluBackwardKinds),
+  );
+  registry.register(
+    CORE_KERNEL_GELU_BACKWARD_FP16,
+    make(loadElementwiseGeluBackwardWgslFp16(fp16Native), ewGeluBackwardKinds),
+  );
 
   // row-wise reductions / softmax: uniform(rows,cols), readonly input, storage out
   const reduceKinds: Kind[] = ['uniform', 'read-only-storage', 'storage'];
   registry.register(CORE_KERNEL_REDUCE_SUM, make(loadReduceSumWgsl(), reduceKinds));
+  registry.register(CORE_KERNEL_REDUCE_SUM_BF16, make(loadReduceSumWgslBf16(), reduceKinds));
+  registry.register(
+    CORE_KERNEL_REDUCE_SUM_FP16,
+    make(loadReduceSumWgslFp16(fp16Native), reduceKinds),
+  );
   registry.register(CORE_KERNEL_REDUCE_MAX, make(loadReduceMaxWgsl(), reduceKinds));
+  registry.register(CORE_KERNEL_REDUCE_MAX_BF16, make(loadReduceMaxWgslBf16(), reduceKinds));
+  registry.register(
+    CORE_KERNEL_REDUCE_MAX_FP16,
+    make(loadReduceMaxWgslFp16(fp16Native), reduceKinds),
+  );
   registry.register(CORE_KERNEL_SOFTMAX, make(loadSoftmaxWgsl(), reduceKinds));
+  registry.register(CORE_KERNEL_SOFTMAX_BF16, make(loadSoftmaxWgslBf16(), reduceKinds));
+  registry.register(CORE_KERNEL_SOFTMAX_FP16, make(loadSoftmaxWgslFp16(fp16Native), reduceKinds));
 
   // softmax backward: uniform(rows,cols), readonly grad_out, readonly y, storage grad_in
   const softmaxBackwardKinds: Kind[] = [
@@ -197,11 +390,32 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
     CORE_KERNEL_SOFTMAX_BACKWARD,
     make(loadSoftmaxBackwardWgsl(), softmaxBackwardKinds),
   );
+  registry.register(
+    CORE_KERNEL_SOFTMAX_BACKWARD_BF16,
+    make(loadSoftmaxBackwardWgslBf16(), softmaxBackwardKinds),
+  );
+  registry.register(
+    CORE_KERNEL_SOFTMAX_BACKWARD_FP16,
+    make(loadSoftmaxBackwardWgslFp16(fp16Native), softmaxBackwardKinds),
+  );
 
   // rmsnorm: uniform(rows,cols,epsilon), readonly input, readonly gamma, storage out
   registry.register(
     CORE_KERNEL_RMSNORM,
     make(loadRmsNormWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_RMSNORM_BF16,
+    make(loadRmsNormWgslBf16(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_RMSNORM_FP16,
+    make(loadRmsNormWgslFp16(fp16Native), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
   );
 
   const rmsNormBackwardKinds: Kind[] = [
@@ -215,16 +429,65 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
     CORE_KERNEL_RMSNORM_GRAD_INPUT,
     make(loadRmsNormGradInputWgsl(), rmsNormBackwardKinds),
   );
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_INPUT_BF16,
+    make(loadRmsNormGradInputWgslBf16(), rmsNormBackwardKinds),
+  );
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_INPUT_FP16,
+    make(loadRmsNormGradInputWgslFp16(fp16Native), rmsNormBackwardKinds),
+  );
 
   registry.register(
     CORE_KERNEL_RMSNORM_GRAD_GAMMA,
-    make(loadRmsNormGradGammaWgsl(), ['uniform', 'read-only-storage', 'read-only-storage', 'storage']),
+    make(loadRmsNormGradGammaWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_GAMMA_BF16,
+    make(loadRmsNormGradGammaWgslBf16(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_RMSNORM_GRAD_GAMMA_FP16,
+    make(loadRmsNormGradGammaWgslFp16(fp16Native), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
   );
 
   // embedding_gather: uniform(num_tokens, embed_dim,...), weights, indices u32, out
   registry.register(
     CORE_KERNEL_EMBEDDING_GATHER,
     make(loadEmbeddingGatherWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_EMBEDDING_GATHER_BF16,
+    make(loadEmbeddingGatherWgslBf16(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_EMBEDDING_GATHER_FP16,
+    make(loadEmbeddingGatherWgslFp16(fp16Native), [
       'uniform',
       'read-only-storage',
       'read-only-storage',
@@ -242,11 +505,47 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
       'storage',
     ]),
   );
+  registry.register(
+    CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_BF16,
+    make(loadEmbeddingScatterAccumWgslBf16(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_FP16,
+    make(loadEmbeddingScatterAccumWgslFp16(fp16Native), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
 
   // cross_entropy_forward: logits, targets(u32), per-row losses
   registry.register(
     CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS,
     make(loadCrossEntropyFromLogitsWgsl(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_BF16,
+    make(loadCrossEntropyFromLogitsWgslBf16(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_FP16,
+    make(loadCrossEntropyFromLogitsWgslFp16(fp16Native), [
       'uniform',
       'read-only-storage',
       'read-only-storage',
@@ -265,21 +564,61 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
       'storage',
     ]),
   );
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_BF16,
+    make(loadCrossEntropyLogitsGradWgslBf16(), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
+  registry.register(
+    CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_FP16,
+    make(loadCrossEntropyLogitsGradWgslFp16(fp16Native), [
+      'uniform',
+      'read-only-storage',
+      'read-only-storage',
+      'read-only-storage',
+      'storage',
+    ]),
+  );
 
   registry.register(
     CORE_KERNEL_BROADCAST_FILL_SCALAR,
     make(loadBroadcastFillScalarWgsl(), ['uniform', 'read-only-storage', 'storage']),
   );
+  registry.register(
+    CORE_KERNEL_BROADCAST_FILL_SCALAR_BF16,
+    make(loadBroadcastFillScalarWgslBf16(), ['uniform', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_BROADCAST_FILL_SCALAR_FP16,
+    make(loadBroadcastFillScalarWgslFp16(fp16Native), ['uniform', 'read-only-storage', 'storage']),
+  );
+
+  // cast: uniform(n), readonly in, storage out (mixed element types; sizes use n logical elements)
+  registry.register(
+    CORE_KERNEL_CAST_F32_BF16,
+    make(loadCastF32ToBf16Wgsl(), ['uniform', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_CAST_BF16_F32,
+    make(loadCastBf16ToF32Wgsl(), ['uniform', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_CAST_F32_FP16,
+    make(loadCastF32ToFp16Wgsl(fp16Native), ['uniform', 'read-only-storage', 'storage']),
+  );
+  registry.register(
+    CORE_KERNEL_CAST_FP16_F32,
+    make(loadCastFp16ToF32Wgsl(fp16Native), ['uniform', 'read-only-storage', 'storage']),
+  );
 
   registry.register(
     CORE_KERNEL_ADAMW_STEP,
-    make(loadAdamWStepWgsl(), [
-      'uniform',
-      'storage',
-      'read-only-storage',
-      'storage',
-      'storage',
-    ]),
+    make(loadAdamWStepWgsl(), ['uniform', 'storage', 'read-only-storage', 'storage', 'storage']),
   );
 }
 
@@ -314,7 +653,9 @@ function makeAdamUniform(
   },
 ): GPUBuffer {
   if (!Number.isInteger(elementCount) || elementCount <= 0) {
-    throw new Error(`dispatchAdamWStep: elementCount must be positive (got ${String(elementCount)})`);
+    throw new Error(
+      `dispatchAdamWStep: elementCount must be positive (got ${String(elementCount)})`,
+    );
   }
   const ab = new ArrayBuffer(ADAM_UNIFORM_BYTES);
   const v = new DataView(ab);
@@ -395,6 +736,56 @@ export function dispatchMatMul(
   u.destroy();
 }
 
+export function dispatchMatMulBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  bufferA: GPUBuffer,
+  bufferB: GPUBuffer,
+  bufferC: GPUBuffer,
+  M: number,
+  N: number,
+  K: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, M, true);
+    v.setUint32(4, N, true);
+    v.setUint32(8, K, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_MATMUL_BF16),
+    [bg(0, u), bg(1, bufferA), bg(2, bufferB), bg(3, bufferC)],
+    M * N,
+  );
+  u.destroy();
+}
+
+export function dispatchMatMulFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  bufferA: GPUBuffer,
+  bufferB: GPUBuffer,
+  bufferC: GPUBuffer,
+  M: number,
+  N: number,
+  K: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, M, true);
+    v.setUint32(4, N, true);
+    v.setUint32(8, K, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_MATMUL_FP16),
+    [bg(0, u), bg(1, bufferA), bg(2, bufferB), bg(3, bufferC)],
+    M * N,
+  );
+  u.destroy();
+}
+
 /**
  * Transposes row-major `src` of shape rows×cols into row-major `dst` of shape
  * cols×rows. `src` and `dst` are both rows*cols floats; uniform packs `rows, cols`
@@ -421,10 +812,58 @@ export function dispatchTranspose(
   u.destroy();
 }
 
+export function dispatchTransposeBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  src: GPUBuffer,
+  dst: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_TRANSPOSE_BF16),
+    [bg(0, u), bg(1, src), bg(2, dst)],
+    rows * cols,
+  );
+  u.destroy();
+}
+
+export function dispatchTransposeFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  src: GPUBuffer,
+  dst: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_TRANSPOSE_FP16),
+    [bg(0, u), bg(1, src), bg(2, dst)],
+    rows * cols,
+  );
+  u.destroy();
+}
+
 function dispatchElementwiseBinary(
   ctx: GpuContext,
   registry: KernelRegistry,
-  kernelId: typeof CORE_KERNEL_ADD | typeof CORE_KERNEL_MUL,
+  kernelId:
+    | typeof CORE_KERNEL_ADD
+    | typeof CORE_KERNEL_ADD_BF16
+    | typeof CORE_KERNEL_ADD_FP16
+    | typeof CORE_KERNEL_MUL
+    | typeof CORE_KERNEL_MUL_BF16
+    | typeof CORE_KERNEL_MUL_FP16,
   a: GPUBuffer,
   b: GPUBuffer,
   out: GPUBuffer,
@@ -454,6 +893,28 @@ export function dispatchAdd(
   dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_ADD, a, b, out, elementCount);
 }
 
+export function dispatchAddBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_ADD_BF16, a, b, out, elementCount);
+}
+
+export function dispatchAddFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_ADD_FP16, a, b, out, elementCount);
+}
+
 /** Elementwise multiply: `out[i] = a[i] * b[i]`. */
 export function dispatchMul(
   ctx: GpuContext,
@@ -464,6 +925,28 @@ export function dispatchMul(
   elementCount: number,
 ): void {
   dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_MUL, a, b, out, elementCount);
+}
+
+export function dispatchMulBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_MUL_BF16, a, b, out, elementCount);
+}
+
+export function dispatchMulFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  dispatchElementwiseBinary(ctx, registry, CORE_KERNEL_MUL_FP16, a, b, out, elementCount);
 }
 
 /** `out[i] = a[i] * scale`. Uniform packs `element_count: u32, scale: f32` + padding. */
@@ -488,6 +971,48 @@ export function dispatchScale(
   u.destroy();
 }
 
+export function dispatchScaleBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+  scale: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+    v.setFloat32(4, scale, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SCALE_BF16),
+    [bg(0, u), bg(1, a), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+export function dispatchScaleFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  a: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+  scale: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+    v.setFloat32(4, scale, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SCALE_FP16),
+    [bg(0, u), bg(1, a), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
 /** Applies GELU to each element: `out[i] = gelu(inp[i])`. */
 export function dispatchGelu(
   ctx: GpuContext,
@@ -502,6 +1027,44 @@ export function dispatchGelu(
   dispatchKernel(
     ctx,
     registry.get(CORE_KERNEL_GELU),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+export function dispatchGeluBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_GELU_BF16),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+export function dispatchGeluFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_GELU_FP16),
     [bg(0, u), bg(1, inp), bg(2, out)],
     elementCount,
   );
@@ -532,6 +1095,46 @@ export function dispatchGeluBackward(
   u.destroy();
 }
 
+export function dispatchGeluBackwardBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  inp: GPUBuffer,
+  gradIn: GPUBuffer,
+  elementCount: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_GELU_BACKWARD_BF16),
+    [bg(0, u), bg(1, gradOut), bg(2, inp), bg(3, gradIn)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+export function dispatchGeluBackwardFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  inp: GPUBuffer,
+  gradIn: GPUBuffer,
+  elementCount: number,
+): void {
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_GELU_BACKWARD_FP16),
+    [bg(0, u), bg(1, gradOut), bg(2, inp), bg(3, gradIn)],
+    elementCount,
+  );
+  u.destroy();
+}
+
 function assertPositiveDims(label: string, rows: number, cols: number): void {
   if (!Number.isInteger(rows) || rows <= 0) {
     throw new Error(`${label}: rows must be a positive integer (got ${String(rows)})`);
@@ -544,7 +1147,13 @@ function assertPositiveDims(label: string, rows: number, cols: number): void {
 function dispatchRowwiseReduce(
   ctx: GpuContext,
   registry: KernelRegistry,
-  kernelId: typeof CORE_KERNEL_REDUCE_SUM | typeof CORE_KERNEL_REDUCE_MAX,
+  kernelId:
+    | typeof CORE_KERNEL_REDUCE_SUM
+    | typeof CORE_KERNEL_REDUCE_SUM_BF16
+    | typeof CORE_KERNEL_REDUCE_SUM_FP16
+    | typeof CORE_KERNEL_REDUCE_MAX
+    | typeof CORE_KERNEL_REDUCE_MAX_BF16
+    | typeof CORE_KERNEL_REDUCE_MAX_FP16,
   input: GPUBuffer,
   out: GPUBuffer,
   rows: number,
@@ -576,6 +1185,30 @@ export function dispatchReduceSum(
   dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_SUM, input, out, rows, cols);
 }
 
+export function dispatchReduceSumBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceSumBf16', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_SUM_BF16, input, out, rows, cols);
+}
+
+export function dispatchReduceSumFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceSumFp16', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_SUM_FP16, input, out, rows, cols);
+}
+
 /**
  * Row-wise max: `out[i] = max_j input[i*cols + j]`. Same shape contract as
  * {@link dispatchReduceSum}. The kernel initializes its per-row accumulator to
@@ -592,6 +1225,30 @@ export function dispatchReduceMax(
 ): void {
   assertPositiveDims('dispatchReduceMax', rows, cols);
   dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_MAX, input, out, rows, cols);
+}
+
+export function dispatchReduceMaxBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceMaxBf16', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_MAX_BF16, input, out, rows, cols);
+}
+
+export function dispatchReduceMaxFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchReduceMaxFp16', rows, cols);
+  dispatchRowwiseReduce(ctx, registry, CORE_KERNEL_REDUCE_MAX_FP16, input, out, rows, cols);
 }
 
 /**
@@ -621,6 +1278,50 @@ export function dispatchSoftmax(
   u.destroy();
 }
 
+export function dispatchSoftmaxBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmaxBf16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX_BF16),
+    [bg(0, u), bg(1, input), bg(2, out)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchSoftmaxFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmaxFp16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX_FP16),
+    [bg(0, u), bg(1, input), bg(2, out)],
+    rows,
+  );
+  u.destroy();
+}
+
 /**
  * Softmax backward: given upstream gradient w.r.t. softmax probabilities
  * `grad_out` and forward output `y` (same shape `[rows, cols]`), writes the
@@ -643,6 +1344,52 @@ export function dispatchSoftmaxBackward(
   dispatchKernel(
     ctx,
     registry.get(CORE_KERNEL_SOFTMAX_BACKWARD),
+    [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchSoftmaxBackwardBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  y: GPUBuffer,
+  gradIn: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmaxBackwardBf16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX_BACKWARD_BF16),
+    [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchSoftmaxBackwardFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradOut: GPUBuffer,
+  y: GPUBuffer,
+  gradIn: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchSoftmaxBackwardFp16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_SOFTMAX_BACKWARD_FP16),
     [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
     rows,
   );
@@ -691,6 +1438,68 @@ export function dispatchRmsNorm(
   u.destroy();
 }
 
+export function dispatchRmsNormBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormBf16', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNormBf16: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_BF16),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchRmsNormFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormFp16', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNormFp16: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_FP16),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
+    rows,
+  );
+  u.destroy();
+}
+
 /** ∂L/∂input for RMSNorm; writes **`gradInput`** (same shape as **`input`**). */
 export function dispatchRmsNormGradInput(
   ctx: GpuContext,
@@ -724,6 +1533,70 @@ export function dispatchRmsNormGradInput(
   u.destroy();
 }
 
+export function dispatchRmsNormGradInputBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  gradOut: GPUBuffer,
+  gradInput: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradInputBf16', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNormGradInputBf16: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_INPUT_BF16),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, gradOut), bg(4, gradInput)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchRmsNormGradInputFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLength: number,
+  gradOut: GPUBuffer,
+  gradInput: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradInputFp16', rows, cols);
+  if (gammaLength !== cols) {
+    throw new Error(
+      `dispatchRmsNormGradInputFp16: gamma length (${String(gammaLength)}) must equal cols (${String(cols)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_INPUT_FP16),
+    [bg(0, u), bg(1, input), bg(2, gamma), bg(3, gradOut), bg(4, gradInput)],
+    rows,
+  );
+  u.destroy();
+}
+
 /** ∂L/∂γ (`[cols]`); **`gradGamma`** must be zero-initialized or overwritten entirely. */
 export function dispatchRmsNormGradGamma(
   ctx: GpuContext,
@@ -744,6 +1617,56 @@ export function dispatchRmsNormGradGamma(
   dispatchKernel(
     ctx,
     registry.get(CORE_KERNEL_RMSNORM_GRAD_GAMMA),
+    [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
+    cols,
+  );
+  u.destroy();
+}
+
+export function dispatchRmsNormGradGammaBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gradOut: GPUBuffer,
+  gradGamma: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradGammaBf16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_GAMMA_BF16),
+    [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
+    cols,
+  );
+  u.destroy();
+}
+
+export function dispatchRmsNormGradGammaFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  input: GPUBuffer,
+  gradOut: GPUBuffer,
+  gradGamma: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon = 1e-6,
+): void {
+  assertPositiveDims('dispatchRmsNormGradGammaFp16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setFloat32(8, epsilon, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_RMSNORM_GRAD_GAMMA_FP16),
     [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
     cols,
   );
@@ -781,6 +1704,74 @@ export function dispatchEmbeddingGather(
   dispatchKernel(
     ctx,
     registry.get(CORE_KERNEL_EMBEDDING_GATHER),
+    [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
+export function dispatchEmbeddingGatherBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  weights: GPUBuffer,
+  indices: GPUBuffer,
+  out: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingGatherBf16: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(
+      `dispatchEmbeddingGatherBf16: embedDim must be positive (got ${String(embedDim)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_GATHER_BF16),
+    [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
+export function dispatchEmbeddingGatherFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  weights: GPUBuffer,
+  indices: GPUBuffer,
+  out: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingGatherFp16: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(
+      `dispatchEmbeddingGatherFp16: embedDim must be positive (got ${String(embedDim)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_GATHER_FP16),
     [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
     numTokens * embedDim,
   );
@@ -825,6 +1816,74 @@ export function dispatchEmbeddingScatterAccum(
   u.destroy();
 }
 
+export function dispatchEmbeddingScatterAccumBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradTokens: GPUBuffer,
+  indices: GPUBuffer,
+  gradWeights: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccumBf16: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccumBf16: embedDim must be positive (got ${String(embedDim)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_BF16),
+    [bg(0, u), bg(1, gradTokens), bg(2, indices), bg(3, gradWeights)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
+export function dispatchEmbeddingScatterAccumFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  gradTokens: GPUBuffer,
+  indices: GPUBuffer,
+  gradWeights: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+): void {
+  if (!Number.isInteger(numTokens) || numTokens <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccumFp16: numTokens must be positive (got ${String(numTokens)})`,
+    );
+  }
+  if (!Number.isInteger(embedDim) || embedDim <= 0) {
+    throw new Error(
+      `dispatchEmbeddingScatterAccumFp16: embedDim must be positive (got ${String(embedDim)})`,
+    );
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, numTokens, true);
+    v.setUint32(4, embedDim, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_EMBEDDING_SCATTER_ACCUM_FP16),
+    [bg(0, u), bg(1, gradTokens), bg(2, indices), bg(3, gradWeights)],
+    numTokens * embedDim,
+  );
+  u.destroy();
+}
+
 /** Per‑row softmax cross‑entropy losses from logits and u32 targets. */
 export function dispatchCrossEntropyFromLogits(
   ctx: GpuContext,
@@ -845,6 +1904,56 @@ export function dispatchCrossEntropyFromLogits(
   dispatchKernel(
     ctx,
     registry.get(CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS),
+    [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchCrossEntropyFromLogitsBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  logits: GPUBuffer,
+  targets: GPUBuffer,
+  lossesOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyFromLogitsBf16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_BF16),
+    [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
+    rows,
+  );
+  u.destroy();
+}
+
+export function dispatchCrossEntropyFromLogitsFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  logits: GPUBuffer,
+  targets: GPUBuffer,
+  lossesOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyFromLogitsFp16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_FROM_LOGITS_FP16),
     [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
     rows,
   );
@@ -881,6 +1990,58 @@ export function dispatchCrossEntropyLogitsGrad(
   u.destroy();
 }
 
+export function dispatchCrossEntropyLogitsGradBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  probs: GPUBuffer,
+  targets: GPUBuffer,
+  upstreamPerRow: GPUBuffer,
+  gradLogitsOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyLogitsGradBf16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_BF16),
+    [bg(0, u), bg(1, probs), bg(2, targets), bg(3, upstreamPerRow), bg(4, gradLogitsOut)],
+    rows * cols,
+  );
+  u.destroy();
+}
+
+export function dispatchCrossEntropyLogitsGradFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  probs: GPUBuffer,
+  targets: GPUBuffer,
+  upstreamPerRow: GPUBuffer,
+  gradLogitsOut: GPUBuffer,
+  rows: number,
+  cols: number,
+): void {
+  assertPositiveDims('dispatchCrossEntropyLogitsGradFp16', rows, cols);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, rows, true);
+    v.setUint32(4, cols, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CROSS_ENTROPY_LOGITS_GRAD_FP16),
+    [bg(0, u), bg(1, probs), bg(2, targets), bg(3, upstreamPerRow), bg(4, gradLogitsOut)],
+    rows * cols,
+  );
+  u.destroy();
+}
+
 /** Writes **`out[i] = scalar[0]`** for `i ∈ [0, n)`. */
 export function dispatchBroadcastFillScalar(
   ctx: GpuContext,
@@ -903,6 +2064,146 @@ export function dispatchBroadcastFillScalar(
     registry.get(CORE_KERNEL_BROADCAST_FILL_SCALAR),
     [bg(0, u), bg(1, scalar), bg(2, out)],
     n,
+  );
+  u.destroy();
+}
+
+export function dispatchBroadcastFillScalarBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  scalar: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+): void {
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`dispatchBroadcastFillScalarBf16: n must be positive (got ${String(n)})`);
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, n, true);
+    v.setUint32(4, 0, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_BROADCAST_FILL_SCALAR_BF16),
+    [bg(0, u), bg(1, scalar), bg(2, out)],
+    n,
+  );
+  u.destroy();
+}
+
+export function dispatchBroadcastFillScalarFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  scalar: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+): void {
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`dispatchBroadcastFillScalarFp16: n must be positive (got ${String(n)})`);
+  }
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, n, true);
+    v.setUint32(4, 0, true);
+    v.setUint32(8, 0, true);
+    v.setUint32(12, 0, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_BROADCAST_FILL_SCALAR_FP16),
+    [bg(0, u), bg(1, scalar), bg(2, out)],
+    n,
+  );
+  u.destroy();
+}
+
+function assertPositiveElementCount(label: string, n: number): void {
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`${label}: elementCount must be a positive integer (got ${String(n)})`);
+  }
+}
+
+/** RNE bf16 from f32 (per-element). */
+export function dispatchCastF32ToBf16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  assertPositiveElementCount('dispatchCastF32ToBf16', elementCount);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CAST_F32_BF16),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+/** Exact f32 widening of bf16 storage. */
+export function dispatchCastBf16ToF32(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  assertPositiveElementCount('dispatchCastBf16ToF32', elementCount);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CAST_BF16_F32),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+/** IEEE fp16 from f32 (per-element). */
+export function dispatchCastF32ToFp16(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  assertPositiveElementCount('dispatchCastF32ToFp16', elementCount);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CAST_F32_FP16),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
+  );
+  u.destroy();
+}
+
+/** Exact f32 widening of fp16 packed storage. */
+export function dispatchCastFp16ToF32(
+  ctx: GpuContext,
+  registry: KernelRegistry,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  elementCount: number,
+): void {
+  assertPositiveElementCount('dispatchCastFp16ToF32', elementCount);
+  const u = makeUniform(ctx, (v) => {
+    v.setUint32(0, elementCount, true);
+  });
+  dispatchKernel(
+    ctx,
+    registry.get(CORE_KERNEL_CAST_FP16_F32),
+    [bg(0, u), bg(1, inp), bg(2, out)],
+    elementCount,
   );
   u.destroy();
 }

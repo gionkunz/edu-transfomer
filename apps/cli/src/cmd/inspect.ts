@@ -43,7 +43,7 @@ export function formatInspectReport(sidecar: PackedCheckpointSidecar): string {
   for (const n of preview) {
     const e = sidecar.tensors[n];
     if (!e) continue;
-    lines.push(`  ${n}: [${e.shape.join(', ')}] ${e.dtype}`);
+    lines.push(`  ${n}: shape=[${e.shape.join(', ')}] dtype=${e.dtype}`);
   }
   if (tensorNames.length > preview.length) {
     lines.push(`  … ${String(tensorNames.length - preview.length)} more tensors`);

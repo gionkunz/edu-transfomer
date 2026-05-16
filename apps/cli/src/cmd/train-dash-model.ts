@@ -25,6 +25,15 @@ export interface TrainDashboardDraft {
   trainLrDisplay: number;
   tokensPerSecApprox: number;
   recentLosses: number[];
+  trainingPaused: boolean;
+  /** Monotonic clock when **`phase`** became **`training`**; drives **`trainWallActiveSec`**. */
+  trainingPhaseStartedAtMs: number | null;
+  /** Completed training-pause intervals (ms), excluding **`trainingPauseBeganAtMs`** if currently paused. */
+  trainingPausedAccumMs: number;
+  /** Start of the current pause segment; **`null`** when not paused. */
+  trainingPauseBeganAtMs: number | null;
+  /** Set when the step loop finishes so **`trainWallActiveSec`** does not include checkpoint I/O. */
+  trainingWallStoppedAtMs: number | null;
 }
 
 const SPARKLINE_MAX = 64;
@@ -57,17 +66,39 @@ export function createInitialTrainDashboardDraft(opts: {
     trainLrDisplay: 0,
     tokensPerSecApprox: 0,
     recentLosses: [],
+    trainingPaused: false,
+    trainingPhaseStartedAtMs: null,
+    trainingPausedAccumMs: 0,
+    trainingPauseBeganAtMs: null,
+    trainingWallStoppedAtMs: null,
   };
 }
 
 export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDashboardSnapshot {
   const start = draft.startedAtMs;
   const sliceFrom = Math.max(0, draft.recentLosses.length - SPARKLINE_MAX);
+  const now = Date.now();
+  const tTrain0 = draft.trainingPhaseStartedAtMs;
+  let trainWallActiveSec = 0;
+  if (tTrain0 !== null) {
+    const stoppedAt = draft.trainingWallStoppedAtMs;
+    if (stoppedAt !== null) {
+      trainWallActiveSec = Math.max(0, (stoppedAt - tTrain0 - draft.trainingPausedAccumMs) / 1000);
+    } else {
+      const pauseTailMs =
+        draft.trainingPauseBeganAtMs !== null ? now - draft.trainingPauseBeganAtMs : 0;
+      trainWallActiveSec = Math.max(
+        0,
+        (now - tTrain0 - draft.trainingPausedAccumMs - pauseTailMs) / 1000,
+      );
+    }
+  }
   return {
     phase: draft.phase,
     detailLine: draft.detailLine,
     startedAtMs: start,
-    nowElapsedSec: (Date.now() - start) / 1000,
+    nowElapsedSec: (now - start) / 1000,
+    trainWallActiveSec,
     outDirDisplay: draft.outDirDisplay,
     configTag: draft.configTag,
     archSummary: draft.archSummary,
@@ -85,6 +116,7 @@ export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDa
     trainLrDisplay: draft.trainLrDisplay,
     tokensPerSecApprox: draft.tokensPerSecApprox,
     recentLosses: draft.recentLosses.slice(sliceFrom),
+    trainingPaused: draft.trainingPaused,
   };
 }
 

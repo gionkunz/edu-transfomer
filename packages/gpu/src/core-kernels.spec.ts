@@ -6,33 +6,58 @@ import { createFloat32StorageBuffer, readFloat32Buffer, writeFloat32Buffer } fro
 import { CORE_KERNEL_IDS, dispatchAdamWStep, registerCoreKernels } from './core-kernels';
 import {
   smokeAdd,
+  smokeAdd16,
   smokeGelu,
+  smokeGelu16,
   smokeGeluBackward,
+  smokeGeluBackward16,
   smokeMatMul,
+  smokeMatMul16,
   smokeMul,
+  smokeMul16,
   smokeScale,
+  smokeScale16,
   smokeTranspose,
+  smokeTranspose16,
 } from './core-kernels.test-helpers';
 import {
   cpuAdamWStep,
   cpuAdd,
+  cpuAddBf16,
+  cpuAddFp16,
   cpuGelu,
+  cpuGeluBf16,
+  cpuGeluFp16,
   cpuGeluBackward,
+  cpuGeluBackwardBf16,
+  cpuGeluBackwardFp16,
   cpuMatMul,
+  cpuMatMulBf16,
+  cpuMatMulFp16,
   cpuMul,
+  cpuMulBf16,
+  cpuMulFp16,
   cpuScale,
+  cpuScaleBf16,
+  cpuScaleFp16,
   cpuTranspose,
+  cpuTransposeBf16,
+  cpuTransposeFp16,
 } from './cpu-reference';
-import { GpuContext, probeWebGpu } from './device';
+import { GpuContext, probeWebGpu, supportsDtype } from './device';
 import { KernelRegistry } from './kernel-registry';
 
 const webgpuAvailable = await probeWebGpu();
 
-function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
+function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i], 5);
+    expect(actual[i]).toBeCloseTo(expected[i], places);
   }
+}
+
+function dtypeDecimalPlaces(d: 'bf16' | 'fp16'): number {
+  return d === 'bf16' ? 3 : 2;
 }
 
 describe.skipIf(!webgpuAvailable)('core-kernels', () => {
@@ -169,4 +194,107 @@ describe.skipIf(!webgpuAvailable)('core-kernels', () => {
     bM.destroy();
     bV.destroy();
   });
+
+  const dtypes16 = ['bf16', 'fp16'] as const;
+  for (const d16 of dtypes16) {
+    it(`matmul matches CPU reference (${d16})`, async () => {
+      if (!supportsDtype(ctx, d16)) {
+        return;
+      }
+      const places = dtypeDecimalPlaces(d16);
+      const M = 3;
+      const N = 4;
+      const K = 2;
+      const a = Float32Array.from({ length: M * K }, (_, i) => i + 1);
+      const b = Float32Array.from({ length: K * N }, (_, i) => i * 0.5 - 1);
+      const cpuRef = d16 === 'bf16' ? cpuMatMulBf16(a, b, M, N, K) : cpuMatMulFp16(a, b, M, N, K);
+      expectCloseVec(await smokeMatMul16(ctx, registry, a, b, M, N, K, d16), cpuRef, places);
+    });
+
+    it(`transpose matches CPU (${d16})`, async () => {
+      if (!supportsDtype(ctx, d16)) {
+        return;
+      }
+      const places = dtypeDecimalPlaces(d16);
+      const rows = 3;
+      const cols = 5;
+      const src = Float32Array.from({ length: rows * cols }, (_, i) => i * 0.25 - 2);
+      const cpuRef =
+        d16 === 'bf16' ? cpuTransposeBf16(src, rows, cols) : cpuTransposeFp16(src, rows, cols);
+      expectCloseVec(await smokeTranspose16(ctx, registry, src, rows, cols, d16), cpuRef, places);
+    });
+
+    it(`add/mul/scale match CPU (${d16})`, async () => {
+      if (!supportsDtype(ctx, d16)) {
+        return;
+      }
+      const places = dtypeDecimalPlaces(d16);
+      const n = 127;
+      const va = Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.1));
+      const vb = Float32Array.from({ length: n }, (_, i) => Math.cos(i * 0.07));
+      if (d16 === 'bf16') {
+        expectCloseVec(
+          await smokeAdd16(ctx, registry, va, vb, n, d16),
+          cpuAddBf16(va, vb, n),
+          places,
+        );
+        expectCloseVec(
+          await smokeMul16(ctx, registry, va, vb, n, d16),
+          cpuMulBf16(va, vb, n),
+          places,
+        );
+        expectCloseVec(
+          await smokeScale16(ctx, registry, va, n, 2.5, d16),
+          cpuScaleBf16(va, 2.5, n),
+          places,
+        );
+      } else {
+        expectCloseVec(
+          await smokeAdd16(ctx, registry, va, vb, n, d16),
+          cpuAddFp16(va, vb, n),
+          places,
+        );
+        expectCloseVec(
+          await smokeMul16(ctx, registry, va, vb, n, d16),
+          cpuMulFp16(va, vb, n),
+          places,
+        );
+        expectCloseVec(
+          await smokeScale16(ctx, registry, va, n, 2.5, d16),
+          cpuScaleFp16(va, 2.5, n),
+          places,
+        );
+      }
+    });
+
+    it(`gelu matches CPU (${d16})`, async () => {
+      if (!supportsDtype(ctx, d16)) {
+        return;
+      }
+      const places = dtypeDecimalPlaces(d16);
+      const n = 64;
+      const a = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
+      const cpuRef = d16 === 'bf16' ? cpuGeluBf16(a, n) : cpuGeluFp16(a, n);
+      expectCloseVec(await smokeGelu16(ctx, registry, a, n, d16), cpuRef, places);
+    });
+
+    it(`gelu backward matches CPU (${d16})`, async () => {
+      if (!supportsDtype(ctx, d16)) {
+        return;
+      }
+      const places = dtypeDecimalPlaces(d16);
+      const n = 64;
+      const inp = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);
+      const gradOut = Float32Array.from({ length: n }, (_, i) => Math.sin(i * 0.13) + 0.5);
+      const cpuRef =
+        d16 === 'bf16'
+          ? cpuGeluBackwardBf16(gradOut, inp, n)
+          : cpuGeluBackwardFp16(gradOut, inp, n);
+      expectCloseVec(
+        await smokeGeluBackward16(ctx, registry, gradOut, inp, n, d16),
+        cpuRef,
+        places,
+      );
+    });
+  }
 });

@@ -1,7 +1,7 @@
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import {
   add,
-  assertDtype,
+  cast,
   createZeros,
   destroy,
   mul,
@@ -11,7 +11,9 @@ import {
   toArray,
 } from '@llm-transformer-diy/tensor';
 
-import type { Parameter, ParameterRegistry } from './types';
+import { topologicalOrder } from './backward';
+
+import type { Parameter, ParameterRegistry, Variable } from './types';
 
 /** Build a fresh, empty {@link ParameterRegistry}. */
 export function createParameterRegistry(): ParameterRegistry {
@@ -55,9 +57,8 @@ export function zeroGrad(reg: ParameterRegistry): void {
 }
 
 /**
- * Sum of `p.tensor.length` across every registered parameter.
- *
- * Single-dtype (`f32`) in this scope, so the count is element-uniform.
+ * Sum of `p.tensor.length` across every registered parameter (compute weights only;
+ * {@link Parameter.masterTensor} is excluded).
  */
 export function totalParams(reg: ParameterRegistry): number {
   let total = 0;
@@ -67,17 +68,6 @@ export function totalParams(reg: ParameterRegistry): number {
   return total;
 }
 
-function asFlatF32(t: Tensor): Tensor {
-  assertDtype(t, 'f32');
-  if (t.shape.length === 1) {
-    return t;
-  }
-  return reshape(t, [t.length]);
-}
-
-/**
- * Σ ‖g‖²₂ over every registered parameter that currently has a gradient.
- */
 async function sumGradNormSq(rt: TensorRuntime, reg: ParameterRegistry): Promise<number> {
   let acc = createZeros(rt, [1]);
   try {
@@ -85,12 +75,21 @@ async function sumGradNormSq(rt: TensorRuntime, reg: ParameterRegistry): Promise
       if (!p.grad) {
         continue;
       }
-      const g = asFlatF32(p.grad);
-      const sq = mul(rt, g, g);
-      const part = sumFlat(rt, sq);
-      const next = add(rt, acc, part);
-      destroy(acc);
-      acc = next;
+      const g = p.grad.shape.length === 1 ? p.grad : reshape(p.grad, [p.grad.length]);
+      const gF32 = g.dtype === 'f32' ? g : cast(rt, g, 'f32');
+      try {
+        const sq = mul(rt, gF32, gF32);
+        const part = sumFlat(rt, sq);
+        const next = add(rt, acc, part);
+        destroy(acc);
+        destroy(sq);
+        destroy(part);
+        acc = next;
+      } finally {
+        if (gF32 !== g) {
+          destroy(gF32);
+        }
+      }
     }
     const host = await toArray(rt, acc);
     const sumSq = host[0];
@@ -117,6 +116,11 @@ export async function clipGradNorm(
   }
   const sumSq = await sumGradNormSq(rt, reg);
   const norm = Math.sqrt(sumSq);
+  if (!Number.isFinite(sumSq) || !Number.isFinite(norm)) {
+    throw new Error(
+      'clipGradNorm: global gradient L2 norm is non-finite (NaN/Inf in some parameter gradient — refusing to scale, which would poison every grad tensor)',
+    );
+  }
   if (norm === 0 || norm <= maxNorm) {
     return;
   }
@@ -128,5 +132,63 @@ export async function clipGradNorm(
     const scaled = scale(rt, p.grad, s);
     destroy(p.grad);
     p.grad = scaled;
+  }
+}
+
+/**
+ * After {@link import('./backward').backward}, release GPU buffers for every graph
+ * node except registered parameters and caller-owned leaves (`creator === null`
+ * and not in the registry). Parameter `.tensor` / `.grad` are kept for
+ * {@link clipGradNorm} / optimizers. Skipping duplicate {@link destroy} calls
+ * when several variables share one buffer (e.g. {@link import('./ops').reshape}).
+ */
+export function disposeAutogradGraphExceptParameters(
+  output: Variable,
+  registry: ParameterRegistry,
+): void {
+  type BufferId = Tensor['buffer'];
+  const paramSet = new Set<Variable>(registry.params);
+  const protectedBuffers = new Set<BufferId>();
+
+  for (const p of registry.params) {
+    protectedBuffers.add(p.tensor.buffer);
+    if (p.masterTensor !== null) {
+      protectedBuffers.add(p.masterTensor.buffer);
+    }
+    if (p.grad) {
+      protectedBuffers.add(p.grad.buffer);
+    }
+  }
+
+  const order = topologicalOrder(output);
+  for (const v of order) {
+    if (v.creator === null && !paramSet.has(v)) {
+      protectedBuffers.add(v.tensor.buffer);
+    }
+  }
+
+  const destroyed = new Set<BufferId>();
+
+  function releaseBuffer(buf: BufferId): void {
+    if (destroyed.has(buf) || protectedBuffers.has(buf)) {
+      return;
+    }
+    destroyed.add(buf);
+    buf.destroy();
+  }
+
+  function releaseMaybeTensor(t: Tensor | null | undefined): void {
+    if (t == null) {
+      return;
+    }
+    releaseBuffer(t.buffer);
+  }
+
+  for (const v of order) {
+    if (paramSet.has(v)) {
+      continue;
+    }
+    releaseMaybeTensor(v.grad);
+    releaseMaybeTensor(v.tensor);
   }
 }

@@ -15,19 +15,34 @@ export const TENSOR_LAYER_MARKER: unique symbol = Symbol.for('@llm-transformer-d
 
 export type { Device, DType, Tensor, TensorRuntime } from './types';
 export {
+  packBf16FromFloat32,
+  packFp16FromFloat32,
+  unpackBf16ToFloat32,
+  unpackFp16ToFloat32,
+} from '@llm-transformer-diy/gpu';
+export {
   assertDtype,
+  assertFloatDtype,
   assertRank,
+  assertSameDtype,
   assertSameShape,
+  bytesPerElement,
   computeContiguousStrides,
+  floatDtypeOf,
   isContiguous,
   productOfShape,
   sameShape,
+  type FloatDType,
 } from './shape';
 export {
+  cast,
+  copyContiguousElems,
+  copyContiguousTensorBytes,
   createIndices,
   createFromArray,
   createZeros,
   destroy,
+  gpuStorageByteLength,
   makeIndicesTensor,
   readIndices,
   toArray,

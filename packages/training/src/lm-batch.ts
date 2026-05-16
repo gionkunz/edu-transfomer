@@ -30,3 +30,27 @@ export function createLmBatch(
     targets: createIndices(rt, tgt, [seqLen]),
   };
 }
+
+/**
+ * Ensures every corpus token id lies in **`[0, vocabSize)`**.
+ *
+ * Out-of-range targets make the cross-entropy kernel index past the end of a logits row
+ * (**`logits[base + target]`**), producing **NaN** / garbage loss after many otherwise-normal steps.
+ */
+export function assertCorpusTokenIdsInVocab(token: Uint32Array, vocabSize: number): void {
+  if (!Number.isInteger(vocabSize) || vocabSize < 1) {
+    throw new Error(
+      `assertCorpusTokenIdsInVocab: vocabSize must be a positive integer (got ${String(vocabSize)})`,
+    );
+  }
+  for (let i = 0; i < token.length; i++) {
+    const t = token[i];
+    if (t !== undefined && t >= vocabSize) {
+      throw new Error(
+        `train: corpus token id ${String(t)} at index ${String(i)} >= vocabSize ${String(
+          vocabSize,
+        )} — re-encode with this tokenizer or invalidate the token cache`,
+      );
+    }
+  }
+}

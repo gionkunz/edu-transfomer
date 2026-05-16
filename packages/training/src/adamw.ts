@@ -1,9 +1,12 @@
 import type { Parameter, ParameterRegistry } from '@llm-transformer-diy/autograd';
-import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
+import type { TensorRuntime, Tensor } from '@llm-transformer-diy/tensor';
 import {
   adamWStepInPlace,
+  cast,
+  copyContiguousTensorBytes,
   createZeros,
   destroy,
+  floatDtypeOf,
   type AdamWStepHyperparams,
 } from '@llm-transformer-diy/tensor';
 
@@ -91,13 +94,28 @@ export class AdamW {
       let mT = this.m.get(p);
       let vT = this.v.get(p);
       if (!mT || !vT) {
-        mT = createZeros(this.rt, p.tensor.shape);
-        vT = createZeros(this.rt, p.tensor.shape);
+        mT = createZeros(this.rt, p.tensor.shape, 'f32');
+        vT = createZeros(this.rt, p.tensor.shape, 'f32');
         this.m.set(p, mT);
         this.v.set(p, vT);
       }
       hyperKernel.weightDecay = this.hyper.weightDecay * this.weightDecayScale(p);
-      adamWStepInPlace(this.rt, p.tensor, p.grad, mT, vT, hyperKernel);
+      if (p.masterTensor === null) {
+        adamWStepInPlace(this.rt, p.tensor, p.grad, mT, vT, hyperKernel);
+      } else {
+        const gradF32 = cast(this.rt, p.grad, 'f32');
+        try {
+          adamWStepInPlace(this.rt, p.masterTensor, gradF32, mT, vT, hyperKernel);
+        } finally {
+          destroy(gradF32);
+        }
+        const castDown = cast(this.rt, p.masterTensor, floatDtypeOf(p.tensor));
+        try {
+          copyContiguousTensorBytes(this.rt, castDown, p.tensor);
+        } finally {
+          destroy(castDown);
+        }
+      }
       destroy(p.grad);
       p.grad = null;
     }

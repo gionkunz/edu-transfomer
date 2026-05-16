@@ -1,5 +1,24 @@
 import type { DType, Tensor } from './types';
 
+/** Float compute dtypes (`bf16` / `fp16` / `f32`); excludes index tensors (`u32`). */
+export type FloatDType = Exclude<DType, 'u32'>;
+
+/** Byte size of one scalar in **`dtype`** for **host** packing / logical element size (`2` for **`bf16`** / **`fp16`**, `4` for **`f32`** / **`u32`**). */
+export function bytesPerElement(dtype: DType): number {
+  switch (dtype) {
+    case 'f32':
+    case 'u32':
+      return 4;
+    case 'bf16':
+    case 'fp16':
+      return 2;
+    default: {
+      const _exhaustive: never = dtype;
+      return _exhaustive;
+    }
+  }
+}
+
 /**
  * Row-major contiguous strides for `shape`. For `shape = [a, b, c]` returns
  * `[b*c, c, 1]`. Returns `[]` for the scalar shape `[]`.
@@ -67,6 +86,34 @@ export function assertSameShape(a: Tensor, b: Tensor): void {
       `assertSameShape: shapes differ (a=[${a.shape.join(',')}], b=[${b.shape.join(',')}])`,
     );
   }
+}
+
+/** Throws unless `t.dtype` is a float dtype (not **`u32`**). */
+export function assertFloatDtype(t: Tensor): void {
+  if (t.dtype === 'u32') {
+    throw new Error(
+      `assertFloatDtype: expected float dtype, got 'u32' (shape=[${t.shape.join(',')}])`,
+    );
+  }
+}
+
+/**
+ * Throws unless **`a`** and **`b`** share the same **`dtype`** (including **`u32`**).
+ * For GPU math ops, pair with **`assertFloatDtype`** on each operand when indices must be excluded.
+ */
+export function assertSameDtype(a: Tensor, b: Tensor): void {
+  if (a.dtype !== b.dtype) {
+    throw new Error(
+      `assertSameDtype: dtype mismatch '${a.dtype}' vs '${b.dtype}' ` +
+        `(a=[${a.shape.join(',')}], b=[${b.shape.join(',')}])`,
+    );
+  }
+}
+
+/** After {@link assertFloatDtype}, returns **`t.dtype`** narrowed to {@link FloatDType}. */
+export function floatDtypeOf(t: Tensor): FloatDType {
+  assertFloatDtype(t);
+  return t.dtype as FloatDType;
 }
 
 /** Throws unless `t.dtype === expected`. */

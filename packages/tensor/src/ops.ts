@@ -1,35 +1,498 @@
 import {
   dispatchAdd,
+  dispatchAddBf16,
+  dispatchAddFp16,
   dispatchAdamWStep,
   dispatchBroadcastFillScalar,
+  dispatchBroadcastFillScalarBf16,
+  dispatchBroadcastFillScalarFp16,
   dispatchCrossEntropyFromLogits,
+  dispatchCrossEntropyFromLogitsBf16,
+  dispatchCrossEntropyFromLogitsFp16,
   dispatchCrossEntropyLogitsGrad,
+  dispatchCrossEntropyLogitsGradBf16,
+  dispatchCrossEntropyLogitsGradFp16,
   dispatchEmbeddingGather,
+  dispatchEmbeddingGatherBf16,
+  dispatchEmbeddingGatherFp16,
   dispatchEmbeddingScatterAccum,
+  dispatchEmbeddingScatterAccumBf16,
+  dispatchEmbeddingScatterAccumFp16,
   dispatchGelu,
   dispatchGeluBackward,
+  dispatchGeluBackwardBf16,
+  dispatchGeluBackwardFp16,
+  dispatchGeluBf16,
+  dispatchGeluFp16,
   dispatchMatMul,
+  dispatchMatMulBf16,
+  dispatchMatMulFp16,
   dispatchMul,
+  dispatchMulBf16,
+  dispatchMulFp16,
   dispatchReduceSum,
+  dispatchReduceSumBf16,
+  dispatchReduceSumFp16,
   dispatchRmsNorm,
+  dispatchRmsNormBf16,
+  dispatchRmsNormFp16,
   dispatchRmsNormGradGamma,
+  dispatchRmsNormGradGammaBf16,
+  dispatchRmsNormGradGammaFp16,
   dispatchRmsNormGradInput,
+  dispatchRmsNormGradInputBf16,
+  dispatchRmsNormGradInputFp16,
   dispatchScale,
+  dispatchScaleBf16,
+  dispatchScaleFp16,
   dispatchSoftmax,
   dispatchSoftmaxBackward,
+  dispatchSoftmaxBackwardBf16,
+  dispatchSoftmaxBackwardFp16,
+  dispatchSoftmaxBf16,
+  dispatchSoftmaxFp16,
   dispatchTranspose,
+  dispatchTransposeBf16,
+  dispatchTransposeFp16,
 } from '@llm-transformer-diy/gpu';
 
 import {
   assertDtype,
+  assertFloatDtype,
   assertRank,
+  assertSameDtype,
   assertSameShape,
   computeContiguousStrides,
+  floatDtypeOf,
   isContiguous,
   productOfShape,
+  type FloatDType,
 } from './shape';
 import { allocateContiguousBuffer, createZeros, makeContiguousTensor } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
+
+function dispatchMatMulD(
+  rt: TensorRuntime,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  M: number,
+  N: number,
+  K: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchMatMul(ctx, registry, a, b, out, M, N, K);
+  } else if (dt === 'bf16') {
+    dispatchMatMulBf16(ctx, registry, a, b, out, M, N, K);
+  } else {
+    dispatchMatMulFp16(ctx, registry, a, b, out, M, N, K);
+  }
+}
+
+function dispatchTransposeD(
+  rt: TensorRuntime,
+  src: GPUBuffer,
+  dst: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchTranspose(ctx, registry, src, dst, rows, cols);
+  } else if (dt === 'bf16') {
+    dispatchTransposeBf16(ctx, registry, src, dst, rows, cols);
+  } else {
+    dispatchTransposeFp16(ctx, registry, src, dst, rows, cols);
+  }
+}
+
+function dispatchAddD(
+  rt: TensorRuntime,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchAdd(ctx, registry, a, b, out, n);
+  } else if (dt === 'bf16') {
+    dispatchAddBf16(ctx, registry, a, b, out, n);
+  } else {
+    dispatchAddFp16(ctx, registry, a, b, out, n);
+  }
+}
+
+function dispatchMulD(
+  rt: TensorRuntime,
+  a: GPUBuffer,
+  b: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchMul(ctx, registry, a, b, out, n);
+  } else if (dt === 'bf16') {
+    dispatchMulBf16(ctx, registry, a, b, out, n);
+  } else {
+    dispatchMulFp16(ctx, registry, a, b, out, n);
+  }
+}
+
+function dispatchScaleD(
+  rt: TensorRuntime,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+  k: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchScale(ctx, registry, inp, out, n, k);
+  } else if (dt === 'bf16') {
+    dispatchScaleBf16(ctx, registry, inp, out, n, k);
+  } else {
+    dispatchScaleFp16(ctx, registry, inp, out, n, k);
+  }
+}
+
+function dispatchGeluD(
+  rt: TensorRuntime,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchGelu(ctx, registry, inp, out, n);
+  } else if (dt === 'bf16') {
+    dispatchGeluBf16(ctx, registry, inp, out, n);
+  } else {
+    dispatchGeluFp16(ctx, registry, inp, out, n);
+  }
+}
+
+function dispatchSoftmaxD(
+  rt: TensorRuntime,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchSoftmax(ctx, registry, inp, out, rows, cols);
+  } else if (dt === 'bf16') {
+    dispatchSoftmaxBf16(ctx, registry, inp, out, rows, cols);
+  } else {
+    dispatchSoftmaxFp16(ctx, registry, inp, out, rows, cols);
+  }
+}
+
+function dispatchReduceSumD(
+  rt: TensorRuntime,
+  inp: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchReduceSum(ctx, registry, inp, out, rows, cols);
+  } else if (dt === 'bf16') {
+    dispatchReduceSumBf16(ctx, registry, inp, out, rows, cols);
+  } else {
+    dispatchReduceSumFp16(ctx, registry, inp, out, rows, cols);
+  }
+}
+
+function dispatchRmsNormD(
+  rt: TensorRuntime,
+  x: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLen: number,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchRmsNorm(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
+  } else if (dt === 'bf16') {
+    dispatchRmsNormBf16(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
+  } else {
+    dispatchRmsNormFp16(ctx, registry, x, gamma, gammaLen, out, rows, cols, epsilon);
+  }
+}
+
+function dispatchGeluBackwardD(
+  rt: TensorRuntime,
+  gradOut: GPUBuffer,
+  inp: GPUBuffer,
+  gradIn: GPUBuffer,
+  n: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchGeluBackward(ctx, registry, gradOut, inp, gradIn, n);
+  } else if (dt === 'bf16') {
+    dispatchGeluBackwardBf16(ctx, registry, gradOut, inp, gradIn, n);
+  } else {
+    dispatchGeluBackwardFp16(ctx, registry, gradOut, inp, gradIn, n);
+  }
+}
+
+function dispatchSoftmaxBackwardD(
+  rt: TensorRuntime,
+  gradOut: GPUBuffer,
+  y: GPUBuffer,
+  gradIn: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchSoftmaxBackward(ctx, registry, gradOut, y, gradIn, rows, cols);
+  } else if (dt === 'bf16') {
+    dispatchSoftmaxBackwardBf16(ctx, registry, gradOut, y, gradIn, rows, cols);
+  } else {
+    dispatchSoftmaxBackwardFp16(ctx, registry, gradOut, y, gradIn, rows, cols);
+  }
+}
+
+function dispatchRmsNormGradInputD(
+  rt: TensorRuntime,
+  x: GPUBuffer,
+  gamma: GPUBuffer,
+  gammaLen: number,
+  gradOut: GPUBuffer,
+  gradIn: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchRmsNormGradInput(
+      ctx,
+      registry,
+      x,
+      gamma,
+      gammaLen,
+      gradOut,
+      gradIn,
+      rows,
+      cols,
+      epsilon,
+    );
+  } else if (dt === 'bf16') {
+    dispatchRmsNormGradInputBf16(
+      ctx,
+      registry,
+      x,
+      gamma,
+      gammaLen,
+      gradOut,
+      gradIn,
+      rows,
+      cols,
+      epsilon,
+    );
+  } else {
+    dispatchRmsNormGradInputFp16(
+      ctx,
+      registry,
+      x,
+      gamma,
+      gammaLen,
+      gradOut,
+      gradIn,
+      rows,
+      cols,
+      epsilon,
+    );
+  }
+}
+
+function dispatchRmsNormGradGammaD(
+  rt: TensorRuntime,
+  x: GPUBuffer,
+  gradOut: GPUBuffer,
+  gradGamma: GPUBuffer,
+  rows: number,
+  cols: number,
+  epsilon: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchRmsNormGradGamma(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
+  } else if (dt === 'bf16') {
+    dispatchRmsNormGradGammaBf16(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
+  } else {
+    dispatchRmsNormGradGammaFp16(ctx, registry, x, gradOut, gradGamma, rows, cols, epsilon);
+  }
+}
+
+function dispatchEmbeddingScatterAccumD(
+  rt: TensorRuntime,
+  gradTokens: GPUBuffer,
+  indices: GPUBuffer,
+  gradWeights: GPUBuffer,
+  numTokens: number,
+  embedDim: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchEmbeddingScatterAccum(
+      ctx,
+      registry,
+      gradTokens,
+      indices,
+      gradWeights,
+      numTokens,
+      embedDim,
+    );
+  } else if (dt === 'bf16') {
+    dispatchEmbeddingScatterAccumBf16(
+      ctx,
+      registry,
+      gradTokens,
+      indices,
+      gradWeights,
+      numTokens,
+      embedDim,
+    );
+  } else {
+    dispatchEmbeddingScatterAccumFp16(
+      ctx,
+      registry,
+      gradTokens,
+      indices,
+      gradWeights,
+      numTokens,
+      embedDim,
+    );
+  }
+}
+
+function dispatchCrossEntropyLogitsGradD(
+  rt: TensorRuntime,
+  probs: GPUBuffer,
+  targets: GPUBuffer,
+  upstreamPerRow: GPUBuffer,
+  gradLogitsOut: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchCrossEntropyLogitsGrad(
+      ctx,
+      registry,
+      probs,
+      targets,
+      upstreamPerRow,
+      gradLogitsOut,
+      rows,
+      cols,
+    );
+  } else if (dt === 'bf16') {
+    dispatchCrossEntropyLogitsGradBf16(
+      ctx,
+      registry,
+      probs,
+      targets,
+      upstreamPerRow,
+      gradLogitsOut,
+      rows,
+      cols,
+    );
+  } else {
+    dispatchCrossEntropyLogitsGradFp16(
+      ctx,
+      registry,
+      probs,
+      targets,
+      upstreamPerRow,
+      gradLogitsOut,
+      rows,
+      cols,
+    );
+  }
+}
+
+function dispatchEmbeddingGatherD(
+  rt: TensorRuntime,
+  weights: GPUBuffer,
+  indices: GPUBuffer,
+  out: GPUBuffer,
+  tokens: number,
+  embedDim: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchEmbeddingGather(ctx, registry, weights, indices, out, tokens, embedDim);
+  } else if (dt === 'bf16') {
+    dispatchEmbeddingGatherBf16(ctx, registry, weights, indices, out, tokens, embedDim);
+  } else {
+    dispatchEmbeddingGatherFp16(ctx, registry, weights, indices, out, tokens, embedDim);
+  }
+}
+
+function dispatchCrossEntropyFromLogitsD(
+  rt: TensorRuntime,
+  logits: GPUBuffer,
+  targets: GPUBuffer,
+  out: GPUBuffer,
+  rows: number,
+  cols: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchCrossEntropyFromLogits(ctx, registry, logits, targets, out, rows, cols);
+  } else if (dt === 'bf16') {
+    dispatchCrossEntropyFromLogitsBf16(ctx, registry, logits, targets, out, rows, cols);
+  } else {
+    dispatchCrossEntropyFromLogitsFp16(ctx, registry, logits, targets, out, rows, cols);
+  }
+}
+
+function dispatchBroadcastFillScalarD(
+  rt: TensorRuntime,
+  scalar: GPUBuffer,
+  out: GPUBuffer,
+  n: number,
+  dt: FloatDType,
+): void {
+  const { ctx, registry } = rt;
+  if (dt === 'f32') {
+    dispatchBroadcastFillScalar(ctx, registry, scalar, out, n);
+  } else if (dt === 'bf16') {
+    dispatchBroadcastFillScalarBf16(ctx, registry, scalar, out, n);
+  } else {
+    dispatchBroadcastFillScalarFp16(ctx, registry, scalar, out, n);
+  }
+}
 
 /**
  * Matrix multiply for **rank-2** row-major tensors: `a` is `[M, K]`, `b` is
@@ -38,6 +501,10 @@ import type { Tensor, TensorRuntime } from './types';
 export function matmul(rt: TensorRuntime, a: Tensor, b: Tensor): Tensor {
   assertRank(a, 2);
   assertRank(b, 2);
+  assertFloatDtype(a);
+  assertFloatDtype(b);
+  assertSameDtype(a, b);
+  const dt = floatDtypeOf(a);
   const M = a.shape[0];
   const K = a.shape[1];
   const N = b.shape[1];
@@ -46,32 +513,42 @@ export function matmul(rt: TensorRuntime, a: Tensor, b: Tensor): Tensor {
       `matmul: inner dimensions must match (a=[${a.shape.join(',')}], b=[${b.shape.join(',')}])`,
     );
   }
-  const out = allocateContiguousBuffer(rt, M * N);
-  dispatchMatMul(rt.ctx, rt.registry, a.buffer, b.buffer, out, M, N, K);
-  return makeContiguousTensor([M, N], out);
+  const out = allocateContiguousBuffer(rt, M * N, dt);
+  dispatchMatMulD(rt, a.buffer, b.buffer, out, M, N, K, dt);
+  return makeContiguousTensor([M, N], out, dt);
 }
 
 /** Elementwise `out[i] = a[i] + b[i]`. Requires equal shapes (no broadcasting). */
 export function add(rt: TensorRuntime, a: Tensor, b: Tensor): Tensor {
   assertSameShape(a, b);
-  const out = allocateContiguousBuffer(rt, a.length);
-  dispatchAdd(rt.ctx, rt.registry, a.buffer, b.buffer, out, a.length);
-  return makeContiguousTensor(a.shape, out);
+  assertFloatDtype(a);
+  assertFloatDtype(b);
+  assertSameDtype(a, b);
+  const dt = floatDtypeOf(a);
+  const out = allocateContiguousBuffer(rt, a.length, dt);
+  dispatchAddD(rt, a.buffer, b.buffer, out, a.length, dt);
+  return makeContiguousTensor(a.shape, out, dt);
 }
 
 /** Elementwise `out[i] = a[i] * b[i]`. Requires equal shapes (no broadcasting). */
 export function mul(rt: TensorRuntime, a: Tensor, b: Tensor): Tensor {
   assertSameShape(a, b);
-  const out = allocateContiguousBuffer(rt, a.length);
-  dispatchMul(rt.ctx, rt.registry, a.buffer, b.buffer, out, a.length);
-  return makeContiguousTensor(a.shape, out);
+  assertFloatDtype(a);
+  assertFloatDtype(b);
+  assertSameDtype(a, b);
+  const dt = floatDtypeOf(a);
+  const out = allocateContiguousBuffer(rt, a.length, dt);
+  dispatchMulD(rt, a.buffer, b.buffer, out, a.length, dt);
+  return makeContiguousTensor(a.shape, out, dt);
 }
 
 /** Elementwise `out[i] = a[i] * k`. */
 export function scale(rt: TensorRuntime, a: Tensor, k: number): Tensor {
-  const out = allocateContiguousBuffer(rt, a.length);
-  dispatchScale(rt.ctx, rt.registry, a.buffer, out, a.length, k);
-  return makeContiguousTensor(a.shape, out);
+  assertFloatDtype(a);
+  const dt = floatDtypeOf(a);
+  const out = allocateContiguousBuffer(rt, a.length, dt);
+  dispatchScaleD(rt, a.buffer, out, a.length, k, dt);
+  return makeContiguousTensor(a.shape, out, dt);
 }
 
 /**
@@ -80,14 +557,16 @@ export function scale(rt: TensorRuntime, a: Tensor, k: number): Tensor {
  */
 export function softmax(rt: TensorRuntime, a: Tensor): Tensor {
   assertRank(a, 2);
+  assertFloatDtype(a);
   if (!isContiguous(a)) {
     throw new Error('softmax: non-contiguous strides not supported');
   }
+  const dt = floatDtypeOf(a);
   const rows = a.shape[0];
   const cols = a.shape[1];
-  const out = allocateContiguousBuffer(rt, rows * cols);
-  dispatchSoftmax(rt.ctx, rt.registry, a.buffer, out, rows, cols);
-  return makeContiguousTensor([rows, cols], out);
+  const out = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchSoftmaxD(rt, a.buffer, out, rows, cols, dt);
+  return makeContiguousTensor([rows, cols], out, dt);
 }
 
 /**
@@ -102,29 +581,27 @@ export function softmaxBackward(
   assertRank(gradOutput, 2);
   assertRank(softmaxOutput, 2);
   assertSameShape(gradOutput, softmaxOutput);
+  assertFloatDtype(gradOutput);
+  assertFloatDtype(softmaxOutput);
+  assertSameDtype(gradOutput, softmaxOutput);
   if (!isContiguous(gradOutput) || !isContiguous(softmaxOutput)) {
     throw new Error('softmaxBackward: non-contiguous strides not supported');
   }
+  const dt = floatDtypeOf(gradOutput);
   const rows = gradOutput.shape[0];
   const cols = gradOutput.shape[1];
-  const out = allocateContiguousBuffer(rt, rows * cols);
-  dispatchSoftmaxBackward(
-    rt.ctx,
-    rt.registry,
-    gradOutput.buffer,
-    softmaxOutput.buffer,
-    out,
-    rows,
-    cols,
-  );
-  return makeContiguousTensor([rows, cols], out);
+  const out = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchSoftmaxBackwardD(rt, gradOutput.buffer, softmaxOutput.buffer, out, rows, cols, dt);
+  return makeContiguousTensor([rows, cols], out, dt);
 }
 
 /** Elementwise GELU activation (tanh formulation; matches `geluScalar` in `@llm-transformer-diy/gpu`). */
 export function gelu(rt: TensorRuntime, a: Tensor): Tensor {
-  const out = allocateContiguousBuffer(rt, a.length);
-  dispatchGelu(rt.ctx, rt.registry, a.buffer, out, a.length);
-  return makeContiguousTensor(a.shape, out);
+  assertFloatDtype(a);
+  const dt = floatDtypeOf(a);
+  const out = allocateContiguousBuffer(rt, a.length, dt);
+  dispatchGeluD(rt, a.buffer, out, a.length, dt);
+  return makeContiguousTensor(a.shape, out, dt);
 }
 
 /**
@@ -133,17 +610,23 @@ export function gelu(rt: TensorRuntime, a: Tensor): Tensor {
  */
 export function geluBackward(rt: TensorRuntime, gradOutput: Tensor, input: Tensor): Tensor {
   assertSameShape(gradOutput, input);
-  const out = allocateContiguousBuffer(rt, input.length);
-  dispatchGeluBackward(rt.ctx, rt.registry, gradOutput.buffer, input.buffer, out, input.length);
-  return makeContiguousTensor(input.shape, out);
+  assertFloatDtype(gradOutput);
+  assertFloatDtype(input);
+  assertSameDtype(gradOutput, input);
+  const dt = floatDtypeOf(input);
+  const out = allocateContiguousBuffer(rt, input.length, dt);
+  dispatchGeluBackwardD(rt, gradOutput.buffer, input.buffer, out, input.length, dt);
+  return makeContiguousTensor(input.shape, out, dt);
 }
 
 /** Row-wise **RMSNorm** on rank-2 **`[rows, cols]`** with **`gamma: [cols]`**. */
 export function rmsnorm(rt: TensorRuntime, x: Tensor, gamma: Tensor, epsilon = 1e-6): Tensor {
-  assertDtype(x, 'f32');
-  assertDtype(gamma, 'f32');
+  assertFloatDtype(x);
+  assertFloatDtype(gamma);
+  assertSameDtype(x, gamma);
   assertRank(x, 2);
   assertRank(gamma, 1);
+  const dt = floatDtypeOf(x);
   const rows = x.shape[0];
   const cols = x.shape[1];
   if (gamma.shape[0] !== cols) {
@@ -152,9 +635,9 @@ export function rmsnorm(rt: TensorRuntime, x: Tensor, gamma: Tensor, epsilon = 1
   if (!isContiguous(x) || !isContiguous(gamma)) {
     throw new Error('rmsnorm: non-contiguous tensors not supported');
   }
-  const out = allocateContiguousBuffer(rt, rows * cols);
-  dispatchRmsNorm(rt.ctx, rt.registry, x.buffer, gamma.buffer, cols, out, rows, cols, epsilon);
-  return makeContiguousTensor([rows, cols], out);
+  const out = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchRmsNormD(rt, x.buffer, gamma.buffer, cols, out, rows, cols, epsilon, dt);
+  return makeContiguousTensor([rows, cols], out, dt);
 }
 
 /** ∂L/∂x for {@link rmsnorm}. */
@@ -166,11 +649,16 @@ export function rmsnormGradInput(
   epsilon = 1e-6,
 ): Tensor {
   assertSameShape(gradOutput, x);
-  assertDtype(gamma, 'f32');
+  assertFloatDtype(gradOutput);
+  assertFloatDtype(x);
+  assertFloatDtype(gamma);
+  assertSameDtype(gradOutput, x);
+  assertSameDtype(x, gamma);
   assertRank(x, 2);
   assertRank(gamma, 1);
   const rows = x.shape[0];
   const cols = x.shape[1];
+  const dt = floatDtypeOf(x);
   if (
     gamma.shape[0] !== cols ||
     !isContiguous(x) ||
@@ -179,10 +667,9 @@ export function rmsnormGradInput(
   ) {
     throw new Error('rmsnormGradInput: shape or stride mismatch');
   }
-  const out = allocateContiguousBuffer(rt, rows * cols);
-  dispatchRmsNormGradInput(
-    rt.ctx,
-    rt.registry,
+  const out = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchRmsNormGradInputD(
+    rt,
     x.buffer,
     gamma.buffer,
     cols,
@@ -191,8 +678,9 @@ export function rmsnormGradInput(
     rows,
     cols,
     epsilon,
+    dt,
   );
-  return makeContiguousTensor([rows, cols], out);
+  return makeContiguousTensor([rows, cols], out, dt);
 }
 
 /** ∂L/∂γ (`[cols]`) for {@link rmsnorm}. */
@@ -203,24 +691,19 @@ export function rmsnormGradGamma(
   epsilon = 1e-6,
 ): Tensor {
   assertSameShape(gradOutput, x);
+  assertFloatDtype(gradOutput);
+  assertFloatDtype(x);
+  assertSameDtype(gradOutput, x);
   assertRank(x, 2);
   const rows = x.shape[0];
   const cols = x.shape[1];
+  const dt = floatDtypeOf(x);
   if (!isContiguous(x) || !isContiguous(gradOutput)) {
     throw new Error('rmsnormGradGamma: non-contiguous tensors not supported');
   }
-  const out = allocateContiguousBuffer(rt, cols);
-  dispatchRmsNormGradGamma(
-    rt.ctx,
-    rt.registry,
-    x.buffer,
-    gradOutput.buffer,
-    out,
-    rows,
-    cols,
-    epsilon,
-  );
-  return makeContiguousTensor([cols], out);
+  const out = allocateContiguousBuffer(rt, cols, dt);
+  dispatchRmsNormGradGammaD(rt, x.buffer, gradOutput.buffer, out, rows, cols, epsilon, dt);
+  return makeContiguousTensor([cols], out, dt);
 }
 
 /**
@@ -229,34 +712,29 @@ export function rmsnormGradGamma(
  */
 export function transpose(rt: TensorRuntime, a: Tensor): Tensor {
   assertRank(a, 2);
+  assertFloatDtype(a);
+  const dt = floatDtypeOf(a);
   const rows = a.shape[0];
   const cols = a.shape[1];
-  const out = allocateContiguousBuffer(rt, rows * cols);
-  dispatchTranspose(rt.ctx, rt.registry, a.buffer, out, rows, cols);
-  return makeContiguousTensor([cols, rows], out);
+  const out = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchTransposeD(rt, a.buffer, out, rows, cols, dt);
+  return makeContiguousTensor([cols, rows], out, dt);
 }
 
 /**
  * Embedding gather: lookup **`weights[vocab × embed]`** rows at **`indices[tokens]`** (**`dtype: 'u32'`**).
  */
 export function embedding(rt: TensorRuntime, weights: Tensor, indices: Tensor): Tensor {
-  assertDtype(weights, 'f32');
+  assertFloatDtype(weights);
   assertDtype(indices, 'u32');
   assertRank(weights, 2);
   assertRank(indices, 1);
+  const dt = floatDtypeOf(weights);
   const embedDim = weights.shape[1];
   const tokens = indices.shape[0];
-  const outBuf = allocateContiguousBuffer(rt, tokens * embedDim);
-  dispatchEmbeddingGather(
-    rt.ctx,
-    rt.registry,
-    weights.buffer,
-    indices.buffer,
-    outBuf,
-    tokens,
-    embedDim,
-  );
-  return makeContiguousTensor([tokens, embedDim], outBuf);
+  const outBuf = allocateContiguousBuffer(rt, tokens * embedDim, dt);
+  dispatchEmbeddingGatherD(rt, weights.buffer, indices.buffer, outBuf, tokens, embedDim, dt);
+  return makeContiguousTensor([tokens, embedDim], outBuf, dt);
 }
 
 /**
@@ -270,26 +748,27 @@ export function scatterEmbeddingAccum(
   vocabSize: number,
 ): Tensor {
   assertDtype(indices, 'u32');
-  assertDtype(gradTokens, 'f32');
+  assertFloatDtype(gradTokens);
   assertRank(indices, 1);
   assertRank(gradTokens, 2);
   const tokens = indices.shape[0];
   const embedDim = gradTokens.shape[1];
+  const dt = floatDtypeOf(gradTokens);
   if (gradTokens.shape[0] !== tokens) {
     throw new Error(
       `scatterEmbeddingAccum: gradTokens shape[0] (${String(gradTokens.shape[0] ?? '')}) must equal ` +
         `indices length (${String(tokens)})`,
     );
   }
-  const accumulator = createZeros(rt, [vocabSize, embedDim]);
-  dispatchEmbeddingScatterAccum(
-    rt.ctx,
-    rt.registry,
+  const accumulator = createZeros(rt, [vocabSize, embedDim], dt);
+  dispatchEmbeddingScatterAccumD(
+    rt,
     gradTokens.buffer,
     indices.buffer,
     accumulator.buffer,
     tokens,
     embedDim,
+    dt,
   );
   return accumulator;
 }
@@ -300,10 +779,11 @@ export function crossEntropyRowsFromLogits(
   logits: Tensor,
   targets: Tensor,
 ): Tensor {
-  assertDtype(logits, 'f32');
+  assertFloatDtype(logits);
   assertDtype(targets, 'u32');
   assertRank(logits, 2);
   assertRank(targets, 1);
+  const dt = floatDtypeOf(logits);
   const rows = logits.shape[0];
   const cols = logits.shape[1];
   if (targets.shape[0] !== rows) {
@@ -311,17 +791,9 @@ export function crossEntropyRowsFromLogits(
       `crossEntropyRowsFromLogits: logits rows (${String(rows)}) must match targets (${String(targets.shape[0] ?? '')})`,
     );
   }
-  const outBuf = allocateContiguousBuffer(rt, rows);
-  dispatchCrossEntropyFromLogits(
-    rt.ctx,
-    rt.registry,
-    logits.buffer,
-    targets.buffer,
-    outBuf,
-    rows,
-    cols,
-  );
-  return makeContiguousTensor([rows], outBuf);
+  const outBuf = allocateContiguousBuffer(rt, rows, dt);
+  dispatchCrossEntropyFromLogitsD(rt, logits.buffer, targets.buffer, outBuf, rows, cols, dt);
+  return makeContiguousTensor([rows], outBuf, dt);
 }
 
 /**
@@ -333,40 +805,43 @@ export function crossEntropyLogitsGrad(
   targets: Tensor,
   upstreamPerRow: Tensor,
 ): Tensor {
-  assertDtype(probs, 'f32');
+  assertFloatDtype(probs);
+  assertFloatDtype(upstreamPerRow);
+  assertSameDtype(probs, upstreamPerRow);
   assertDtype(targets, 'u32');
-  assertDtype(upstreamPerRow, 'f32');
   assertRank(probs, 2);
   assertRank(targets, 1);
   assertRank(upstreamPerRow, 1);
   const rows = probs.shape[0];
   const cols = probs.shape[1];
+  const dt = floatDtypeOf(probs);
   if (targets.shape[0] !== rows || upstreamPerRow.shape[0] !== rows) {
     throw new Error('crossEntropyLogitsGrad: shapes rows mismatch');
   }
-  const outBuf = allocateContiguousBuffer(rt, rows * cols);
-  dispatchCrossEntropyLogitsGrad(
-    rt.ctx,
-    rt.registry,
+  const outBuf = allocateContiguousBuffer(rt, rows * cols, dt);
+  dispatchCrossEntropyLogitsGradD(
+    rt,
     probs.buffer,
     targets.buffer,
     upstreamPerRow.buffer,
     outBuf,
     rows,
     cols,
+    dt,
   );
-  return makeContiguousTensor([rows, cols], outBuf);
+  return makeContiguousTensor([rows, cols], outBuf, dt);
 }
 
 /** Sum **`[length]`** into a **`[1]`** buffer ( **`dispatchReduceSum`** with one row ). */
 export function sumFlat(rt: TensorRuntime, a: Tensor): Tensor {
-  assertDtype(a, 'f32');
+  assertFloatDtype(a);
   assertRank(a, 1);
+  const dt = floatDtypeOf(a);
   const n = a.shape[0];
   const collapsed = reshape(a, [1, n]);
-  const outBuf = allocateContiguousBuffer(rt, 1);
-  dispatchReduceSum(rt.ctx, rt.registry, collapsed.buffer, outBuf, 1, n);
-  return makeContiguousTensor([1], outBuf);
+  const outBuf = allocateContiguousBuffer(rt, 1, dt);
+  dispatchReduceSumD(rt, collapsed.buffer, outBuf, 1, n, dt);
+  return makeContiguousTensor([1], outBuf, dt);
 }
 
 /** Host-supplied AdamW scalars including bias corrections `1 - β₁ᵗ` and `1 - β₂ᵗ`. */
@@ -472,7 +947,6 @@ export function copyF32Elems(
  * Shares **`t.buffer`**; destroying either tensor invalidates both (same contract as {@link reshape}).
  */
 export function view2dRowPrefix(t: Tensor, prefixRows: number): Tensor {
-  assertDtype(t, 'f32');
   assertRank(t, 2);
   const rows = t.shape[0];
   const cols = t.shape[1];
@@ -496,7 +970,7 @@ export function view2dRowPrefix(t: Tensor, prefixRows: number): Tensor {
 
 /** Writes **`scalar[0]`** into **`length`** elements — used by **`sumFlat`** autograd broadcasts. */
 export function broadcastFillFromScalar(rt: TensorRuntime, scalar: Tensor, length: number): Tensor {
-  assertDtype(scalar, 'f32');
+  assertFloatDtype(scalar);
   assertRank(scalar, 1);
   if (scalar.shape[0] !== 1) {
     throw new Error('broadcastFillFromScalar: expects scalar tensor [1]');
@@ -504,9 +978,10 @@ export function broadcastFillFromScalar(rt: TensorRuntime, scalar: Tensor, lengt
   if (!Number.isInteger(length) || length <= 0) {
     throw new Error(`broadcastFillFromScalar: length must be positive (got ${String(length)})`);
   }
-  const outBuf = allocateContiguousBuffer(rt, length);
-  dispatchBroadcastFillScalar(rt.ctx, rt.registry, scalar.buffer, outBuf, length);
-  return makeContiguousTensor([length], outBuf);
+  const dt = floatDtypeOf(scalar);
+  const outBuf = allocateContiguousBuffer(rt, length, dt);
+  dispatchBroadcastFillScalarD(rt, scalar.buffer, outBuf, length, dt);
+  return makeContiguousTensor([length], outBuf, dt);
 }
 
 /**
@@ -519,7 +994,6 @@ export function broadcastFillFromScalar(rt: TensorRuntime, scalar: Tensor, lengt
  * {@link import('./tensor').destroy} on either tensor invalidates both.
  */
 export function reshape(a: Tensor, newShape: readonly number[]): Tensor {
-  assertDtype(a, 'f32');
   const newLength = productOfShape(newShape);
   if (newLength !== a.length) {
     throw new Error(

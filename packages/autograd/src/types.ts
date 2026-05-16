@@ -52,10 +52,19 @@ export interface Operation {
  * A trainable leaf — a {@link Variable} with `requiresGrad: true` and
  * `creator: null`. Structurally identical to `Variable`; the alias exists for
  * documentation and grep-friendliness inside the parameter registry.
+ *
+ * When {@link masterTensor} is non-null, it holds an **`f32`** view updated by
+ * {@link import('@llm-transformer-diy/training').AdamW}; the optimizer casts
+ * into {@link Variable.tensor} (bf16/fp16 compute weights) after each step.
  */
 export interface Parameter extends Variable {
   readonly requiresGrad: true;
   readonly creator: null;
+  /**
+   * **`f32`** master weights for mixed-precision training, or `null` when
+   * {@link Variable.tensor} is the sole **`f32`** buffer (legacy path).
+   */
+  readonly masterTensor: Tensor | null;
 }
 
 /**

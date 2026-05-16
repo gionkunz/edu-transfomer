@@ -1,5 +1,5 @@
-import { add as tensorAdd } from '@llm-transformer-diy/tensor';
-import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
+import { add as tensorAdd, createFromArray } from '@llm-transformer-diy/tensor';
+import type { FloatDType, Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 
 import type { Operation, Parameter, Variable } from './types';
 
@@ -43,6 +43,39 @@ export function createParameter(tensor: Tensor): Parameter {
   return {
     id: nextId(),
     tensor,
+    masterTensor: null,
+    requiresGrad: true,
+    creator: null,
+    parents: [],
+    grad: null,
+  };
+}
+
+/**
+ * Trainable weights at **`computeDtype`** (bf16 / fp16) with a parallel **`f32`**
+ * {@link Parameter.masterTensor} for optimizer state. Forward / backward use
+ * {@link Parameter.tensor}; {@link import('@llm-transformer-diy/training').AdamW}
+ * updates `masterTensor` then casts into `tensor`.
+ *
+ * @throws If **`computeDtype === 'f32'`** — use {@link createParameter} instead.
+ */
+export function createParameterWithMaster(
+  rt: TensorRuntime,
+  data: Float32Array,
+  shape: readonly number[],
+  computeDtype: FloatDType,
+): Parameter {
+  if (computeDtype === 'f32') {
+    throw new Error(
+      'createParameterWithMaster: for f32 compute weights use createParameter(createFromArray(...))',
+    );
+  }
+  const tensor = createFromArray(rt, data, shape, computeDtype);
+  const masterTensor = createFromArray(rt, data, shape, 'f32');
+  return {
+    id: nextId(),
+    tensor,
+    masterTensor,
     requiresGrad: true,
     creator: null,
     parents: [],

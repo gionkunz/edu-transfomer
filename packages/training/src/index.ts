@@ -10,14 +10,14 @@ export {
   AdamW,
 } from './adamw';
 export type { AdamWHyperparams, AdamWOptions } from './adamw';
-export type { SaveGptCheckpointOptions } from './checkpoint';
+export type { SaveGptCheckpointOptions, LoadGptModelFromCheckpointOptions } from './checkpoint';
 export {
   hydrateGptModelWeights,
   loadGptCheckpointTensors,
   loadGptModelFromCheckpoint,
   saveGptCheckpoint,
 } from './checkpoint';
-export { createLmBatch } from './lm-batch';
+export { createLmBatch, assertCorpusTokenIdsInVocab } from './lm-batch';
 export { getCosineLr, type CosineLrSchedule } from './scheduler';
 export {
   registerModelParameters,

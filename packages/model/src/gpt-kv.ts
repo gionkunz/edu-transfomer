@@ -11,10 +11,11 @@ import {
   type Variable,
 } from '@llm-transformer-diy/autograd';
 import {
-  copyF32Elems,
+  copyContiguousElems,
   createIndices,
   createZeros,
   destroy,
+  floatDtypeOf,
   view2dRowPrefix,
   type Tensor,
   type TensorRuntime,
@@ -43,10 +44,11 @@ export type GptKVCache = {
 export function createGptKvCache(rt: TensorRuntime, model: GptModel): GptKVCache {
   const { maxSeqLen, dModel, nHeads } = model.config;
   const dK = dModel / nHeads;
+  const dt = floatDtypeOf(model.tokenEmbed.tensor);
   const layers: GptKVLayerCache[] = model.blocks.map((blk) => ({
     heads: blk.wq.map(() => ({
-      k: createZeros(rt, [maxSeqLen, dK]),
-      v: createZeros(rt, [maxSeqLen, dK]),
+      k: createZeros(rt, [maxSeqLen, dK], dt),
+      v: createZeros(rt, [maxSeqLen, dK], dt),
     })),
   }));
   return { layers, seqLen: 0 };
@@ -94,8 +96,8 @@ function mhaForwardPrefill(
     if (!slot) {
       throw new Error('mhaForwardPrefill: cache slot missing');
     }
-    copyF32Elems(rt, k.tensor, 0, slot.k, 0, elemCount);
-    copyF32Elems(rt, vMat.tensor, 0, slot.v, 0, elemCount);
+    copyContiguousElems(rt, k.tensor, 0, slot.k, 0, elemCount);
+    copyContiguousElems(rt, vMat.tensor, 0, slot.v, 0, elemCount);
     const kt = transpose(rt, k);
     let scores = matmul(rt, q, kt);
     scores = scale(rt, scores, invSqrtDk);
@@ -143,8 +145,8 @@ function mhaForwardDecode(
     if (!slot) {
       throw new Error('mhaForwardDecode: cache slot missing');
     }
-    copyF32Elems(rt, kNew.tensor, 0, slot.k, rowWrite * dK, dK);
-    copyF32Elems(rt, vNew.tensor, 0, slot.v, rowWrite * dK, dK);
+    copyContiguousElems(rt, kNew.tensor, 0, slot.k, rowWrite * dK, dK);
+    copyContiguousElems(rt, vNew.tensor, 0, slot.v, rowWrite * dK, dK);
     const kPrefix = view2dRowPrefix(slot.k, prefixRows);
     const kt = transpose(rt, createLeafVariable(kPrefix, false));
     let scores = matmul(rt, q, kt);
@@ -258,7 +260,7 @@ export function forwardGptPrefill(
     embedding(rt, model.posEmbed, posVar),
   );
 
-  const maskTensor = buildCausalBiasTensor(rt, T);
+  const maskTensor = buildCausalBiasTensor(rt, T, -1e4, floatDtypeOf(model.tokenEmbed.tensor));
   const maskVar = createLeafVariable(maskTensor, false);
   const dK = model.config.dModel / model.config.nHeads;
   const invSqrtDk = 1 / Math.sqrt(dK);

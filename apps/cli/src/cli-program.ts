@@ -6,7 +6,42 @@ import { runGenerateCommand } from './cmd/generate';
 import { runInspect } from './cmd/inspect';
 import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
 import { runTokenizerTrain } from './cmd/tokenizer-train';
-import { runTrainCommand } from './cmd/train';
+import {
+  runTrainCommand,
+  TRAIN_DEFAULT_LR_MAX,
+  TRAIN_DEFAULT_LR_MIN,
+  TRAIN_DEFAULT_MAX_GRAD_NORM,
+  TRAIN_DEFAULT_WEIGHT_DECAY,
+} from './cmd/train';
+import { parseOptionalComputeDtype } from './compute-dtype';
+
+function parseTrainFiniteOption(raw: unknown, flag: string): number {
+  const v = Number(raw);
+  if (!Number.isFinite(v)) {
+    throw new Error(`llm train: ${flag} must be a finite number (got ${String(raw)})`);
+  }
+  return v;
+}
+
+/** Accepts finite norm, **0** (no clip), or **`Infinity`** (literal string `Infinity`). */
+function parseMaxGradNormOption(raw: unknown): number {
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'infinity') {
+    return Number.POSITIVE_INFINITY;
+  }
+  const v = Number(raw);
+  if (v === 0) {
+    return 0;
+  }
+  if (v === Number.POSITIVE_INFINITY) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (!Number.isFinite(v) || v < 0) {
+    throw new Error(
+      `llm train: --max-grad-norm must be ≥ 0, Infinity, or 0 to disable (got ${String(raw)})`,
+    );
+  }
+  return v;
+}
 
 function collectStrings(value: string, prev: string[]): string[] {
   return prev.concat(value);
@@ -88,6 +123,27 @@ export function createCliProgram(): Command {
       're-encode and overwrite token cache (requires --token-cache)',
       false,
     )
+    .option(
+      '--lr-max <x>',
+      `peak learning rate after warmup (cosine schedule; default ${String(TRAIN_DEFAULT_LR_MAX)})`,
+      String(TRAIN_DEFAULT_LR_MAX),
+    )
+    .option(
+      '--lr-min <x>',
+      `cosine schedule floor LR (default ${String(TRAIN_DEFAULT_LR_MIN)})`,
+      String(TRAIN_DEFAULT_LR_MIN),
+    )
+    .option(
+      '--weight-decay <x>',
+      `AdamW decoupled weight decay λ (default ${String(TRAIN_DEFAULT_WEIGHT_DECAY)})`,
+      String(TRAIN_DEFAULT_WEIGHT_DECAY),
+    )
+    .option(
+      '--max-grad-norm <x>',
+      `global L2 grad clip (0 or Infinity = off; default ${String(TRAIN_DEFAULT_MAX_GRAD_NORM)})`,
+      String(TRAIN_DEFAULT_MAX_GRAD_NORM),
+    )
+    .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16 | fp16', 'f32')
     .action(async (opts) => {
       const tokenCacheRaw = opts.tokenCache as string | undefined;
       const tokenCacheBase =
@@ -98,6 +154,7 @@ export function createCliProgram(): Command {
       if (rebuildTokenCache && !tokenCacheBase) {
         throw new Error('train: --rebuild-token-cache requires --token-cache <base>');
       }
+      const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'train');
       await runTrainCommand({
         dataGlobs: opts.data as string[],
         outDir: opts.out as string,
@@ -105,6 +162,11 @@ export function createCliProgram(): Command {
         configArg: opts.config as string,
         steps: Number(opts.steps),
         seqLen: Number(opts.seqLen),
+        lrMax: parseTrainFiniteOption(opts.lrMax, '--lr-max'),
+        lrMin: parseTrainFiniteOption(opts.lrMin, '--lr-min'),
+        weightDecay: parseTrainFiniteOption(opts.weightDecay, '--weight-decay'),
+        maxGradNorm: parseMaxGradNormOption(opts.maxGradNorm),
+        computeDtype,
         ...(tokenCacheBase !== undefined ? { tokenCacheBase } : {}),
         ...(rebuildTokenCache ? { rebuildTokenCache: true } : {}),
       });
@@ -119,6 +181,11 @@ export function createCliProgram(): Command {
     .option('--max-new-tokens <n>', 'tokens to sample after prompt', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
+    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16 | fp16', 'f32')
+    .option(
+      '--allow-dtype-upcast',
+      'allow checkpoints whose manifest dtypes differ from --dtype (16-bit → f32; OpenSpec §8)',
+    )
     .option(
       '--repeat-penalty <p>',
       'down-weight logits for recent tokens (GPT-2 style; 1 = off)',
@@ -134,6 +201,7 @@ export function createCliProgram(): Command {
       if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
         throw new Error('generate: --repeat-window must be a positive integer');
       }
+      const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'generate');
       await runGenerateCommand({
         modelArg: opts.model as string,
         tokenizerPath: opts.tokenizer as string,
@@ -141,6 +209,8 @@ export function createCliProgram(): Command {
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
+        computeDtype,
+        ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
         ...(repeatPenalty > 1
           ? { repetitionPenalty: repeatPenalty, repetitionWindow: repeatWindow }
           : {}),
@@ -155,6 +225,11 @@ export function createCliProgram(): Command {
     .option('--max-new-tokens <n>', 'tokens to sample per assistant reply', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
+    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16 | fp16', 'f32')
+    .option(
+      '--allow-dtype-upcast',
+      'allow checkpoints whose manifest dtypes differ from --dtype (16-bit → f32; OpenSpec §8)',
+    )
     .option(
       '--repeat-penalty <p>',
       'down-weight logits for recent tokens (GPT-2 style; 1 = off)',
@@ -170,12 +245,15 @@ export function createCliProgram(): Command {
       if (!Number.isInteger(repeatWindow) || repeatWindow < 1) {
         throw new Error('chat: --repeat-window must be a positive integer');
       }
+      const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'chat');
       await runChatCommand({
         modelArg: opts.model as string,
         tokenizerPath: opts.tokenizer as string,
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
+        computeDtype,
+        ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
         ...(repeatPenalty > 1
           ? { repetitionPenalty: repeatPenalty, repetitionWindow: repeatWindow }
           : {}),

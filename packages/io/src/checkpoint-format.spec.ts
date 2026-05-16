@@ -97,6 +97,47 @@ describe('packPackedCheckpoint / unpackPackedCheckpoint', () => {
       }),
     ).toThrow(/dtype/);
   });
+
+  it('defaults missing per-tensor dtype to f32 (legacy manifests)', () => {
+    const sidecar = validatePackedCheckpointSidecar({
+      config: {},
+      tensors: { w: { offset: 0, shape: [2] } },
+    });
+    expect(sidecar.tensors.w?.dtype).toBe('f32');
+  });
+
+  it('packPackedCheckpoint is deterministic for bf16 (bit-identical bins)', () => {
+    const tensors = {
+      w: {
+        shape: [4] as const,
+        data: Float32Array.from([1, 2, -0.5, 0.25]),
+        dtype: 'bf16' as const,
+      },
+    };
+    const { bin: a } = packPackedCheckpoint({ config: {}, tensors });
+    const { bin: b } = packPackedCheckpoint({ config: {}, tensors });
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+    expect(a.byteLength % 4).toBe(0);
+  });
+
+  it('round-trips bf16 then f32 in one blob with tail padding between regions', () => {
+    const { bin, sidecar } = packPackedCheckpoint({
+      config: {},
+      tensors: {
+        h: {
+          shape: [3],
+          data: Float32Array.from([1, 2, 3]),
+          dtype: 'bf16',
+        },
+        f: { shape: [1], data: Float32Array.from([42]) },
+      },
+    });
+    expect(sidecar.tensors.f?.offset).toBe(0);
+    expect(sidecar.tensors.h?.offset).toBe(4);
+    const back = unpackPackedCheckpoint(bin, sidecar);
+    expect(Array.from(back['h']!)).toEqual([1, 2, 3]);
+    expect(Array.from(back['f']!)).toEqual([42]);
+  });
 });
 
 describe('readPackedCheckpointFiles / writePackedCheckpointFiles', () => {

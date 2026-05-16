@@ -1,6 +1,7 @@
 import {
   createParameter,
   createParameterRegistry,
+  createParameterWithMaster,
   registerParameter,
 } from '@llm-transformer-diy/autograd';
 import {
@@ -8,8 +9,15 @@ import {
   KernelRegistry,
   probeWebGpu,
   registerCoreKernels,
+  supportsDtype,
 } from '@llm-transformer-diy/gpu';
-import { createFromArray, destroy, toArray, type TensorRuntime } from '@llm-transformer-diy/tensor';
+import {
+  cast,
+  createFromArray,
+  destroy,
+  toArray,
+  type TensorRuntime,
+} from '@llm-transformer-diy/tensor';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { AdamW } from './adamw';
@@ -46,6 +54,79 @@ describe.skipIf(!webgpuAvailable)('AdamW', () => {
     const out = await toArray(rt, w.tensor);
     expect(out[0]).not.toBeCloseTo(w0[0], 6);
     destroy(w.tensor);
+    opt.dispose();
+  });
+
+  it('bf16 compute + f32 master: moments stay f32; compute weights match cast-down master after step', async () => {
+    if (!supportsDtype(rt.ctx, 'bf16')) {
+      return;
+    }
+    const reg = createParameterRegistry();
+    const w0 = new Float32Array([1, 0, -1]);
+    const w = createParameterWithMaster(rt, w0, [3], 'bf16');
+    registerParameter(reg, w);
+    w.grad = createFromArray(rt, new Float32Array([1, 1, 1]), [3], 'bf16');
+
+    const opt = new AdamW(rt, reg, {
+      lr: 0.05,
+      beta1: 0.9,
+      beta2: 0.99,
+      eps: 1e-8,
+      weightDecay: 0,
+    });
+    opt.step();
+    expect(w.grad).toBeNull();
+    const moments = opt as unknown as { m: Map<typeof w, { dtype: string }> };
+    expect(moments.m.get(w)?.dtype).toBe('f32');
+
+    const castRef = cast(rt, w.masterTensor!, 'bf16');
+    try {
+      const got = await toArray(rt, w.tensor);
+      const exp = await toArray(rt, castRef);
+      for (let i = 0; i < 3; i++) {
+        expect(got[i]).toBeCloseTo(exp[i] ?? 0, 3);
+      }
+    } finally {
+      destroy(castRef);
+    }
+
+    destroy(w.tensor);
+    destroy(w.masterTensor!);
+    opt.dispose();
+  });
+
+  it('fp16 compute + f32 master: same invariants when fp16 is supported', async () => {
+    if (!supportsDtype(rt.ctx, 'fp16')) {
+      return;
+    }
+    const reg = createParameterRegistry();
+    const w0 = new Float32Array([1, 0, -1]);
+    const w = createParameterWithMaster(rt, w0, [3], 'fp16');
+    registerParameter(reg, w);
+    w.grad = createFromArray(rt, new Float32Array([1, 1, 1]), [3], 'fp16');
+
+    const opt = new AdamW(rt, reg, {
+      lr: 0.05,
+      beta1: 0.9,
+      beta2: 0.99,
+      eps: 1e-8,
+      weightDecay: 0,
+    });
+    opt.step();
+    const moments = opt as unknown as { m: Map<typeof w, { dtype: string }> };
+    expect(moments.m.get(w)?.dtype).toBe('f32');
+    const castRef = cast(rt, w.masterTensor!, 'fp16');
+    try {
+      const got = await toArray(rt, w.tensor);
+      const exp = await toArray(rt, castRef);
+      for (let i = 0; i < 3; i++) {
+        expect(got[i]).toBeCloseTo(exp[i] ?? 0, 2);
+      }
+    } finally {
+      destroy(castRef);
+    }
+    destroy(w.tensor);
+    destroy(w.masterTensor!);
     opt.dispose();
   });
 });

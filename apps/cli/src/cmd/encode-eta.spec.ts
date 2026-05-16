@@ -20,11 +20,11 @@ describe('encode-eta', () => {
     expect(pessimisticMergeRemaining(100, 150)).toBe(0);
   });
 
-  it('mergeProgressPct caps', () => {
-    expect(mergeProgressPct(100, 0)).toBe(0);
-    expect(mergeProgressPct(100, 49)).toBeCloseTo((100 * 49) / 99, 10);
-    expect(mergeProgressPct(100, 99)).toBe(100);
-    expect(mergeProgressPct(100, 500)).toBe(100);
+  it('mergeProgressPct follows token shrinkage vs N−1', () => {
+    expect(mergeProgressPct(100, 100)).toBe(0);
+    expect(mergeProgressPct(100, 51)).toBeCloseTo((100 * 49) / 99, 10);
+    expect(mergeProgressPct(100, 1)).toBe(100);
+    expect(mergeProgressPct(100, 150)).toBe(0);
   });
 
   it('pessimisticEtaFromRate', () => {

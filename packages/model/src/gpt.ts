@@ -2,6 +2,7 @@ import {
   add,
   createLeafVariable,
   createParameter,
+  createParameterWithMaster,
   embedding,
   gelu,
   matmul,
@@ -15,6 +16,8 @@ import {
 import {
   createFromArray,
   createIndices,
+  floatDtypeOf,
+  type FloatDType,
   type Tensor,
   type TensorRuntime,
 } from '@llm-transformer-diy/tensor';
@@ -33,6 +36,21 @@ export type TransformerBlockParams = {
   readonly w2: Parameter;
 };
 
+export type CreateGptModelOptions = {
+  /**
+   * Storage dtype for every trainable **`Parameter`** and the constant **`headExpand`**
+   * gather matrices. Defaults to **`f32`** (legacy behavior).
+   */
+  readonly dtype?: FloatDType;
+};
+
+/** Trainable weight with stable checkpoint **name** and its compute **dtype**. */
+export type GptParameterInfo = {
+  readonly name: string;
+  readonly parameter: Parameter;
+  readonly dtype: FloatDType;
+};
+
 export type GptModel = {
   readonly config: GptConfig;
   readonly tokenEmbed: Parameter;
@@ -43,6 +61,18 @@ export type GptModel = {
   /** Constant `{@link Variable}`s: per-head `[d_k, d_model]` gather matrices (see design notes). */
   readonly headExpand: readonly Variable[];
 };
+
+function paramFromInit(
+  rt: TensorRuntime,
+  data: Float32Array,
+  shape: readonly number[],
+  dtype: FloatDType,
+): Parameter {
+  if (dtype === 'f32') {
+    return createParameter(createFromArray(rt, data, shape, dtype));
+  }
+  return createParameterWithMaster(rt, data, shape, dtype);
+}
 
 function smallInitRows(rows: number, cols: number, scale: number): Float32Array {
   const a = new Float32Array(rows * cols);
@@ -62,55 +92,65 @@ function headExpandMatrix(h: number, _nHeads: number, dK: number, dModel: number
 }
 
 /** Strict upper triangle = **`maskValue`**, else **0** (for causal attention bias). */
-export function buildCausalBiasTensor(rt: TensorRuntime, seqLen: number, maskValue = -1e4): Tensor {
+export function buildCausalBiasTensor(
+  rt: TensorRuntime,
+  seqLen: number,
+  maskValue = -1e4,
+  dtype: FloatDType = 'f32',
+): Tensor {
   const data = new Float32Array(seqLen * seqLen);
   for (let i = 0; i < seqLen; i++) {
     for (let j = 0; j < seqLen; j++) {
       data[i * seqLen + j] = j > i ? maskValue : 0;
     }
   }
-  return createFromArray(rt, data, [seqLen, seqLen]);
+  return createFromArray(rt, data, [seqLen, seqLen], dtype);
 }
 
-export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
+export function createGptModel(
+  rt: TensorRuntime,
+  config: GptConfig,
+  options?: CreateGptModelOptions,
+): GptModel {
   assertValidGptConfig(config);
+  const dtype = options?.dtype ?? 'f32';
   const { vocabSize, maxSeqLen, dModel, nHeads, dFf, nLayers } = config;
   const dK = dModel / nHeads;
 
-  const tokenEmbed = createParameter(
-    createFromArray(rt, smallInitRows(vocabSize, dModel, 1.0), [vocabSize, dModel]),
+  const tokenEmbed = paramFromInit(
+    rt,
+    smallInitRows(vocabSize, dModel, 1.0),
+    [vocabSize, dModel],
+    dtype,
   );
-  const posEmbed = createParameter(
-    createFromArray(rt, smallInitRows(maxSeqLen, dModel, 0.5), [maxSeqLen, dModel]),
+  const posEmbed = paramFromInit(
+    rt,
+    smallInitRows(maxSeqLen, dModel, 0.5),
+    [maxSeqLen, dModel],
+    dtype,
   );
 
   const headExpand: Variable[] = [];
   for (let h = 0; h < nHeads; h++) {
-    const t = createFromArray(rt, headExpandMatrix(h, nHeads, dK, dModel), [dK, dModel]);
+    const t = createFromArray(rt, headExpandMatrix(h, nHeads, dK, dModel), [dK, dModel], dtype);
     headExpand.push(createLeafVariable(t, false));
   }
 
   const blocks: TransformerBlockParams[] = [];
   for (let l = 0; l < nLayers; l++) {
-    const attnNormGamma = createParameter(
-      createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
-    );
-    const ffnNormGamma = createParameter(
-      createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
-    );
+    const attnNormGamma = paramFromInit(rt, new Float32Array(dModel).fill(1), [dModel], dtype);
+    const ffnNormGamma = paramFromInit(rt, new Float32Array(dModel).fill(1), [dModel], dtype);
     const wq: Parameter[] = [];
     const wk: Parameter[] = [];
     const wv: Parameter[] = [];
     for (let h = 0; h < nHeads; h++) {
-      wq.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
-      wk.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
-      wv.push(createParameter(createFromArray(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK])));
+      wq.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
+      wk.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
+      wv.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
     }
-    const wo = createParameter(
-      createFromArray(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel]),
-    );
-    const w1 = createParameter(createFromArray(rt, smallInitRows(dModel, dFf, 1.0), [dModel, dFf]));
-    const w2 = createParameter(createFromArray(rt, smallInitRows(dFf, dModel, 1.0), [dFf, dModel]));
+    const wo = paramFromInit(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel], dtype);
+    const w1 = paramFromInit(rt, smallInitRows(dModel, dFf, 1.0), [dModel, dFf], dtype);
+    const w2 = paramFromInit(rt, smallInitRows(dFf, dModel, 1.0), [dFf, dModel], dtype);
     blocks.push({
       attnNormGamma,
       ffnNormGamma,
@@ -123,11 +163,9 @@ export function createGptModel(rt: TensorRuntime, config: GptConfig): GptModel {
     });
   }
 
-  const finalNormGamma = createParameter(
-    createFromArray(rt, new Float32Array(dModel).fill(1), [dModel]),
-  );
+  const finalNormGamma = paramFromInit(rt, new Float32Array(dModel).fill(1), [dModel], dtype);
   const lmHeadData = smallInitRows(dModel, vocabSize, 1 / Math.sqrt(dModel));
-  const lmHead = createParameter(createFromArray(rt, lmHeadData, [dModel, vocabSize]));
+  const lmHead = paramFromInit(rt, lmHeadData, [dModel, vocabSize], dtype);
 
   return {
     config,
@@ -230,7 +268,7 @@ export function forwardGpt(rt: TensorRuntime, model: GptModel, tokenIds: Tensor)
     embedding(rt, model.posEmbed, posVar),
   );
 
-  const maskTensor = buildCausalBiasTensor(rt, T);
+  const maskTensor = buildCausalBiasTensor(rt, T, -1e4, floatDtypeOf(model.tokenEmbed.tensor));
   const maskVar = createLeafVariable(maskTensor, false);
   const dK = model.config.dModel / model.config.nHeads;
   const invSqrtDk = 1 / Math.sqrt(dK);
@@ -243,7 +281,7 @@ export function forwardGpt(rt: TensorRuntime, model: GptModel, tokenIds: Tensor)
   return matmul(rt, h, model.lmHead);
 }
 
-/** All trainable parameters for **`registerParameter`** / optimizers. */
+/** All trainable parameters for **`registerParameter`** / optimizers, with dtypes on **`tensor`**. */
 export function collectGptParameters(model: GptModel): Parameter[] {
   const out: Parameter[] = [model.tokenEmbed, model.posEmbed, model.finalNormGamma, model.lmHead];
   for (const b of model.blocks) {
@@ -274,4 +312,28 @@ export function gptParameterTensorNames(model: GptModel): string[] {
     L += 1;
   }
   return names;
+}
+
+/**
+ * Ordered **(name, parameter, dtype)** triples for checkpoints / telemetry (**`headExpand`** excluded).
+ * **`dtype`** matches **`parameter.tensor.dtype`** (always a float dtype).
+ */
+export function listGptParameterInfos(model: GptModel): readonly GptParameterInfo[] {
+  const names = gptParameterTensorNames(model);
+  const params = collectGptParameters(model);
+  if (names.length !== params.length) {
+    throw new Error(
+      `listGptParameterInfos: name/param mismatch (${String(names.length)} vs ${String(params.length)})`,
+    );
+  }
+  const out: GptParameterInfo[] = [];
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    const parameter = params[i];
+    if (name === undefined || parameter === undefined) {
+      throw new Error('listGptParameterInfos: internal index error');
+    }
+    out.push({ name, parameter, dtype: floatDtypeOf(parameter.tensor) });
+  }
+  return out;
 }

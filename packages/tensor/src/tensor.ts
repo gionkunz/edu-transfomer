@@ -1,27 +1,70 @@
 import {
+  bf16Fp16StorageBufferByteLength,
+  createBf16StorageBuffer,
   createFloat32StorageBuffer,
   createUint32StorageBuffer,
+  dispatchCastBf16ToF32,
+  dispatchCastFp16ToF32,
+  dispatchCastF32ToBf16,
+  dispatchCastF32ToFp16,
   float32ByteLength,
+  packBf16FromFloat32,
+  packFp16FromFloat32,
+  readBf16Buffer,
   readFloat32Buffer,
+  readFp16Buffer,
   readUint32Buffer,
   uint32ByteLength,
+  writeBf16Buffer,
   writeFloat32Buffer,
+  writeFp16Buffer,
   writeUint32Buffer,
+  unpackBf16ToFloat32,
+  unpackFp16ToFloat32,
 } from '@llm-transformer-diy/gpu';
 
-import { assertDtype, computeContiguousStrides, productOfShape } from './shape';
-import type { Tensor, TensorRuntime } from './types';
+import {
+  assertDtype,
+  assertSameDtype,
+  assertSameShape,
+  computeContiguousStrides,
+  isContiguous,
+  productOfShape,
+  type FloatDType,
+} from './shape';
+import type { DType, Tensor, TensorRuntime } from './types';
+
+/** Byte length of a contiguous GPU buffer backing **`length`** scalars at **`dtype`**. */
+export function gpuStorageByteLength(length: number, dtype: DType): number {
+  switch (dtype) {
+    case 'f32':
+      return float32ByteLength(length);
+    case 'u32':
+      return uint32ByteLength(length);
+    case 'bf16':
+    case 'fp16':
+      return bf16Fp16StorageBufferByteLength(length);
+    default: {
+      const _e: never = dtype;
+      return _e;
+    }
+  }
+}
 
 /**
  * Internal helper: build a contiguous {@link Tensor} record around an existing
  * GPU buffer. Not exported from the package index; ops and constructors share
  * this so the `Tensor` shape stays consistent.
  */
-export function makeContiguousTensor(shape: readonly number[], buffer: GPUBuffer): Tensor {
+export function makeContiguousTensor(
+  shape: readonly number[],
+  buffer: GPUBuffer,
+  dtype: FloatDType = 'f32',
+): Tensor {
   return {
     shape,
     strides: computeContiguousStrides(shape),
-    dtype: 'f32',
+    dtype,
     device: 'gpu',
     buffer,
     length: productOfShape(shape),
@@ -41,11 +84,25 @@ export function makeIndicesTensor(shape: readonly number[], buffer: GPUBuffer): 
 }
 
 /**
- * Allocates a fresh f32 storage buffer (uninitialized) sized for `length` elements.
- * Internal helper — exported for `ops.ts` / autograd layer; not re-exported via index.
+ * Allocates a fresh storage buffer (uninitialized) for **`length`** scalars at **`dtype`**.
+ * Internal helper — exported for `ops.ts` / autograd; not re-exported via index.
  */
-export function allocateContiguousBuffer(rt: TensorRuntime, length: number): GPUBuffer {
-  return createFloat32StorageBuffer(rt.ctx.device, length);
+export function allocateContiguousBuffer(
+  rt: TensorRuntime,
+  length: number,
+  dtype: FloatDType,
+): GPUBuffer {
+  switch (dtype) {
+    case 'f32':
+      return createFloat32StorageBuffer(rt.ctx.device, length);
+    case 'bf16':
+    case 'fp16':
+      return createBf16StorageBuffer(rt.ctx.device, length);
+    default: {
+      const _e: never = dtype;
+      return _e;
+    }
+  }
 }
 
 /**
@@ -53,22 +110,27 @@ export function allocateContiguousBuffer(rt: TensorRuntime, length: number): GPU
  * return the immutable record. Caller owns the buffer and must call
  * {@link destroy} when done.
  */
-export function createZeros(rt: TensorRuntime, shape: readonly number[]): Tensor {
+export function createZeros(
+  rt: TensorRuntime,
+  shape: readonly number[],
+  dtype: FloatDType = 'f32',
+): Tensor {
   const length = productOfShape(shape);
-  const buffer = allocateContiguousBuffer(rt, length);
-  // Per WebGPU spec, buffer contents are undefined post-creation; zero-fill explicitly.
-  writeFloat32Buffer(rt.ctx.queue, buffer, new Float32Array(length));
-  return makeContiguousTensor(shape, buffer);
+  const buffer = allocateContiguousBuffer(rt, length, dtype);
+  const zeroBytes = new Uint8Array(gpuStorageByteLength(length, dtype));
+  rt.ctx.queue.writeBuffer(buffer, 0, zeroBytes);
+  return makeContiguousTensor(shape, buffer, dtype);
 }
 
 /**
- * Allocate a tensor of the given shape and upload `data` into it. Throws when
- * `data.length` does not match the product of `shape`.
+ * Allocate a tensor of the given shape and upload **`data`** after rounding to **`dtype`**.
+ * Throws when `data.length` does not match the product of `shape`.
  */
 export function createFromArray(
   rt: TensorRuntime,
   data: Float32Array,
   shape: readonly number[],
+  dtype: FloatDType = 'f32',
 ): Tensor {
   const length = productOfShape(shape);
   if (data.length !== length) {
@@ -77,9 +139,15 @@ export function createFromArray(
         `productOfShape([${shape.join(',')}])=${String(length)}`,
     );
   }
-  const buffer = allocateContiguousBuffer(rt, length);
-  writeFloat32Buffer(rt.ctx.queue, buffer, data);
-  return makeContiguousTensor(shape, buffer);
+  const buffer = allocateContiguousBuffer(rt, length, dtype);
+  if (dtype === 'f32') {
+    writeFloat32Buffer(rt.ctx.queue, buffer, data);
+  } else if (dtype === 'bf16') {
+    writeBf16Buffer(rt.ctx.queue, buffer, packBf16FromFloat32(data));
+  } else {
+    writeFp16Buffer(rt.ctx.queue, buffer, packFp16FromFloat32(data));
+  }
+  return makeContiguousTensor(shape, buffer, dtype);
 }
 
 /**
@@ -111,8 +179,136 @@ export function createIndices(
  * in the package. Use sparingly in hot paths.
  */
 export async function toArray(rt: TensorRuntime, t: Tensor): Promise<Float32Array> {
-  assertDtype(t, 'f32');
-  return readFloat32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, float32ByteLength(t.length));
+  if (t.dtype === 'u32') {
+    throw new Error("toArray: use readIndices for dtype 'u32'");
+  }
+  if (t.dtype === 'f32') {
+    return readFloat32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, float32ByteLength(t.length));
+  }
+  if (t.dtype === 'bf16') {
+    return unpackBf16ToFloat32(
+      await readBf16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length),
+    );
+  }
+  return unpackFp16ToFloat32(await readFp16Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, t.length));
+}
+
+/**
+ * Copy **`t`** to **`dtype`** (new buffer). Same dtype performs a full GPU buffer copy
+ * (non-aliasing). **`u32`** is not supported.
+ *
+ * **`bf16` ↔ `fp16`** uses an **`f32`** temporary on the device (two dispatches).
+ */
+export function cast(rt: TensorRuntime, t: Tensor, dtype: FloatDType): Tensor {
+  if (t.dtype === 'u32') {
+    throw new Error("cast: dtype 'u32' is not supported");
+  }
+  const n = t.length;
+  if (t.dtype === dtype) {
+    const buf = allocateContiguousBuffer(rt, n, dtype);
+    const bytes = gpuStorageByteLength(n, dtype);
+    const enc = rt.ctx.device.createCommandEncoder();
+    enc.copyBufferToBuffer(t.buffer, 0, buf, 0, bytes);
+    rt.ctx.queue.submit([enc.finish()]);
+    return makeContiguousTensor(t.shape, buf, dtype);
+  }
+
+  if (t.dtype === 'bf16' && dtype === 'fp16') {
+    const f32Buf = allocateContiguousBuffer(rt, n, 'f32');
+    dispatchCastBf16ToF32(rt.ctx, rt.registry, t.buffer, f32Buf, n);
+    const out = allocateContiguousBuffer(rt, n, 'fp16');
+    dispatchCastF32ToFp16(rt.ctx, rt.registry, f32Buf, out, n);
+    f32Buf.destroy();
+    return makeContiguousTensor(t.shape, out, 'fp16');
+  }
+  if (t.dtype === 'fp16' && dtype === 'bf16') {
+    const f32Buf = allocateContiguousBuffer(rt, n, 'f32');
+    dispatchCastFp16ToF32(rt.ctx, rt.registry, t.buffer, f32Buf, n);
+    const out = allocateContiguousBuffer(rt, n, 'bf16');
+    dispatchCastF32ToBf16(rt.ctx, rt.registry, f32Buf, out, n);
+    f32Buf.destroy();
+    return makeContiguousTensor(t.shape, out, 'bf16');
+  }
+
+  const out = allocateContiguousBuffer(rt, n, dtype);
+  if (t.dtype === 'f32' && dtype === 'bf16') {
+    dispatchCastF32ToBf16(rt.ctx, rt.registry, t.buffer, out, n);
+  } else if (t.dtype === 'bf16' && dtype === 'f32') {
+    dispatchCastBf16ToF32(rt.ctx, rt.registry, t.buffer, out, n);
+  } else if (t.dtype === 'f32' && dtype === 'fp16') {
+    dispatchCastF32ToFp16(rt.ctx, rt.registry, t.buffer, out, n);
+  } else if (t.dtype === 'fp16' && dtype === 'f32') {
+    dispatchCastFp16ToF32(rt.ctx, rt.registry, t.buffer, out, n);
+  } else {
+    throw new Error(`cast: unsupported conversion ${t.dtype} → ${dtype}`);
+  }
+  return makeContiguousTensor(t.shape, out, dtype);
+}
+
+/**
+ * Full-buffer GPU copy between contiguous tensors with identical **shape** and **dtype**.
+ * Both buffers must support **COPY_SRC** / **COPY_DST** (standard storage allocation).
+ */
+export function copyContiguousTensorBytes(rt: TensorRuntime, src: Tensor, dst: Tensor): void {
+  assertSameShape(src, dst);
+  assertSameDtype(src, dst);
+  if (!isContiguous(src) || !isContiguous(dst)) {
+    throw new Error('copyContiguousTensorBytes: non-contiguous tensors not supported');
+  }
+  const bytes = gpuStorageByteLength(dst.length, dst.dtype);
+  const enc = rt.ctx.device.createCommandEncoder();
+  enc.copyBufferToBuffer(src.buffer, 0, dst.buffer, 0, bytes);
+  rt.ctx.queue.submit([enc.finish()]);
+}
+
+/**
+ * GPU copy of **`elemCount`** contiguous scalars (**same dtype**). Offsets are scalar indices.
+ */
+export function copyContiguousElems(
+  rt: TensorRuntime,
+  src: Tensor,
+  srcElemOffset: number,
+  dst: Tensor,
+  dstElemOffset: number,
+  elemCount: number,
+): void {
+  assertSameDtype(src, dst);
+  if (!isContiguous(src) || !isContiguous(dst)) {
+    throw new Error('copyContiguousElems: non-contiguous tensors not supported');
+  }
+  if (!Number.isInteger(elemCount) || elemCount < 0) {
+    throw new Error(
+      `copyContiguousElems: elemCount must be a non-negative integer (got ${String(elemCount)})`,
+    );
+  }
+  if (
+    !Number.isInteger(srcElemOffset) ||
+    !Number.isInteger(dstElemOffset) ||
+    srcElemOffset < 0 ||
+    dstElemOffset < 0
+  ) {
+    throw new Error('copyContiguousElems: offsets must be non-negative integers');
+  }
+  if (srcElemOffset + elemCount > src.length || dstElemOffset + elemCount > dst.length) {
+    throw new Error(
+      `copyContiguousElems: range out of bounds (src ${String(srcElemOffset)}+${String(elemCount)} > ${String(
+        src.length,
+      )}, dst ${String(dstElemOffset)}+${String(elemCount)} > ${String(dst.length)})`,
+    );
+  }
+  if (elemCount === 0) {
+    return;
+  }
+  const bps = gpuStorageByteLength(1, src.dtype);
+  const enc = rt.ctx.device.createCommandEncoder();
+  enc.copyBufferToBuffer(
+    src.buffer,
+    srcElemOffset * bps,
+    dst.buffer,
+    dstElemOffset * bps,
+    elemCount * bps,
+  );
+  rt.ctx.queue.submit([enc.finish()]);
 }
 
 /**
@@ -122,6 +318,7 @@ export async function readIndices(rt: TensorRuntime, t: Tensor): Promise<Uint32A
   assertDtype(t, 'u32');
   return readUint32Buffer(rt.ctx.device, rt.ctx.queue, t.buffer, uint32ByteLength(t.length));
 }
+
 /**
  * Release the GPU buffer backing this tensor.
  *

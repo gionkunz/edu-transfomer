@@ -34,7 +34,7 @@ export interface EncodeProgressSnapshot {
   readonly mergesPerSec: number | null;
   /** Remaining pessimistic passes ÷ **`mergesPerSec`** when rate is trusted. */
   readonly pessimisticEtaSec: number | null;
-  /** **`0`** in expand; **`0–100`** merge bar vs pessimistic upper bound (may finish sooner). */
+  /** **`0`** in expand; **`0–100`** ≈ share of **`N−1`** token slots merged away (`N` = post-expand length). */
   readonly mergeProgressPct: number;
 }
 
@@ -55,7 +55,14 @@ export interface TrainDashboardSnapshot {
   readonly phase: TrainPipelinePhase;
   readonly detailLine: string;
   readonly startedAtMs: number;
+  /** Wall seconds since **`startedAtMs`** (full run, including setup and paused training time). */
   readonly nowElapsedSec: number;
+  /**
+   * Seconds since the **`training`** phase began, excluding time spent with training paused (**`p`**).
+   * After the step loop completes, this value freezes so checkpoint I/O is not counted.
+   * **`0`** before the training phase; used for the training progress wall clock and ETA.
+   */
+  readonly trainWallActiveSec: number;
   readonly outDirDisplay: string;
   readonly configTag: string;
   readonly archSummary: string | null;
@@ -79,6 +86,11 @@ export interface TrainDashboardSnapshot {
   readonly trainLrDisplay: number;
   readonly tokensPerSecApprox: number;
   readonly recentLosses: readonly number[];
+  /**
+   * When **`true`**, the training loop yields between steps (no **`trainStep`** / batch prep)
+   * so the GPU stays idle until resumed (**`p`** in the TUI).
+   */
+  readonly trainingPaused: boolean;
 }
 
 /** Relative weights (**setup** funnel). Explicitly totals **100** for a clean macro bar. */

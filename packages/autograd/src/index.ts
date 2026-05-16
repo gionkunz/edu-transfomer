@@ -32,10 +32,16 @@ export function __autogradDependsOnTensor(): typeof TENSOR_LAYER_MARKER {
 }
 
 export type { Operation, Parameter, ParameterRegistry, Variable } from './types';
-export { accumulateGrad, createLeafVariable, createParameter } from './variable';
+export {
+  accumulateGrad,
+  createLeafVariable,
+  createParameter,
+  createParameterWithMaster,
+} from './variable';
 export {
   clipGradNorm,
   createParameterRegistry,
+  disposeAutogradGraphExceptParameters,
   parameters,
   registerParameter,
   totalParams,

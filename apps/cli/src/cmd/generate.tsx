@@ -5,8 +5,10 @@ import { createGptKvCache, destroyGptKvCache } from '@llm-transformer-diy/model'
 import { generateAutoregressive } from '@llm-transformer-diy/inference';
 import { loadGptModelFromCheckpoint } from '@llm-transformer-diy/training';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
+import type { FloatDType } from '@llm-transformer-diy/tensor';
 
 import { resolvePackedCheckpointPaths } from '../paths';
+import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
 import { createTensorRuntime } from '../runtime';
 import { primeTuiTerminalCanvas } from '../tui-prime';
 
@@ -46,15 +48,22 @@ export async function runGenerateCommand(opts: {
   readonly topK: number;
   readonly repetitionPenalty?: number;
   readonly repetitionWindow?: number;
+  readonly computeDtype?: FloatDType;
+  readonly allowDtypeUpcast?: boolean;
 }): Promise<void> {
   const rt = await createTensorRuntime();
+  const dtype = opts.computeDtype ?? 'f32';
+  assertRuntimeSupportsComputeDtype(rt.ctx, dtype, 'generate');
   if (rt.ctx.isLikelyCpuSoftwareAdapter) {
     console.error(
       'generate: WebGPU is using a software adapter (e.g. LLVMpipe). Use a discrete GPU runtime for speed; see train TUI note on Vulkan/ICD.',
     );
   }
   const { binPath, jsonPath } = resolvePackedCheckpointPaths(opts.modelArg);
-  const { model, config } = await loadGptModelFromCheckpoint(rt, binPath, jsonPath);
+  const { model, config } = await loadGptModelFromCheckpoint(rt, binPath, jsonPath, {
+    computeDtype: dtype,
+    ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
+  });
 
   const tok = new BPETokenizer();
   await tok.load(opts.tokenizerPath);

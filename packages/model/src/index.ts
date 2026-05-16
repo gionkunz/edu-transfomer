@@ -14,7 +14,10 @@ export {
   createGptModel,
   forwardGpt,
   gptParameterTensorNames,
+  listGptParameterInfos,
+  type CreateGptModelOptions,
   type GptModel,
+  type GptParameterInfo,
   type TransformerBlockParams,
 } from './gpt';
 export {

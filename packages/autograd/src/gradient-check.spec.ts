@@ -7,8 +7,9 @@ import {
   KernelRegistry,
   probeWebGpu,
   registerCoreKernels,
+  supportsDtype,
 } from '@llm-transformer-diy/gpu';
-import { createFromArray, destroy, toArray } from '@llm-transformer-diy/tensor';
+import { createFromArray, destroy, toArray, type FloatDType } from '@llm-transformer-diy/tensor';
 import type { Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,12 +49,13 @@ async function runComposedGraph(
   bData: Float32Array,
   cData: Float32Array,
   computeGrads: boolean,
+  paramDtype: FloatDType = 'f32',
 ): Promise<ForwardResult> {
   const shape = [2, 3] as const;
 
-  const aT = createFromArray(rt, aData, shape);
-  const bT = createFromArray(rt, bData, shape);
-  const cT = createFromArray(rt, cData, shape);
+  const aT = createFromArray(rt, aData, shape, paramDtype);
+  const bT = createFromArray(rt, bData, shape, paramDtype);
+  const cT = createFromArray(rt, cData, shape, paramDtype);
 
   const a = createParameter(aT);
   const b = createParameter(bT);
@@ -113,6 +115,29 @@ function sum(arr: Float32Array): number {
   return total;
 }
 
+function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5): void {
+  expect(actual.length).toBe(expected.length);
+  for (let i = 0; i < actual.length; i++) {
+    expect(actual[i]).toBeCloseTo(expected[i], places);
+  }
+}
+
+/** Central-difference tolerance vs analytic grads for `runComposedGraph` (elementwise). */
+function gradientCheckTolerance(dtype: FloatDType): number {
+  switch (dtype) {
+    case 'f32':
+      return 5e-3;
+    case 'bf16':
+      return 0.2;
+    case 'fp16':
+      return 0.45;
+    default: {
+      const _: never = dtype;
+      return _;
+    }
+  }
+}
+
 describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)', () => {
   let rt: TensorRuntime;
 
@@ -122,6 +147,24 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
     registerCoreKernels(ctx.device, registry);
     rt = { ctx, registry };
   });
+
+  it('composed graph: implicit f32 matches explicit f32 dtype (pre–16-bit backward parity)', async () => {
+    const aBase = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+    const bBase = new Float32Array([0.7, -0.4, 0.2, -0.1, 0.3, -0.5]);
+    const cBase = new Float32Array([1.5, -0.5, 2.0, 0.5, -1.0, 0.25]);
+
+    const implicit = await runComposedGraph(rt, aBase, bBase, cBase, false);
+    const explicit = await runComposedGraph(rt, aBase, bBase, cBase, false, 'f32');
+    expectCloseVec(implicit.output, explicit.output);
+
+    const gImplicit = await runComposedGraph(rt, aBase, bBase, cBase, true);
+    const gExplicit = await runComposedGraph(rt, aBase, bBase, cBase, true, 'f32');
+    expect(gImplicit.grads).not.toBeNull();
+    expect(gExplicit.grads).not.toBeNull();
+    expectCloseVec(gImplicit.grads!.a, gExplicit.grads!.a);
+    expectCloseVec(gImplicit.grads!.b, gExplicit.grads!.b);
+    expectCloseVec(gImplicit.grads!.c, gExplicit.grads!.c);
+  }, 30000);
 
   it('analytic gradients on a tiny composed graph match central-difference numerical gradients', async () => {
     // Small but non-trivial parameter values; chosen to avoid zeros so element-
@@ -134,7 +177,7 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
     expect(grads).not.toBeNull();
 
     const epsilon = 1e-3;
-    const tolerance = 5e-3;
+    const tolerance = gradientCheckTolerance('f32');
 
     type ParamSlot = { readonly name: 'a' | 'b' | 'c'; readonly base: Float32Array };
     const slots: readonly ParamSlot[] = [
@@ -162,6 +205,104 @@ describe.skipIf(!webgpuAvailable)('finite-difference gradient check (GPU-backed)
 
         const fPlus = sum((await runComposedGraph(rt, aP, bP, cP, false)).output);
         const fMinus = sum((await runComposedGraph(rt, aM, bM, cM, false)).output);
+        const numerical = (fPlus - fMinus) / (2 * epsilon);
+
+        expect(
+          Math.abs(analytic[i] - numerical),
+          `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
+        ).toBeLessThanOrEqual(tolerance);
+      }
+    }
+  }, 30000);
+
+  it('same composed graph in bf16: analytic vs numerical grads (skipped if bf16 unsupported)', async () => {
+    if (!supportsDtype(rt.ctx, 'bf16')) {
+      return;
+    }
+    const aBase = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+    const bBase = new Float32Array([0.7, -0.4, 0.2, -0.1, 0.3, -0.5]);
+    const cBase = new Float32Array([1.5, -0.5, 2.0, 0.5, -1.0, 0.25]);
+
+    const { grads } = await runComposedGraph(rt, aBase, bBase, cBase, true, 'bf16');
+    expect(grads).not.toBeNull();
+
+    const epsilon = 0.06;
+    const tolerance = gradientCheckTolerance('bf16');
+
+    type ParamSlot = { readonly name: 'a' | 'b' | 'c'; readonly base: Float32Array };
+    const slots: readonly ParamSlot[] = [
+      { name: 'a', base: aBase },
+      { name: 'b', base: bBase },
+      { name: 'c', base: cBase },
+    ];
+
+    for (const slot of slots) {
+      const analytic = grads![slot.name];
+      for (let i = 0; i < slot.base.length; i++) {
+        const plus = new Float32Array(slot.base);
+        plus[i] = slot.base[i] + epsilon;
+        const minus = new Float32Array(slot.base);
+        minus[i] = slot.base[i] - epsilon;
+
+        const aP = slot.name === 'a' ? plus : aBase;
+        const bP = slot.name === 'b' ? plus : bBase;
+        const cP = slot.name === 'c' ? plus : cBase;
+
+        const aM = slot.name === 'a' ? minus : aBase;
+        const bM = slot.name === 'b' ? minus : bBase;
+        const cM = slot.name === 'c' ? minus : cBase;
+
+        const fPlus = sum((await runComposedGraph(rt, aP, bP, cP, false, 'bf16')).output);
+        const fMinus = sum((await runComposedGraph(rt, aM, bM, cM, false, 'bf16')).output);
+        const numerical = (fPlus - fMinus) / (2 * epsilon);
+
+        expect(
+          Math.abs(analytic[i] - numerical),
+          `${slot.name}[${String(i)}]: analytic=${String(analytic[i])} numerical=${String(numerical)}`,
+        ).toBeLessThanOrEqual(tolerance);
+      }
+    }
+  }, 30000);
+
+  it('same composed graph in fp16: analytic vs numerical grads (skipped if fp16 unsupported)', async () => {
+    if (!supportsDtype(rt.ctx, 'fp16')) {
+      return;
+    }
+    const aBase = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+    const bBase = new Float32Array([0.7, -0.4, 0.2, -0.1, 0.3, -0.5]);
+    const cBase = new Float32Array([1.5, -0.5, 2.0, 0.5, -1.0, 0.25]);
+
+    const { grads } = await runComposedGraph(rt, aBase, bBase, cBase, true, 'fp16');
+    expect(grads).not.toBeNull();
+
+    const epsilon = 0.12;
+    const tolerance = gradientCheckTolerance('fp16');
+
+    type ParamSlot = { readonly name: 'a' | 'b' | 'c'; readonly base: Float32Array };
+    const slots: readonly ParamSlot[] = [
+      { name: 'a', base: aBase },
+      { name: 'b', base: bBase },
+      { name: 'c', base: cBase },
+    ];
+
+    for (const slot of slots) {
+      const analytic = grads![slot.name];
+      for (let i = 0; i < slot.base.length; i++) {
+        const plus = new Float32Array(slot.base);
+        plus[i] = slot.base[i] + epsilon;
+        const minus = new Float32Array(slot.base);
+        minus[i] = slot.base[i] - epsilon;
+
+        const aP = slot.name === 'a' ? plus : aBase;
+        const bP = slot.name === 'b' ? plus : bBase;
+        const cP = slot.name === 'c' ? plus : cBase;
+
+        const aM = slot.name === 'a' ? minus : aBase;
+        const bM = slot.name === 'b' ? minus : bBase;
+        const cM = slot.name === 'c' ? minus : cBase;
+
+        const fPlus = sum((await runComposedGraph(rt, aP, bP, cP, false, 'fp16')).output);
+        const fMinus = sum((await runComposedGraph(rt, aM, bM, cM, false, 'fp16')).output);
         const numerical = (fPlus - fMinus) / (2 * epsilon);
 
         expect(

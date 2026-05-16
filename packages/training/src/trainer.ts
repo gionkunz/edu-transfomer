@@ -3,6 +3,7 @@ import {
   clipGradNorm,
   createLeafVariable,
   crossEntropyMeanFromLogits,
+  disposeAutogradGraphExceptParameters,
   registerParameter,
   type Parameter,
   type ParameterRegistry,
@@ -30,9 +31,8 @@ export type TrainerOptions = {
 };
 
 /**
- * Minimal single-process trainer: one forward (GPT + mean CE), backward, clip, AdamW.
- *
- * Does not yet reclaim intermediate graph buffers; keep **`steps`** modest or extend with teardown.
+ * Minimal single-process trainer: one forward (GPT + mean CE), backward, graph
+ * disposal (intermediate buffers), clip, AdamW.
  */
 export class Trainer {
   private readonly rt: TensorRuntime;
@@ -76,10 +76,25 @@ export class Trainer {
     const lossHost = await toArray(this.rt, loss.tensor);
     const lossScalar = lossHost[0];
     if (lossScalar === undefined || !Number.isFinite(lossScalar)) {
-      throw new Error('trainer: non-finite loss');
+      const kind =
+        lossScalar === undefined
+          ? 'missing'
+          : Number.isNaN(lossScalar)
+            ? 'NaN'
+            : lossScalar === Number.POSITIVE_INFINITY
+              ? '+Infinity'
+              : lossScalar === Number.NEGATIVE_INFINITY
+                ? '-Infinity'
+                : 'non-finite';
+      throw new Error(
+        `trainer: non-finite loss at step ${String(trainingStepIndex)} (${kind}). ` +
+          `Often: exploding activations (try lower lrMax, smaller maxSeqLen), bad token id ≥ vocab in CE ` +
+          `(re-encode corpus / delete token cache), or run with tighter maxGradNorm.`,
+      );
     }
 
     backward(this.rt, loss);
+    disposeAutogradGraphExceptParameters(loss, this.registry);
 
     if (Number.isFinite(maxGradNorm) && maxGradNorm > 0) {
       await clipGradNorm(this.rt, this.registry, maxGradNorm);

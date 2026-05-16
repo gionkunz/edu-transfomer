@@ -10,8 +10,10 @@ import {
   cpuTranspose,
   GpuContext,
   KernelRegistry,
+  packBf16FromFloat32,
   probeWebGpu,
   registerCoreKernels,
+  unpackBf16ToFloat32,
 } from '@llm-transformer-diy/gpu';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -29,15 +31,15 @@ import {
   transpose,
   view2dRowPrefix,
 } from './ops';
-import { createFromArray, createZeros, destroy, toArray } from './tensor';
+import { cast, createFromArray, createZeros, destroy, toArray } from './tensor';
 import type { Tensor, TensorRuntime } from './types';
 
 const webgpuAvailable = await probeWebGpu();
 
-function expectCloseVec(actual: Float32Array, expected: Float32Array): void {
+function expectCloseVec(actual: Float32Array, expected: Float32Array, places = 5): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
-    expect(actual[i]).toBeCloseTo(expected[i], 5);
+    expect(actual[i]).toBeCloseTo(expected[i], places);
   }
 }
 
@@ -74,6 +76,7 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
   it('createFromArray + toArray round-trips data', async () => {
     const data = new Float32Array([1, 2, 3, 4, 5, 6]);
     const t = track(createFromArray(rt, data, [2, 3]));
+    expect(t.dtype).toBe('f32');
     expect(t.shape).toEqual([2, 3]);
     expect(t.strides).toEqual([3, 1]);
     expect(t.length).toBe(6);
@@ -212,5 +215,37 @@ describe.skipIf(!webgpuAvailable)('tensor (GPU-backed)', () => {
   it('softmax throws on rank ≠ 2 before any dispatch', () => {
     const a = track(createFromArray(rt, new Float32Array(4), [4]));
     expect(() => softmax(rt, a)).toThrow(/expected rank 2/);
+  });
+
+  it('createFromArray bf16 + toArray matches CPU pack/unpack rounding', async () => {
+    const data = Float32Array.from([1, 2, -0.5, 3.5]);
+    const t = track(createFromArray(rt, data, [2, 2], 'bf16'));
+    expect(t.dtype).toBe('bf16');
+    const expected = unpackBf16ToFloat32(packBf16FromFloat32(data));
+    expectCloseVec(await toArray(rt, t), expected, 3);
+  });
+
+  it('matmul rejects mixed float dtypes', () => {
+    const a = track(createFromArray(rt, new Float32Array(4), [2, 2], 'f32'));
+    const b = track(createFromArray(rt, new Float32Array(4), [2, 2], 'bf16'));
+    expect(() => matmul(rt, a, b)).toThrow(/dtype mismatch/);
+  });
+
+  it('cast to same dtype uses a new buffer (no aliasing)', async () => {
+    const data = new Float32Array([1, 2, 3]);
+    const a = track(createFromArray(rt, data, [3], 'bf16'));
+    const b = track(cast(rt, a, 'bf16'));
+    expect(b.buffer).not.toBe(a.buffer);
+    expect(b.dtype).toBe('bf16');
+    expectCloseVec(await toArray(rt, b), await toArray(rt, a), 3);
+  });
+
+  it('cast f32 → bf16 → f32 matches bf16 rounding reference', async () => {
+    const data = new Float32Array([1.25, -2, 0.125]);
+    const f = track(createFromArray(rt, data, [3], 'f32'));
+    const q = track(cast(rt, f, 'bf16'));
+    const r = track(cast(rt, q, 'f32'));
+    const expected = unpackBf16ToFloat32(packBf16FromFloat32(data));
+    expectCloseVec(await toArray(rt, r), expected, 3);
   });
 });

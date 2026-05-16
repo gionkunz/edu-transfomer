@@ -13,11 +13,13 @@ import {
   type GptModel,
 } from '@llm-transformer-diy/model';
 import {
-  copyF32Elems,
+  copyContiguousTensorBytes,
   createFromArray,
   destroy,
+  floatDtypeOf,
   productOfShape,
   toArray,
+  type FloatDType,
   type TensorRuntime,
 } from '@llm-transformer-diy/tensor';
 
@@ -38,7 +40,9 @@ export type SaveGptCheckpointOptions = {
 };
 
 /**
- * Writes **f32** weights for every **`collectGptParameters`** tensor (CPU readback per tensor).
+ * Writes weights for every **`collectGptParameters`** tensor at each parameter's compute **`dtype`**
+ * (CPU readback per tensor, **Float32Array** logical values encoded with **`packBf16FromFloat32`** /
+ * **`packFp16FromFloat32`** when needed).
  */
 export async function saveGptCheckpoint(opts: SaveGptCheckpointOptions): Promise<void> {
   const params = collectGptParameters(opts.model);
@@ -57,7 +61,12 @@ export async function saveGptCheckpoint(opts: SaveGptCheckpointOptions): Promise
       throw new Error('saveGptCheckpoint: internal index error');
     }
     const data = await toArray(opts.rt, p.tensor);
-    tensors[name] = { shape: [...p.tensor.shape], data: new Float32Array(data) };
+    const dtype = floatDtypeOf(p.tensor);
+    tensors[name] = {
+      shape: [...p.tensor.shape],
+      data: new Float32Array(data),
+      ...(dtype !== 'f32' ? { dtype } : {}),
+    };
     opts.onCheckpointTensor?.({ index: i, name, total: names.length });
   }
 
@@ -80,9 +89,39 @@ export async function loadGptCheckpointTensors(
   return readPackedCheckpointFiles(binPath, jsonPath);
 }
 
+function assertCheckpointCompatibleWithComputeDtype(
+  sidecar: PackedCheckpointSidecar,
+  computeDtype: FloatDType,
+  allowDtypeUpcast: boolean | undefined,
+): void {
+  for (const [name, entry] of Object.entries(sidecar.tensors)) {
+    const stored = entry.dtype;
+    if (stored === computeDtype) {
+      continue;
+    }
+    if (stored === 'f32' && computeDtype !== 'f32') {
+      continue;
+    }
+    if (stored !== 'f32' && computeDtype === 'f32') {
+      if (allowDtypeUpcast === true) {
+        continue;
+      }
+      throw new Error(
+        `loadGptModelFromCheckpoint: checkpoint tensor "${name}" is stored as '${stored}' ` +
+          `but compute dtype is f32. Pass { allowDtypeUpcast: true } to decode 16-bit weights to f32, or use --dtype ${stored}.`,
+      );
+    }
+    throw new Error(
+      `loadGptModelFromCheckpoint: checkpoint tensor "${name}" is stored as '${stored}' ` +
+        `which is incompatible with compute dtype '${computeDtype}'.`,
+    );
+  }
+}
+
 /**
- * Overwrites **`model`** parameter GPU buffers with checkpoint **`Float32`** payloads (**names** must match
- * {@link gptParameterTensorNames}).
+ * Overwrites **`model`** parameter buffers. **`tensors`** values are logical **`f32`** host arrays
+ * (**16-bit** checkpoints are already unpacked in **`readPackedCheckpointFiles`**); each value is
+ * narrowed to **`parameter.tensor.dtype`** on upload (**`createFromArray`**).
  */
 export function hydrateGptModelWeights(
   rt: TensorRuntime,
@@ -113,11 +152,20 @@ export function hydrateGptModelWeights(
         `hydrateGptModelWeights: shape mismatch for "${name}" (expected ${String(n)} elements, got ${String(data.length)})`,
       );
     }
-    const src = createFromArray(rt, data, [...t.shape]);
+    const dt = floatDtypeOf(t);
+    const src = createFromArray(rt, data, [...t.shape], dt);
     try {
-      copyF32Elems(rt, src, 0, t, 0, n);
+      copyContiguousTensorBytes(rt, src, t);
     } finally {
       destroy(src);
+    }
+    if (p.masterTensor !== null) {
+      const srcF32 = createFromArray(rt, data, [...t.shape], 'f32');
+      try {
+        copyContiguousTensorBytes(rt, srcF32, p.masterTensor);
+      } finally {
+        destroy(srcF32);
+      }
     }
   }
 }
@@ -139,17 +187,34 @@ function parseGptConfig(raw: unknown): GptConfig {
   return config;
 }
 
+export type LoadGptModelFromCheckpointOptions = {
+  /** Dtype of parameter buffers; default **`f32`**. */
+  readonly computeDtype?: FloatDType;
+  /**
+   * When the checkpoint stores **`bf16`** / **`fp16`** tensors, set **`true`** to load them into
+   * an **`f32`** model (host decode then **`f32`** upload).
+   */
+  readonly allowDtypeUpcast?: boolean;
+};
+
 /**
  * Builds a **`GptModel`** from disk weights (**bin** + **JSON** sidecar).
+ *
+ * **`f32`** on-disk tensors; **`computeDtype: 'bf16'`** / **`'fp16'`** narrows weights on load.
+ * **`allowDtypeUpcast`**: load **16-bit** checkpoints into an **`f32`** model.
  */
 export async function loadGptModelFromCheckpoint(
   rt: TensorRuntime,
   binPath: string,
   jsonPath: string,
+  options?: LoadGptModelFromCheckpointOptions,
 ): Promise<{ readonly model: GptModel; readonly config: GptConfig }> {
   const { sidecar, tensors } = await loadGptCheckpointTensors(binPath, jsonPath);
   const config = parseGptConfig(sidecar.config);
-  const model = createGptModel(rt, config);
+  const computeDtype = options?.computeDtype ?? 'f32';
+  assertCheckpointCompatibleWithComputeDtype(sidecar, computeDtype, options?.allowDtypeUpcast);
+
+  const model = createGptModel(rt, config, { dtype: computeDtype });
   hydrateGptModelWeights(rt, model, tensors);
   return { model, config };
 }

@@ -54,4 +54,16 @@ describe.skipIf(!webgpuAvailable)('clipGradNorm', () => {
     destroy(p.grad);
     destroy(p.tensor);
   });
+
+  it('throws when any gradient is NaN (avoid scaling every tensor by NaN)', async () => {
+    const reg = createParameterRegistry();
+    const p = createParameter(createFromArray(rt, new Float32Array([0]), [1]));
+    registerParameter(reg, p);
+    p.grad = createFromArray(rt, new Float32Array([Number.NaN]), [1]);
+
+    await expect(clipGradNorm(rt, reg, 1)).rejects.toThrow(/non-finite/);
+
+    destroy(p.grad);
+    destroy(p.tensor);
+  });
 });

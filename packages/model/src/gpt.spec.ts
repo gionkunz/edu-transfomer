@@ -1,5 +1,10 @@
 import { backward } from '@llm-transformer-diy/autograd';
-import { GpuContext, KernelRegistry, probeWebGpu, registerCoreKernels } from '@llm-transformer-diy/gpu';
+import {
+  GpuContext,
+  KernelRegistry,
+  probeWebGpu,
+  registerCoreKernels,
+} from '@llm-transformer-diy/gpu';
 import { createIndices, destroy, toArray, type TensorRuntime } from '@llm-transformer-diy/tensor';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -52,6 +57,9 @@ describe.skipIf(!webgpuAvailable)('GPT forward', () => {
     destroy(logits.tensor);
     for (const p of params) {
       destroy(p.tensor);
+      if (p.masterTensor !== null) {
+        destroy(p.masterTensor);
+      }
       if (p.grad) {
         destroy(p.grad);
       }

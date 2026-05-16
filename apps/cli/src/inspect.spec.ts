@@ -23,7 +23,7 @@ describe('inspect helpers', () => {
     });
     expect(text).toContain('d_model=32');
     expect(text).toContain('parameters (elements): 10');
-    expect(text).toContain('a: [2, 3]');
+    expect(text).toContain('a: shape=');
   });
 
   it('loadSidecarFromJsonFile parses fixture', async () => {

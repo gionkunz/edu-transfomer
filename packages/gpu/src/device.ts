@@ -8,7 +8,21 @@ export type GpuBootstrapOptions = {
    * so discrete GPUs are preferred when the runtime exposes more than one adapter.
    */
   requestAdapterOptions?: GPURequestAdapterOptions;
+  /**
+   * Features that **`GPUAdapter.features`** must advertise; **`GpuContext.create`** throws when any
+   * entry is missing. These are always passed to **`GPUAdapter.requestDevice`**.
+   */
+  requiredFeatures?: GPUFeatureName[];
+  /**
+   * Optional features requested when supported by the adapter (intersected with **`adapter.features`**).
+   * Defaults to **`['shader-f16']`**. Unsupported optional features are silently omitted — the created
+   * **`GPUDevice.features`** is the source of truth for what was granted.
+   */
+  optionalFeatures?: GPUFeatureName[];
 };
+
+/** Dtypes with packed GPU storage handled by this repo (mirrors tensor **`DType`** without a package edge). */
+export type GpuStorageDType = 'f32' | 'bf16' | 'fp16' | 'u32';
 
 /** Heuristic: adapter label / info often marks LLVMpipe, SwiftShader, or explicit “software”. */
 export function gpuAdapterLikelyCpuOnly(adapterLabel: string): boolean {
@@ -44,6 +58,48 @@ export function formatGpuAdapterLabel(adapter: GPUAdapter): string {
 }
 
 /**
+ * Whether **`dtype`** can be used with **`GpuContext`**: **`bf16`** is always supported (emulated via
+ * **u16** packing); **`fp16`** is supported when **`shader-f16`** is granted **or** via the
+ * **`unpack2x16float`** packed path (always enabled in our WGSL). **`f32`** / **`u32`** are universal.
+ */
+export function supportsDtype(ctx: GpuContext, dtype: GpuStorageDType): boolean {
+  switch (dtype) {
+    case 'f32':
+    case 'u32':
+    case 'bf16':
+    case 'fp16':
+      return true;
+    default: {
+      const _e: never = dtype;
+      return _e;
+    }
+  }
+}
+
+function collectDeviceFeatures(
+  adapter: GPUAdapter,
+  required: readonly GPUFeatureName[],
+  optional: readonly GPUFeatureName[],
+): GPUFeatureName[] {
+  for (const f of required) {
+    if (!adapter.features.has(f)) {
+      const label = formatGpuAdapterLabel(adapter);
+      throw new Error(
+        `GpuContext.create: required WebGPU feature '${String(f)}' is not available on this adapter ` +
+          `(${label}).`,
+      );
+    }
+  }
+  const granted: GPUFeatureName[] = [...required];
+  for (const f of optional) {
+    if (adapter.features.has(f)) {
+      granted.push(f);
+    }
+  }
+  return granted;
+}
+
+/**
  * Holds a live Dawn `GPU` handle (keeps the native binding alive), a {@link GPUDevice},
  * and its default queue.
  */
@@ -60,17 +116,22 @@ export class GpuContext {
   /** True when **`adapterLabel`** matches known CPU software backends (e.g. LLVMpipe). */
   readonly isLikelyCpuSoftwareAdapter: boolean;
 
+  /** Subset of **`GPUFeatureName`** values actually enabled on **`device`**. */
+  readonly grantedFeatures: ReadonlySet<string>;
+
   private constructor(
     gpu: GPU,
     device: GPUDevice,
     adapterLabel: string,
     isLikelyCpuSoftwareAdapter: boolean,
+    grantedFeatures: ReadonlySet<string>,
   ) {
     this.gpu = gpu;
     this.device = device;
     this.queue = device.queue;
     this.adapterLabel = adapterLabel;
     this.isLikelyCpuSoftwareAdapter = isLikelyCpuSoftwareAdapter;
+    this.grantedFeatures = grantedFeatures;
   }
 
   /**
@@ -93,15 +154,27 @@ export class GpuContext {
     const adapterLabel = formatGpuAdapterLabel(adapter);
     const isLikelyCpuSoftwareAdapter = gpuAdapterLikelyCpuOnly(adapterLabel);
 
+    const required = options?.requiredFeatures ?? [];
+    const optional = options?.optionalFeatures ?? ['shader-f16'];
+    const deviceFeatures = collectDeviceFeatures(adapter, required, optional);
+
     let device: GPUDevice;
     try {
-      device = await adapter.requestDevice();
+      device = await adapter.requestDevice({
+        requiredFeatures: deviceFeatures.length > 0 ? deviceFeatures : undefined,
+      });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       throw new Error(`GpuContext.create: requestDevice failed (${message})`);
     }
 
-    return new GpuContext(gpu, device, adapterLabel, isLikelyCpuSoftwareAdapter);
+    return new GpuContext(
+      gpu,
+      device,
+      adapterLabel,
+      isLikelyCpuSoftwareAdapter,
+      new Set<string>(device.features),
+    );
   }
 }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertFloatDtype,
   assertRank,
+  assertSameDtype,
   assertSameShape,
   computeContiguousStrides,
   isContiguous,
@@ -106,5 +108,34 @@ describe('assertSameShape', () => {
     expect(() => {
       assertSameShape(fakeTensor([2, 3]), fakeTensor([2, 4]));
     }).toThrow(/a=\[2,3\].*b=\[2,4\]/);
+  });
+});
+
+function fakeTensorWithDtype(shape: readonly number[], dtype: Tensor['dtype']): Tensor {
+  return {
+    shape,
+    strides: computeContiguousStrides(shape),
+    dtype,
+    device: 'gpu',
+    buffer: {} as Tensor['buffer'],
+    length: productOfShape(shape),
+  };
+}
+
+describe('assertFloatDtype', () => {
+  it('throws on u32', () => {
+    expect(() => assertFloatDtype(fakeTensorWithDtype([3], 'u32'))).toThrow(/float dtype/);
+  });
+
+  it('accepts bf16', () => {
+    expect(() => assertFloatDtype(fakeTensorWithDtype([2], 'bf16'))).not.toThrow();
+  });
+});
+
+describe('assertSameDtype', () => {
+  it('throws when dtypes differ', () => {
+    expect(() =>
+      assertSameDtype(fakeTensorWithDtype([2], 'f32'), fakeTensorWithDtype([2], 'bf16')),
+    ).toThrow(/dtype mismatch/);
   });
 });
