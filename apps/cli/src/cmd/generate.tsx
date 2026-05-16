@@ -99,6 +99,22 @@ type ExploreViewProps = {
   readonly onQuit: () => void;
 };
 
+/** Slice prefix/lastPiece pair to keep at most **`maxChars`** trailing chars while preserving the highlight on the tail. */
+export function tailSliceForHighlight(
+  prefix: string,
+  last: string,
+  maxChars: number,
+): { readonly prefix: string; readonly last: string } {
+  if (maxChars <= 0) return { prefix: '', last: '' };
+  const total = prefix.length + last.length;
+  if (total <= maxChars) return { prefix, last };
+  if (last.length >= maxChars) {
+    return { prefix: '', last: last.slice(last.length - maxChars) };
+  }
+  const prefixKeep = maxChars - last.length;
+  return { prefix: prefix.slice(prefix.length - prefixKeep), last };
+}
+
 function ExploreView(props: ExploreViewProps): React.ReactElement {
   const { vm } = props;
   const stdoutCtx = useStdout();
@@ -142,6 +158,23 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
   const statusColor: string =
     vm.modeLabel === 'PAUSED' ? 'yellow' : vm.modeLabel === 'SLOW' ? 'magenta' : 'green';
 
+  /**
+   * Compute an explicit width for the streamed-text column so wolf-tui wraps to it instead of
+   * letting long generations spill past the right-side inspector and break the row layout.
+   * Buffer of `6` covers root padding (2) + left paddingRight (2) + inspector border/padding slop (2).
+   */
+  const inspectorBudget = showInspector ? INSPECTOR_PANEL_WIDTH + 4 : 0;
+  const leftPaddingRight = showInspector ? 2 : 0;
+  const leftWidth = Math.max(20, cols - inspectorBudget - leftPaddingRight - 2);
+  const bodyHeight = Math.max(3, visibleRows + 1);
+  /** Cap visible streamed text from the tail so vertical overflow can't push the inspector down. */
+  const tailCharBudget = leftWidth * (bodyHeight + 4);
+  const { prefix: prefixDisplay, last: lastDisplay } = tailSliceForHighlight(
+    vm.prefixText,
+    vm.lastPiece,
+    tailCharBudget,
+  );
+
   return (
     <Box style={{ display: 'flex', flexDirection: 'column', padding: 1, flexGrow: 1 }}>
       <Text style={{ fontWeight: 'bold' }}>Generate · explore</Text>
@@ -151,11 +184,29 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
           {` · tok/s ${vm.tokensPerSec.toFixed(1)} · new ${String(vm.newTokens)} · s = slow · p = pause · q = quit`}
         </Text>
       </Box>
-      <Box style={{ display: 'flex', flexDirection: 'row', flexGrow: 1, marginTop: 1 }}>
-        <Box style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, paddingRight: 2 }}>
-          <Text>
-            {vm.prefixText}
-            <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{vm.lastPiece}</Text>
+      <Box
+        style={{
+          display: 'flex',
+          flexDirection: 'row',
+          height: bodyHeight,
+          marginTop: 1,
+          overflowX: 'hidden',
+          overflowY: 'hidden',
+        }}
+      >
+        <Box
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            width: leftWidth,
+            paddingRight: leftPaddingRight,
+            overflowX: 'hidden',
+            overflowY: 'hidden',
+          }}
+        >
+          <Text style={{ textWrap: 'wrap' }}>
+            {prefixDisplay}
+            <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{lastDisplay}</Text>
           </Text>
         </Box>
         {showInspector ? (
@@ -168,6 +219,8 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
               borderColor: 'gray',
               paddingLeft: 1,
               paddingRight: 1,
+              overflowX: 'hidden',
+              overflowY: 'hidden',
             }}
           >
             <Text style={{ fontWeight: 'bold' }}>next-token p</Text>
@@ -184,7 +237,11 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
                 return (
                   <Text
                     key={r.id}
-                    style={isSampled ? { color: 'cyan', fontWeight: 'bold' } : undefined}
+                    style={
+                      isSampled
+                        ? { color: 'cyan', fontWeight: 'bold', textWrap: 'truncate-end' }
+                        : { textWrap: 'truncate-end' }
+                    }
                   >
                     {line}
                   </Text>
