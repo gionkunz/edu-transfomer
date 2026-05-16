@@ -195,4 +195,75 @@ describe('BpePairFreqIndex', () => {
   it('NO_OCC sentinel matches EMPTY_KEY (single 0xFFFFFFFF marker)', () => {
     expect(NO_OCC).toBe(EMPTY_KEY);
   });
+
+  // Regression: monotonically appending K occurrences of one pair must be O(K),
+  // not O(K^2). Without occTail, the head-walking insertion path makes the
+  // initial corpus scan effectively hang on real-world (~MiB) inputs because
+  // high-frequency adjacent byte pairs accumulate ~10^4-10^5 occurrences each.
+  // The constants below are chosen so the post-fix path runs in tens of ms;
+  // the pre-fix path takes seconds-to-minutes and would blow this budget by
+  // 1-2 orders of magnitude.
+  it('monotonic-append of 200_000 occurrences for one pair is sub-quadratic', () => {
+    const K = 200_000;
+    const stream = createLinkedTokenStream(K + 1);
+    for (let i = 0; i < K + 1; i++) appendLiveSlot(stream, i, 1);
+    const index = createPairFreqIndex(16);
+    const occ = createPairOccurrenceList(stream.capacity);
+
+    const start = performance.now();
+    for (let i = 0; i < K; i++) {
+      incrementPair(index, occ, stream, 1, 1, i);
+    }
+    const elapsedMs = performance.now() - start;
+
+    expect(elapsedMs).toBeLessThan(1500);
+    const slot = lookupPairSlot(index, 1, 1);
+    expect(slot).not.toBe(EMPTY_KEY);
+    expect(index.counts[slot]).toBe(K);
+    expect(index.occHead[slot]).toBe(0);
+    expect(index.occTail[slot]).toBe(K - 1);
+  });
+
+  it('occTail is maintained across mixed increment/decrement traffic', () => {
+    const stream = makeStream([1, 1, 1, 1, 1, 1]);
+    const index = createPairFreqIndex(8);
+    const occ = createPairOccurrenceList(stream.capacity);
+
+    for (let i = 0; i < 5; i++) incrementPair(index, occ, stream, 1, 1, i);
+    let slot = lookupPairSlot(index, 1, 1);
+    expect(index.occHead[slot]).toBe(0);
+    expect(index.occTail[slot]).toBe(4);
+
+    decrementPair(index, occ, 4);
+    expect(index.occHead[slot]).toBe(0);
+    expect(index.occTail[slot]).toBe(3);
+
+    decrementPair(index, occ, 0);
+    expect(index.occHead[slot]).toBe(1);
+    expect(index.occTail[slot]).toBe(3);
+
+    decrementPair(index, occ, 2);
+    expect(index.occHead[slot]).toBe(1);
+    expect(index.occTail[slot]).toBe(3);
+
+    decrementPair(index, occ, 1);
+    decrementPair(index, occ, 3);
+    slot = lookupPairSlot(index, 1, 1);
+    expect(slot).toBe(EMPTY_KEY);
+  });
+
+  it('interior insert (streamSlot between head and tail) preserves ordering', () => {
+    const stream = makeStream([1, 1, 1, 1, 1]);
+    const index = createPairFreqIndex(8);
+    const occ = createPairOccurrenceList(stream.capacity);
+
+    incrementPair(index, occ, stream, 1, 1, 0);
+    incrementPair(index, occ, stream, 1, 1, 4);
+    incrementPair(index, occ, stream, 1, 1, 2);
+
+    expect(collectOccurrences(index, occ, 1, 1)).toEqual([0, 2, 4]);
+    const slot = lookupPairSlot(index, 1, 1);
+    expect(index.occHead[slot]).toBe(0);
+    expect(index.occTail[slot]).toBe(4);
+  });
 });

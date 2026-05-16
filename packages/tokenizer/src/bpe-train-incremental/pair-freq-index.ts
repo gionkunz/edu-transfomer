@@ -36,9 +36,13 @@ export const NO_OCC = 0xff_ff_ff_ff;
  * - `keysL[s]` / `keysR[s]` carry the pair `(L, R)`;
  * - `counts[s]` is the number of stream slots `i` where `value[i] = L` and
  *   `value[next[i]] = R`;
- * - `occHead[s]` is the head of the per-pair occurrence linked list (a stream
- *   slot index pointing into the parallel `BpePairOccurrenceList` arrays), or
- *   `NO_OCC` when the count is zero.
+ * - `occHead[s]` is the head (smallest stream slot index) of the per-pair
+ *   occurrence linked list, or `NO_OCC` when the count is zero;
+ * - `occTail[s]` is the tail (largest stream slot index) of the same list,
+ *   or `NO_OCC` when the count is zero. Maintaining the tail pointer is what
+ *   keeps `incrementPair` `O(1)` on the initial-scan / monotonic-append hot
+ *   path; without it head-walking turns the initial scan into `O(K^2)` per
+ *   pair, which is catastrophic for high-frequency pairs in real corpora.
  *
  * Capacity is always a power of two so `slot = hash & capacityMinusOne` is a
  * single AND. The table grows-and-rehashes when `size > 0.7 * capacity`.
@@ -48,6 +52,7 @@ export interface BpePairFreqIndex {
   keysR: Uint32Array;
   counts: Uint32Array;
   occHead: Uint32Array;
+  occTail: Uint32Array;
   /** Number of non-empty slots; used for load-factor accounting. */
   size: number;
   /** `capacity - 1`, used as a fast modulo. `capacity` is always a power of two. */
@@ -93,14 +98,17 @@ export function createPairFreqIndex(initialCapacityHint: number): BpePairFreqInd
   const keysL = new Uint32Array(capacity);
   const keysR = new Uint32Array(capacity);
   const occHead = new Uint32Array(capacity);
+  const occTail = new Uint32Array(capacity);
   keysL.fill(EMPTY_KEY);
   keysR.fill(EMPTY_KEY);
   occHead.fill(NO_OCC);
+  occTail.fill(NO_OCC);
   return {
     keysL,
     keysR,
     counts: new Uint32Array(capacity),
     occHead,
+    occTail,
     size: 0,
     capacityMinusOne: capacity - 1,
   };
@@ -202,15 +210,18 @@ function growAndRehash(index: BpePairFreqIndex, occList: BpePairOccurrenceList):
   const oldKeysR = index.keysR;
   const oldCounts = index.counts;
   const oldOccHead = index.occHead;
+  const oldOccTail = index.occTail;
   const oldCapacity = index.capacityMinusOne + 1;
   const newCapacity = oldCapacity * 2;
   const newKeysL = new Uint32Array(newCapacity);
   const newKeysR = new Uint32Array(newCapacity);
   const newCounts = new Uint32Array(newCapacity);
   const newOccHead = new Uint32Array(newCapacity);
+  const newOccTail = new Uint32Array(newCapacity);
   newKeysL.fill(EMPTY_KEY);
   newKeysR.fill(EMPTY_KEY);
   newOccHead.fill(NO_OCC);
+  newOccTail.fill(NO_OCC);
   const newMask = newCapacity - 1;
   for (let s = 0; s < oldCapacity; s++) {
     const kl = oldKeysL[s];
@@ -225,6 +236,7 @@ function growAndRehash(index: BpePairFreqIndex, occList: BpePairOccurrenceList):
     newCounts[ns] = oldCounts[s];
     const head = oldOccHead[s];
     newOccHead[ns] = head;
+    newOccTail[ns] = oldOccTail[s];
     // Repair pairOf back-pointers for every stream slot in this pair's list.
     let occ = head;
     while (occ !== NO_OCC) {
@@ -237,6 +249,7 @@ function growAndRehash(index: BpePairFreqIndex, occList: BpePairOccurrenceList):
   (index as { keysR: Uint32Array }).keysR = newKeysR;
   (index as { counts: Uint32Array }).counts = newCounts;
   (index as { occHead: Uint32Array }).occHead = newOccHead;
+  (index as { occTail: Uint32Array }).occTail = newOccTail;
   index.capacityMinusOne = newMask;
 }
 
@@ -270,17 +283,30 @@ export function incrementPair(
   index.counts[pairSlot] += 1;
   occList.pairOf[streamSlot] = pairSlot;
 
-  // Splice into the per-pair occurrence list at left-to-right position. Walk the
-  // existing occurrences to find the immediate predecessor whose stream slot is
-  // less than `streamSlot`. For the initial scan this is always the existing
-  // tail (we append in slot order) — that case is O(1).
-  const head = index.occHead[pairSlot];
-  if (head === NO_OCC) {
+  // Splice into the per-pair occurrence list, keeping it sorted ascending by
+  // stream slot. We pivot on `occTail[pairSlot]` so the two hot paths
+  // (empty list, and append-after-current-tail) are both `O(1)`. The
+  // initial-scan path always hits the tail-append case because we walk the
+  // stream left-to-right; the merge-loop path also hits it when the new
+  // occurrence is to the right of every prior one (the common case after a
+  // merge consumes interior sites). Without this fast path the initial scan
+  // is `O(K^2)` per pair, which makes 2-3 MiB corpora effectively hang.
+  const tail = index.occTail[pairSlot];
+  if (tail === NO_OCC) {
     occList.occPrev[streamSlot] = NO_OCC;
     occList.occNext[streamSlot] = NO_OCC;
     index.occHead[pairSlot] = streamSlot;
+    index.occTail[pairSlot] = streamSlot;
     return;
   }
+  if (streamSlot > tail) {
+    occList.occPrev[streamSlot] = tail;
+    occList.occNext[streamSlot] = NO_OCC;
+    occList.occNext[tail] = streamSlot;
+    index.occTail[pairSlot] = streamSlot;
+    return;
+  }
+  const head = index.occHead[pairSlot];
   if (streamSlot < head) {
     occList.occPrev[streamSlot] = NO_OCC;
     occList.occNext[streamSlot] = head;
@@ -288,19 +314,21 @@ export function incrementPair(
     index.occHead[pairSlot] = streamSlot;
     return;
   }
-  // Walk forward from head to find the largest occurrence index < streamSlot.
-  // For the initial-scan append-only path this exits on the very first step.
-  let predecessor = head;
-  let successor = occList.occNext[predecessor];
-  while (successor !== NO_OCC && successor < streamSlot) {
-    predecessor = successor;
-    successor = occList.occNext[predecessor];
+  // Interior insert (rare on the merge-loop path, never on the initial scan).
+  // Walk backward from the tail since post-merge inserts tend to be near the
+  // recently-consumed merge sites — keeps the worst case bounded by the
+  // number of occurrences with slot index strictly greater than `streamSlot`.
+  let successor = tail;
+  let predecessor = occList.occPrev[successor];
+  while (predecessor !== NO_OCC && predecessor > streamSlot) {
+    successor = predecessor;
+    predecessor = occList.occPrev[successor];
   }
   occList.occPrev[streamSlot] = predecessor;
   occList.occNext[streamSlot] = successor;
-  occList.occNext[predecessor] = streamSlot;
-  if (successor !== NO_OCC) {
-    occList.occPrev[successor] = streamSlot;
+  occList.occPrev[successor] = streamSlot;
+  if (predecessor !== NO_OCC) {
+    occList.occNext[predecessor] = streamSlot;
   }
 }
 
@@ -340,7 +368,9 @@ export function decrementPair(
   } else {
     occList.occNext[before] = after;
   }
-  if (after !== NO_OCC) {
+  if (after === NO_OCC) {
+    index.occTail[pairSlot] = before;
+  } else {
     occList.occPrev[after] = before;
   }
   occList.pairOf[streamSlot] = NO_OCC;
@@ -357,6 +387,7 @@ export function decrementPair(
   index.keysL[pairSlot] = EMPTY_KEY;
   index.keysR[pairSlot] = EMPTY_KEY;
   index.occHead[pairSlot] = NO_OCC;
+  index.occTail[pairSlot] = NO_OCC;
   index.size -= 1;
   backShiftCluster(index, occList, pairSlot);
 }
@@ -391,6 +422,7 @@ function backShiftCluster(
       index.keysR[gap] = kr;
       index.counts[gap] = index.counts[i];
       index.occHead[gap] = index.occHead[i];
+      index.occTail[gap] = index.occTail[i];
       // Repair pairOf back-pointers: every stream slot in this pair's
       // occurrence list previously pointed at `i`; now must point at `gap`.
       let occ = index.occHead[gap];
@@ -401,6 +433,7 @@ function backShiftCluster(
       index.keysL[i] = EMPTY_KEY;
       index.keysR[i] = EMPTY_KEY;
       index.occHead[i] = NO_OCC;
+      index.occTail[i] = NO_OCC;
       gap = i;
     }
     i = (i + 1) & index.capacityMinusOne;
