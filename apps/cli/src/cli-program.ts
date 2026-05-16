@@ -192,6 +192,10 @@ export function createCliProgram(): Command {
       '1',
     )
     .option('--repeat-window <n>', 'tail context length for --repeat-penalty', '64')
+    .option(
+      '--no-explore',
+      'disable the educational explore TUI (probability inspector, recent-token highlight, s/p hotkeys); use the minimal streaming view instead',
+    )
     .action(async (opts) => {
       const repeatPenalty = Number(opts.repeatPenalty as string);
       const repeatWindow = Number(opts.repeatWindow as string);
@@ -209,6 +213,7 @@ export function createCliProgram(): Command {
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
+        explore: opts.explore !== false,
         computeDtype,
         ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
         ...(repeatPenalty > 1

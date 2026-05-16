@@ -9,10 +9,24 @@ import { createIndices, destroy, toArray, type TensorRuntime } from '@llm-transf
 
 import {
   DEFAULT_SAMPLE_OPTIONS,
-  sampleLogits,
+  sampleLogitsWithProbs,
   type Random01,
   type SampleOptions,
 } from './sampling';
+
+/** Per-step hook payload for **`GenerateOptions.onStep`**. */
+export type GenerateStep = {
+  readonly tokenId: number;
+  readonly newTokenIndex: number;
+  /**
+   * Distribution actually used for the categorical draw at this step
+   * (post-temperature, post-top-k, post-repetition-penalty).
+   *
+   * Length equals **`model.config.vocabSize`**. Each call receives a freshly-allocated
+   * **`Float32Array`** owned by the host (safe to retain or mutate after the await resolves).
+   */
+  readonly probabilities: Float32Array;
+};
 
 export type GenerateOptions = {
   readonly maxNewTokens: number;
@@ -21,6 +35,13 @@ export type GenerateOptions = {
   readonly rng?: Random01;
   /** Called for each **new** sampled token (not prompt positions). */
   readonly onSampledToken?: (tokenId: number, newTokenIndex: number) => void;
+  /**
+   * Per-step host hook. Fires **after** **`onSampledToken`** with the post-shaping
+   * **`probabilities`** that drove the draw. The decode loop **`await`s** the returned promise
+   * (if any) before issuing the next **`forwardGptDecodeStep`**, so hosts can implement
+   * pacing / pause without reimplementing sampling math here.
+   */
+  readonly onStep?: (step: GenerateStep) => void | Promise<void>;
 };
 
 async function lastRowLogits(
@@ -83,12 +104,16 @@ export async function generateAutoregressive(
 
   for (let n = 0; n < opts.maxNewTokens; n++) {
     const row = await lastRowLogits(rt, logitsVar, V);
-    const tid = sampleLogits(rng, row, sample);
+    const { tokenId: tid, probabilities } = sampleLogitsWithProbs(rng, row, sample);
     out.push(tid);
-    if (opts.onSampledToken !== undefined) {
-      const genIndex = out.length - promptIds.length - 1;
-      if (genIndex >= 0) {
-        opts.onSampledToken(tid, genIndex);
+    const genIndex = out.length - promptIds.length - 1;
+    if (opts.onSampledToken !== undefined && genIndex >= 0) {
+      opts.onSampledToken(tid, genIndex);
+    }
+    if (opts.onStep !== undefined && genIndex >= 0) {
+      const r = opts.onStep({ tokenId: tid, newTokenIndex: genIndex, probabilities });
+      if (r !== undefined) {
+        await r;
       }
     }
 

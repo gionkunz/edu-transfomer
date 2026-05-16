@@ -68,17 +68,39 @@ function softmaxMutable(a: Float32Array): void {
   }
 }
 
+/** Pair returned by **`sampleLogitsWithProbs`**: chosen token id and the post-shaped probability vector. */
+export type SampleWithProbsResult = {
+  readonly tokenId: number;
+  /**
+   * Distribution actually used for the categorical draw (length === **`logits.length`**):
+   * post-temperature, post-top-k softmax. Greedy returns a one-hot vector at the argmax.
+   * Ids masked out by top-k SHALL be exactly **`0`**.
+   */
+  readonly probabilities: Float32Array;
+};
+
 /**
- * Temperature + optional top-k, then categorical draw.
+ * Temperature + optional top-k softmax shaping followed by a categorical draw.
  *
- * With **`temperature ≤ 0`** (or very small), delegates to **`greedyArgmax`**.
+ * Returns the sampled **`tokenId`** alongside the **`probabilities`** vector that drove the draw,
+ * so hosts can inspect "what the sampler saw" without re-implementing softmax/top-k.
+ *
+ * With **`temperature ≤ 1e-8`** the result is greedy: **`tokenId`** is **`greedyArgmax(logits)`**
+ * and **`probabilities`** is a one-hot at that index.
  */
-export function sampleLogits(rng: Random01, logits: Float32Array, opts: SampleOptions): number {
+export function sampleLogitsWithProbs(
+  rng: Random01,
+  logits: Float32Array,
+  opts: SampleOptions,
+): SampleWithProbsResult {
   if (logits.length === 0) {
-    throw new Error('sampleLogits: empty logits');
+    throw new Error('sampleLogitsWithProbs: empty logits');
   }
   if (opts.temperature <= 1e-8) {
-    return greedyArgmax(logits);
+    const tokenId = greedyArgmax(logits);
+    const probabilities = new Float32Array(logits.length);
+    probabilities[tokenId] = 1;
+    return { tokenId, probabilities };
   }
 
   const p = new Float32Array(logits);
@@ -101,11 +123,25 @@ export function sampleLogits(rng: Random01, logits: Float32Array, opts: SampleOp
   softmaxMutable(p);
 
   let r = rng();
+  let tokenId = p.length - 1;
   for (let i = 0; i < p.length; i++) {
     r -= p[i];
     if (r <= 0) {
-      return i;
+      tokenId = i;
+      break;
     }
   }
-  return p.length - 1;
+  return { tokenId, probabilities: p };
+}
+
+/**
+ * Temperature + optional top-k, then categorical draw.
+ *
+ * With **`temperature ≤ 0`** (or very small), delegates to **`greedyArgmax`**.
+ *
+ * Thin wrapper over **`sampleLogitsWithProbs`** that drops the probability vector — kept for
+ * callers that only need the token id.
+ */
+export function sampleLogits(rng: Random01, logits: Float32Array, opts: SampleOptions): number {
+  return sampleLogitsWithProbs(rng, logits, opts).tokenId;
 }

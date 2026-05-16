@@ -13,6 +13,8 @@ export {
   DEFAULT_SAMPLE_OPTIONS,
   greedyArgmax,
   sampleLogits,
+  sampleLogitsWithProbs,
   type Random01,
   type SampleOptions,
+  type SampleWithProbsResult,
 } from './sampling';
