@@ -3,7 +3,30 @@ import path from 'node:path';
 
 function loadWgsl(relativePath: string): string {
   const file = relativePath.replace(/^\.\//, '');
-  return readFileSync(path.join(__dirname, file), 'utf8');
+  return rewriteMainForLargeDispatch(readFileSync(path.join(__dirname, file), 'utf8'));
+}
+
+const MAIN_HEADER_PATTERN =
+  /fn\s+main\s*\(\s*@builtin\(global_invocation_id\)\s+gid:\s*vec3u\s*\)\s*\{/;
+
+// WebGPU caps `dispatchWorkgroups` at 65535 per dimension. Once a kernel needs more
+// workgroups than that on its single dimension (e.g. logits of `[batch*seq, vocab]`
+// at vocab=30k, seq=1024), the host splits the dispatch across the Y dimension. The
+// kernels still index work with a flat `gid.x`, so rewrite their `main` signature to
+// derive the flat thread id from `workgroup_id`/`num_workgroups`/`local_invocation_id`
+// instead of relying on the single-dim `global_invocation_id.x`.
+export function rewriteMainForLargeDispatch(code: string): string {
+  return code.replace(
+    MAIN_HEADER_PATTERN,
+    [
+      'fn main(',
+      '  @builtin(workgroup_id) _wg_id: vec3u,',
+      '  @builtin(num_workgroups) _num_wg: vec3u,',
+      '  @builtin(local_invocation_id) _l_id: vec3u,',
+      ') {',
+      '  let gid = vec3u((_wg_id.y * _num_wg.x + _wg_id.x) * 256u + _l_id.x, 0u, 0u);',
+    ].join('\n'),
+  );
 }
 
 function cat(...parts: string[]): string {

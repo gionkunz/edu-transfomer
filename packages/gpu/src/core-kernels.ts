@@ -199,6 +199,28 @@ function workgroupCount(elementCount: number): number {
 }
 
 /**
+ * `dispatchWorkgroups` is capped at 65535 per dimension by WebGPU. Large 1D problems
+ * (e.g. logits at vocab=30k × seq=1024) overflow that limit on X alone, so spread the
+ * grid across Y. Kernels recover the flat thread id via the rewritten `main` signature
+ * in `load-core-wgsl.ts` (`rewriteMainForLargeDispatch`).
+ */
+const MAX_WORKGROUPS_PER_DIM = 65535;
+
+function dispatchGrid(workgroups: number): readonly [number, number, number] {
+  if (workgroups <= MAX_WORKGROUPS_PER_DIM) {
+    return [workgroups, 1, 1];
+  }
+  const x = MAX_WORKGROUPS_PER_DIM;
+  const y = Math.ceil(workgroups / x);
+  if (y > MAX_WORKGROUPS_PER_DIM) {
+    throw new Error(
+      `dispatchGrid: workgroup count ${workgroups} exceeds 2D capacity (${MAX_WORKGROUPS_PER_DIM}^2)`,
+    );
+  }
+  return [x, y, 1];
+}
+
+/**
  * Thread count for packed bf16 kernels that own one `u32` word per thread. Each word
  * holds **two** logical scalars, so dispatch only `ceil(N / 2)` threads — see the
  * dispatch invariants documented in `shared-bf16.wgsl`.
@@ -527,7 +549,7 @@ function dispatchKernel(
   const pass = encoder.beginComputePass();
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(workgroupCount(totalThreads));
+  pass.dispatchWorkgroups(...dispatchGrid(workgroupCount(totalThreads)));
   pass.end();
   ctx.queue.submit([encoder.finish()]);
 }

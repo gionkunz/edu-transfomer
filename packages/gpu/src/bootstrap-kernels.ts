@@ -47,7 +47,12 @@ export function dispatchFillPi(
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
   const wg = Math.ceil(elementCount / WORKGROUP_SIZE);
-  pass.dispatchWorkgroups(wg);
+  const MAX_PER_DIM = 65535;
+  if (wg <= MAX_PER_DIM) {
+    pass.dispatchWorkgroups(wg);
+  } else {
+    pass.dispatchWorkgroups(MAX_PER_DIM, Math.ceil(wg / MAX_PER_DIM), 1);
+  }
   pass.end();
   ctx.queue.submit([encoder.finish()]);
 }
