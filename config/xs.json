@@ -2,7 +2,7 @@
   "vocabSize": 10000,
   "maxSeqLen": 1024,
   "dModel": 384,
-  "nHeads": 12,
+  "nHeads": 6,
   "dFf": 1536,
   "nLayers": 6
 }
