@@ -256,140 +256,194 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   if (!tokenIds) {
     draft.phase = 'read_corpus';
     draft.detailLine =
-      files.length === 1 ? (files[0] ?? '') : `parallel disk read · ${String(files.length)} files`;
+      files.length === 1
+        ? (files[0] ?? '')
+        : `sequential per-file encode · ${String(files.length)} files`;
     draft.fileProgress = {
       currentIndex: 0,
       totalFiles: files.length,
-      pathRel: files.length === 1 && files[0] !== undefined ? files[0] : '(parallel reads)',
+      pathRel: files.length === 1 && files[0] !== undefined ? files[0] : '(per-file reads)',
       cumulativeChars: 0,
     };
     dashThrottle.flush();
 
-    // Whole corpus becomes one `\n`-joined UTF-16 string → BPE cannot be split across workers without changing merges.
-    const textParts = await Promise.all(files.map((rel) => readFile(path.resolve(rel), 'utf8')));
-    const cumulativeChars = textParts.reduce((sum, chunk) => sum + chunk.length, 0);
-
-    draft.fileProgress = {
-      currentIndex: files.length,
-      totalFiles: files.length,
-      pathRel:
-        files.length === 1 && files[0] !== undefined ? files[0] : `${String(files.length)} files`,
-      cumulativeChars,
-    };
-    dashThrottle.flush();
-
+    // Per-file read+encode loop. Two reasons we cannot read+join all files first:
+    //   1. V8's max single-string length is ~512 MiB; large multi-shard corpora
+    //      (e.g. multiple Cosmopedia shards) blow this on `textParts.join('\n')`.
+    //   2. Holding every file's UTF-16 string + the joined string + the encoder
+    //      working set simultaneously needlessly inflates peak RSS.
+    // Equivalence: under the `gpt2-v1` pretokenizer (and any pretokenizer that
+    // splits on `\n`), `encode(f0 + '\n' + f1) === concat(encode(f0),
+    // encode('\n'), encode(f1))`. The tokenizer test
+    // `encodeUint32(x) === concat(encodeUint32(region_i))` asserts this. We
+    // therefore encode each file independently and splice the `\n`-token stream
+    // between adjacent files, preserving exact token-id equivalence with the
+    // old joined-corpus path so existing on-disk caches remain valid.
     draft.phase = 'encode_corpus';
-    draft.detailLine = `${String(cumulativeChars)} chars → token ids`;
+    draft.detailLine = `${String(files.length)} file(s) → token ids`;
     draft.encodeProgress = null;
     dashThrottle.flush();
 
-    const corpus = textParts.join('\n');
-
-    console.error(
-      `train: encoding corpus (${String(corpus.length)} chars); BPE merges stream progress in the dashboard…`,
-    );
-
-    let expandChars = corpus.length;
-    let expandBytes = corpus.length;
+    const newlineSeparatorIds =
+      files.length > 1 ? tokenizer.encodeUint32('\n') : new Uint32Array(0);
 
     const encodeWallStartMs = Date.now();
-    let initialTokForEncode = 0;
+    const pretokenizerPolicy = tokenizer.pretokenizer;
+
+    // Cross-file accumulators for stable EMA / ETA over the whole corpus.
     let lastSampleWallMs = encodeWallStartMs;
     let passesPerSecEma: number | null = null;
-
-    const pretokenizerPolicy = tokenizer.pretokenizer;
-    let lastRegionIndex = -1;
-    let completedRegions = 0;
     let cumulativePassesAcrossRegions = 0;
-    let lastPassCountForRegion = 0;
+    let completedRegionsGlobal = 0;
+    let expandCharsCurr = 0;
+    let expandBytesCurr = 0;
+    let initialTokForFile = 0;
 
-    tokenIds = await tokenizer.encodeUint32Async(corpus, {
-      onYield: () => {
-        dashThrottle.schedule();
-      },
-      onProgress: (ev) => {
-        const nowMs = Date.now();
-        const encodeElapsedSec = (nowMs - encodeWallStartMs) / 1000;
-        if (ev.phase === 'expand') {
-          expandChars = ev.textChars;
-          expandBytes = ev.byteLength;
-          initialTokForEncode = ev.initialTokenCount;
-          lastSampleWallMs = nowMs;
-          passesPerSecEma = null;
-          lastRegionIndex = -1;
-          completedRegions = 0;
-          cumulativePassesAcrossRegions = 0;
-          lastPassCountForRegion = 0;
-          draft.encodeProgress = {
-            textChars: ev.textChars,
-            byteLength: ev.byteLength,
-            mergeIteration: 0,
-            mergeSubphase: 'expand',
-            tokenCount: ev.initialTokenCount,
-            initialTokenCount: initialTokForEncode,
-            encodeElapsedSec,
-            pretokenizerPolicy,
-            regionsPerSec: null,
-            etaSec: null,
-            regionIndex: 0,
-            regionsTotal: 0,
-            meanPassesPerRegion: null,
-          };
-        } else {
-          // Region transition: roll the previous region's final pass count into cumulative,
-          // count it as completed, and reset the per-region pass counter.
-          if (ev.regionIndex !== lastRegionIndex) {
-            if (lastRegionIndex >= 0) {
-              cumulativePassesAcrossRegions += lastPassCountForRegion;
-              completedRegions += 1;
-            }
-            lastRegionIndex = ev.regionIndex;
-            lastPassCountForRegion = 0;
-          }
-          // Each event reports passes-so-far within the current region.
-          lastPassCountForRegion = ev.mergeIteration;
+    const tokenChunks: Uint32Array[] = [];
+    let cumulativeChars = 0;
+    let totalTokenCountSoFar = 0;
 
-          // Rate is "pass events per wall second" over a coarse moving sample.
-          const dWall = (nowMs - lastSampleWallMs) / 1000;
-          if (dWall >= 0.05) {
-            const instant = 1 / dWall;
-            passesPerSecEma =
-              passesPerSecEma === null ? instant : instant * 0.25 + passesPerSecEma * 0.75;
+    for (let fi = 0; fi < files.length; fi++) {
+      const rel = files[fi];
+      if (rel === undefined) continue;
+
+      draft.fileProgress = {
+        currentIndex: fi,
+        totalFiles: files.length,
+        pathRel: rel,
+        cumulativeChars,
+      };
+      dashThrottle.flush();
+
+      const text = await readFile(path.resolve(rel), 'utf8');
+      cumulativeChars += text.length;
+      draft.fileProgress = {
+        currentIndex: fi + 1,
+        totalFiles: files.length,
+        pathRel: rel,
+        cumulativeChars,
+      };
+      dashThrottle.flush();
+
+      console.error(
+        `train: encoding file ${String(fi + 1)}/${String(files.length)} (${String(text.length)} chars): ${rel}`,
+      );
+
+      // Per-file region tracking; rolled into the global accumulators at end of file.
+      let lastRegionIndexLocal = -1;
+      let lastPassCountForRegionLocal = 0;
+
+      const fileIds = await tokenizer.encodeUint32Async(text, {
+        onYield: () => {
+          dashThrottle.schedule();
+        },
+        onProgress: (ev) => {
+          const nowMs = Date.now();
+          const encodeElapsedSec = (nowMs - encodeWallStartMs) / 1000;
+          if (ev.phase === 'expand') {
+            expandCharsCurr = ev.textChars;
+            expandBytesCurr = ev.byteLength;
+            initialTokForFile = ev.initialTokenCount;
             lastSampleWallMs = nowMs;
+            lastRegionIndexLocal = -1;
+            lastPassCountForRegionLocal = 0;
+            const meanPasses =
+              completedRegionsGlobal > 0
+                ? cumulativePassesAcrossRegions / completedRegionsGlobal
+                : null;
+            draft.encodeProgress = {
+              textChars: ev.textChars,
+              byteLength: ev.byteLength,
+              mergeIteration: 0,
+              mergeSubphase: 'expand',
+              tokenCount: totalTokenCountSoFar + ev.initialTokenCount,
+              initialTokenCount: initialTokForFile,
+              encodeElapsedSec,
+              pretokenizerPolicy,
+              regionsPerSec: null,
+              etaSec: null,
+              regionIndex: 0,
+              regionsTotal: 0,
+              meanPassesPerRegion: meanPasses,
+            };
+          } else {
+            if (ev.regionIndex !== lastRegionIndexLocal) {
+              if (lastRegionIndexLocal >= 0) {
+                cumulativePassesAcrossRegions += lastPassCountForRegionLocal;
+                completedRegionsGlobal += 1;
+              }
+              lastRegionIndexLocal = ev.regionIndex;
+              lastPassCountForRegionLocal = 0;
+            }
+            lastPassCountForRegionLocal = ev.mergeIteration;
+
+            const dWall = (nowMs - lastSampleWallMs) / 1000;
+            if (dWall >= 0.05) {
+              const instant = 1 / dWall;
+              passesPerSecEma =
+                passesPerSecEma === null ? instant : instant * 0.25 + passesPerSecEma * 0.75;
+              lastSampleWallMs = nowMs;
+            }
+
+            const meanPasses =
+              completedRegionsGlobal > 0
+                ? cumulativePassesAcrossRegions / completedRegionsGlobal
+                : null;
+            const regionsRemaining = Math.max(0, ev.regionsTotal - ev.regionIndex);
+            const eta = perRegionPessimisticEta(regionsRemaining, meanPasses, passesPerSecEma);
+            const regionsPerSec =
+              meanPasses !== null && passesPerSecEma !== null && meanPasses > 0
+                ? passesPerSecEma / meanPasses
+                : null;
+
+            draft.encodeProgress = {
+              textChars: expandCharsCurr,
+              byteLength: expandBytesCurr,
+              mergeIteration: ev.mergeIteration,
+              mergeSubphase: 'merge',
+              tokenCount: totalTokenCountSoFar + ev.tokenCount,
+              initialTokenCount: initialTokForFile,
+              encodeElapsedSec,
+              pretokenizerPolicy,
+              regionsPerSec,
+              etaSec: eta,
+              regionIndex: ev.regionIndex,
+              regionsTotal: ev.regionsTotal,
+              meanPassesPerRegion: meanPasses,
+            };
           }
+          dashThrottle.schedule();
+        },
+      });
 
-          const meanPasses =
-            completedRegions > 0 ? cumulativePassesAcrossRegions / completedRegions : null;
-          const regionsRemaining = Math.max(0, ev.regionsTotal - completedRegions);
-          const eta = perRegionPessimisticEta(regionsRemaining, meanPasses, passesPerSecEma);
-          const regionsPerSec =
-            meanPasses !== null && passesPerSecEma !== null && meanPasses > 0
-              ? passesPerSecEma / meanPasses
-              : null;
+      if (lastRegionIndexLocal >= 0) {
+        cumulativePassesAcrossRegions += lastPassCountForRegionLocal;
+        completedRegionsGlobal += 1;
+      }
 
-          draft.encodeProgress = {
-            textChars: expandChars,
-            byteLength: expandBytes,
-            mergeIteration: ev.mergeIteration,
-            mergeSubphase: 'merge',
-            tokenCount: ev.tokenCount,
-            initialTokenCount: initialTokForEncode,
-            encodeElapsedSec,
-            pretokenizerPolicy,
-            regionsPerSec,
-            etaSec: eta,
-            regionIndex: ev.regionIndex,
-            regionsTotal: ev.regionsTotal,
-            meanPassesPerRegion: meanPasses,
-          };
-        }
-        dashThrottle.schedule();
-      },
-    });
+      tokenChunks.push(fileIds);
+      totalTokenCountSoFar += fileIds.length;
+      if (fi < files.length - 1) {
+        tokenChunks.push(newlineSeparatorIds);
+        totalTokenCountSoFar += newlineSeparatorIds.length;
+        cumulativeChars += 1;
+      }
+    }
     dashThrottle.flush();
 
+    let totalTokenCount = 0;
+    for (const c of tokenChunks) totalTokenCount += c.length;
+    tokenIds = new Uint32Array(totalTokenCount);
+    {
+      let off = 0;
+      for (const c of tokenChunks) {
+        tokenIds.set(c, off);
+        off += c.length;
+      }
+    }
+
     draft.encodeProgress = null;
-    corpusUtf16Units = corpus.length;
+    corpusUtf16Units = cumulativeChars;
 
     if (
       corpusTokenFingerprint !== null &&
@@ -444,15 +498,21 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   const opt = new AdamW(rt, reg, { lr: optim.lrMax, weightDecay: optim.weightDecay });
 
   const totalSteps = opts.steps;
+  // Warmup = 10% of total steps, GPT-2/-3 style. Clamp to [1, totalSteps-1] so
+  // very short runs (smoke tests) still get at least one warmup step and never
+  // consume the entire schedule. The previous `min(10, …)` cap meant 1000-step
+  // runs only warmed up for 10 steps, leaving the cosine to immediately decay
+  // from peak LR and effectively under-training at the configured `lrMax`.
+  const warmupSteps = Math.max(1, Math.min(Math.floor(totalSteps / 10), totalSteps - 1));
   const schedule = {
     lrMax: optim.lrMax,
     lrMin: optim.lrMin,
-    warmupSteps: Math.min(10, Math.max(1, Math.floor(totalSteps / 10))),
+    warmupSteps,
     totalSteps,
   };
 
   draft.phase = 'trainer_init';
-  draft.detailLine = `AdamW · lr ${String(optim.lrMax)}→${String(optim.lrMin)} · wd ${String(optim.weightDecay)} · clip ${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`;
+  draft.detailLine = `AdamW · lr ${String(optim.lrMax)}→${String(optim.lrMin)} · warmup ${String(warmupSteps)}/${String(totalSteps)} · wd ${String(optim.weightDecay)} · clip ${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`;
   dashThrottle.flush();
   const trainer = new Trainer(rt, model, reg, opt, {
     maxGradNorm: optim.maxGradNorm,
@@ -475,7 +535,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   dashThrottle.flush();
 
   console.error(
-    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`,
+    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`,
   );
   console.error(
     'train: first optimizer step often waits on GPU shader/pipeline warmup (minutes on some setups).',
@@ -509,6 +569,18 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       draft.tokensPerSecApprox = opts.seqLen / dt;
       draft.recentLosses.push(loss);
       dashThrottle.flush();
+
+      // Drain Node's global perf-entry buffer every ~256 steps. The WebGPU
+      // bindings (dawn-node) emit a `performance.measure(...)` per kernel
+      // dispatch; over very long runs (e.g. 20k steps × ~50 dispatches) this
+      // buffer overflows the default 10k cap and Node prints
+      // `MaxPerformanceEntryBufferExceededWarning`. We never read marks /
+      // measures from our own code (only `performance.now()`), so it's safe
+      // to drop them. Cheap: O(buffer size) once per N steps.
+      if ((s & 0xff) === 0xff) {
+        performance.clearMarks();
+        performance.clearMeasures();
+      }
     }
     draft.trainingPaused = false;
     draft.trainingPauseBeganAtMs = null;
