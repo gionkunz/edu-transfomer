@@ -436,18 +436,18 @@ Full byte-pair encoding as described in the research section:
 3. Iteratively merge the most frequent adjacent pair (incremental pair-frequency index, no full-corpus rescan per merge)
 4. Save ordered merge list + vocabulary
 
-**Pre-tokenizer policy.** Both `train` and `encode` operate on **pre-tokenized regions** under a named regex policy. The only currently supported policy is `word-and-punct-v1` — splits on whitespace / digits / Unicode letters / other. Merges never cross region boundaries. This bounds per-region pass count at `O(log region_length)` so encode time scales with corpus size linearly, not with vocab size × corpus size.
+**Pre-tokenizer policy.** Both `train` and `encode` operate on **pre-tokenized regions** under a named regex policy. The only currently supported policy is `gpt2-v1` — GPT-2 / Llama-style splitting where a content region MAY absorb a single leading ASCII space (` the`, ` and`, ` 42`, ` →` are single regions), English contractions (`'s 't 'm 'd 're 've 'll`) form their own regions, and runs of trailing whitespace at end-of-line stay isolated via the `\s+(?!\S)` branch. The exact regex is `/'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu`. Merges never cross region boundaries. This bounds per-region pass count at `O(log region_length)` so encode time scales with corpus size linearly, not with vocab size × corpus size, and roughly halves the token count for English prose vs. an isolated-whitespace scheme.
 
 - **Hot-path lookup.** The encode pair-rank table is a single-level `Map<number, number>` keyed by `L * vocabSize + R` so probes are one hash lookup, not two. Safe for any `vocabSize ≤ 94 906 265`.
 - **Future policies.** New policies can be added as new labels without breaking saved files; `load` rejects any unknown label.
 
-**Saved format.** JSON file, **schema `version: 2`**:
+**Saved format.** JSON file, **schema `version: 3`**:
 
 ```jsonc
 {
   "kind": "llm-transformer-diy/bpe-tokenizer",
-  "version": 2,
-  "pretokenizer": "word-and-punct-v1",
+  "version": 3,
+  "pretokenizer": "gpt2-v1",
   "specialTokens": ["<|pad|>", "<|endoftext|>"],
   "byteOffset": 2,
   "merges": [[L, R], ...],
@@ -455,7 +455,7 @@ Full byte-pair encoding as described in the research section:
 }
 ```
 
-`load` requires `version: 2` and a known `pretokenizer` label. Older v1 files (no `pretokenizer` field) are rejected with a clear "retrain" message; the previous null / whole-corpus encode path is gone.
+`load` requires `version: 3` and a known `pretokenizer` label (currently only `'gpt2-v1'`). Older v1 / v2 files (including the obsolete `'word-and-punct-v1'` pre-tokenizer) are rejected with a clear "retrain" message.
 
 ---
 

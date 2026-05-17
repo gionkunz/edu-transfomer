@@ -29,7 +29,7 @@ export interface EncodeProgressSnapshot {
   /** Wall seconds since corpus **`encodeUint32Async`** began (expand + merge). */
   readonly encodeElapsedSec: number;
   /** Active tokenizer pretokenizer policy (label). */
-  readonly pretokenizerPolicy: 'word-and-punct-v1';
+  readonly pretokenizerPolicy: 'gpt2-v1';
   /** Smoothed regions-per-second throughput, **`null`** until estimated. */
   readonly regionsPerSec: number | null;
   /** ETA based on `regionsRemaining * meanPassesPerRegion / passRate` when rates are trusted. */
@@ -87,9 +87,35 @@ export interface TrainDashboardSnapshot {
 
   readonly trainStepCompleted: number;
   readonly trainLossLast: number;
+  /**
+   * Simple moving average of the last **20** training losses (or fewer, if not
+   * enough steps have completed yet). **`null`** before the first step.
+   * Smooths the per-step jitter; pair with **`trainLossLast`** for "current vs
+   * trend" reading.
+   */
+  readonly trainLossSma20: number | null;
   readonly trainLrDisplay: number;
   readonly tokensPerSecApprox: number;
   readonly recentLosses: readonly number[];
+  /**
+   * Mean characters per token observed during corpus encoding (i.e.
+   * **`corpusChars / corpusTokens`**). The tokenizer-invariant rescaling factor
+   * used by **`bitsPerCharSma20`** and per-character perplexity. **`null`** until
+   * encoding completes.
+   */
+  readonly meanCharsPerToken: number | null;
+  /**
+   * Bits per character implied by **`trainLossSma20`** (loss in nats divided by
+   * **`ln 2`** divided by **`meanCharsPerToken`**). The single tokenizer- and
+   * model-invariant comparable training-quality metric. **`null`** before the
+   * first step or before encoding completes.
+   */
+  readonly bitsPerCharSma20: number | null;
+  /**
+   * Per-token perplexity implied by **`trainLossSma20`**: **`exp(loss)`**.
+   * **`null`** before the first step.
+   */
+  readonly perplexitySma20: number | null;
   /**
    * When **`true`**, the training loop yields between steps (no **`trainStep`** / batch prep)
    * so the GPU stays idle until resumed (**`p`** in the TUI).

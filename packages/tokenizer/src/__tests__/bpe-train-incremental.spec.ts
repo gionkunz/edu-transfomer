@@ -10,7 +10,7 @@ import { BPETokenizer, splitIntoRegions } from '../bpe-tokenizer';
 
 /**
  * Reference helper: train a `BPETokenizer`-equivalent merge sequence using the
- * deprecated full-rescan path, folded over `word-and-punct-v1` regions to match
+ * deprecated full-rescan path, folded over `gpt2-v1` regions to match
  * the production tokenizer's mandatory pre-tokenization. Returns the merge list
  * and the populated vocab byte rows so callers can assert equivalence with the
  * new incremental training path.
@@ -27,7 +27,7 @@ function trainReferenceFullRescan(
     throw new Error(`reference: vocabSize ${vocabSize} < floor ${floor}`);
   }
 
-  let regions: Uint32Array[] = splitIntoRegions(corpus, 'word-and-punct-v1').map((r) => {
+  let regions: Uint32Array[] = splitIntoRegions(corpus, 'gpt2-v1').map((r) => {
     const b = enc.encode(r);
     const u = new Uint32Array(b.length);
     for (let i = 0; i < b.length; i++) u[i] = S + b[i];

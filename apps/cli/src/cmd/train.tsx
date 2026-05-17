@@ -461,10 +461,10 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     // started with `--expose-gc`. No-op otherwise. The buffer pool already
     // eliminates most per-step churn; this is belt-and-suspenders for long runs.
     forceGcEverySteps: 50,
-    // Periodic buffer-pool diagnostics on stderr so we can verify the pool's
-    // hit-rate after warmup and watch its idle footprint. Visible only on the
-    // diagnostics stream, not the TUI dashboard.
-    logBufferPoolEverySteps: 100,
+    // `logBufferPoolEverySteps` is intentionally not set: the pool's hit-rate
+    // and idle-footprint behaviour is well understood and the per-100-step
+    // stderr line just clutters the diagnostics stream. Re-enable on demand
+    // when investigating pool regressions.
   });
 
   draft.archSummary = `${String(gptCfg.nLayers)}L · d${String(model.config.dModel)} · V${String(model.config.vocabSize)} · ${computeDtype}`;

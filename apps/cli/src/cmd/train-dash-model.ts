@@ -37,6 +37,24 @@ export interface TrainDashboardDraft {
 }
 
 const SPARKLINE_MAX = 64;
+const LOSS_SMA_WINDOW = 20;
+
+/** Mean of the last **`LOSS_SMA_WINDOW`** finite values in **`losses`**. */
+function trailingSma(losses: readonly number[], window: number): number | null {
+  if (losses.length === 0) return null;
+  const start = Math.max(0, losses.length - window);
+  let sum = 0;
+  let count = 0;
+  for (let i = start; i < losses.length; i++) {
+    const v = losses[i];
+    if (v === undefined || !Number.isFinite(v)) continue;
+    sum += v;
+    count += 1;
+  }
+  return count === 0 ? null : sum / count;
+}
+
+const LN2 = Math.log(2);
 
 export function createInitialTrainDashboardDraft(opts: {
   readonly outDirDisplay: string;
@@ -93,6 +111,17 @@ export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDa
       );
     }
   }
+  const sma20 = trailingSma(draft.recentLosses, LOSS_SMA_WINDOW);
+  const meanCharsPerToken =
+    draft.corpusChars !== null && draft.corpusTokens !== null && draft.corpusTokens > 0
+      ? draft.corpusChars / draft.corpusTokens
+      : null;
+  const bitsPerCharSma20 =
+    sma20 !== null && meanCharsPerToken !== null && meanCharsPerToken > 0
+      ? sma20 / LN2 / meanCharsPerToken
+      : null;
+  const perplexitySma20 = sma20 !== null && Number.isFinite(sma20) ? Math.exp(sma20) : null;
+
   return {
     phase: draft.phase,
     detailLine: draft.detailLine,
@@ -113,9 +142,13 @@ export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDa
     totalTrainSteps: draft.totalTrainSteps,
     trainStepCompleted: draft.trainStepCompleted,
     trainLossLast: draft.trainLossLast,
+    trainLossSma20: sma20,
     trainLrDisplay: draft.trainLrDisplay,
     tokensPerSecApprox: draft.tokensPerSecApprox,
     recentLosses: draft.recentLosses.slice(sliceFrom),
+    meanCharsPerToken,
+    bitsPerCharSma20,
+    perplexitySma20,
     trainingPaused: draft.trainingPaused,
   };
 }

@@ -44,24 +44,34 @@ export type BpeEncodeProgressEvent =
 /**
  * Pre-tokenizer policy applied by **`encode`** and **`train`** before any BPE step.
  *
- * Currently a single label — **`word-and-punct-v1`** (split on whitespace / digits /
- * Unicode letters / other). The label is persisted in the tokenizer JSON so a future
- * policy can be added without breaking loaded tokenizers.
+ * Currently a single label — **`gpt2-v1`** (GPT-2 / Llama-style: a content region MAY
+ * carry a single leading space; English contractions form their own regions; runs of
+ * trailing whitespace at end-of-line stay isolated). The label is persisted in the
+ * tokenizer JSON so a future policy can be added without breaking loaded tokenizers.
  */
-export type PretokenizerPolicy = 'word-and-punct-v1';
+export type PretokenizerPolicy = 'gpt2-v1';
 
 /**
- * Regex backing **`word-and-punct-v1`**: matches contiguous runs of one of four kinds —
- * whitespace, ASCII digits, Unicode letters, or everything else (punctuation / symbols).
- * Every code point falls under exactly one alternative, so the concatenation of matches
- * is byte-for-byte equal to the original input.
+ * Regex backing **`gpt2-v1`**, in declaration-order alternative priority:
+ *
+ * 1. English contraction tails (`'s | 't | 're | 've | 'm | 'll | 'd`).
+ * 2. Letters, optionally preceded by a single ASCII space — produces ` the`, ` and`, …
+ * 3. Digits, optionally preceded by a single ASCII space.
+ * 4. Non-letter / non-digit / non-whitespace symbol runs, optionally preceded by a single
+ *    ASCII space.
+ * 5. Trailing-whitespace runs at end-of-line / end-of-input (`\s+(?!\S)`).
+ * 6. Any remaining whitespace runs.
+ *
+ * Every code point falls under exactly one alternative on each match step, so the
+ * concatenation of matches is byte-for-byte equal to the original input.
  */
-export const PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1: RegExp = /\s+|\d+|\p{L}+|[^\s\p{L}\p{N}]+/gu;
+export const PRETOKENIZER_REGEX_GPT2_V1: RegExp =
+  /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 
 /**
  * Split **`text`** into adjacent non-overlapping **regions** under **`policy`**.
  *
- * Each match of {@link PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1} produces one region; the
+ * Each match of {@link PRETOKENIZER_REGEX_GPT2_V1} produces one region; the
  * concatenation equals **`text`**. Allocates exactly one fresh array per call.
  */
 export function splitIntoRegions(text: string, _policy: PretokenizerPolicy): readonly string[] {
@@ -69,8 +79,8 @@ export function splitIntoRegions(text: string, _policy: PretokenizerPolicy): rea
     return [];
   }
   const out: string[] = [];
-  PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1.lastIndex = 0;
-  for (const m of text.matchAll(PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1)) {
+  PRETOKENIZER_REGEX_GPT2_V1.lastIndex = 0;
+  for (const m of text.matchAll(PRETOKENIZER_REGEX_GPT2_V1)) {
     out.push(m[0]);
   }
   return out;
@@ -101,8 +111,8 @@ function buildRegionBoundaryBitmap(
     const utf8 = new TextEncoder();
     let byteCursor = 0;
     let firstRegion = true;
-    PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1.lastIndex = 0;
-    for (const m of textForRegions.matchAll(PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1)) {
+    PRETOKENIZER_REGEX_GPT2_V1.lastIndex = 0;
+    for (const m of textForRegions.matchAll(PRETOKENIZER_REGEX_GPT2_V1)) {
       const regionBytes = utf8.encode(m[0]);
       if (!firstRegion) {
         const prevLastIdx = byteCursor - 1;
@@ -124,29 +134,28 @@ function buildRegionBoundaryBitmap(
 }
 
 /**
- * Per-module cache for non-ASCII code point classification under `word-and-punct-v1`.
- * Values: 0 = whitespace, 1 = digit, 2 = letter, 3 = other.
- * The cache is populated lazily via single-char regex tests and is stable across calls.
+ * Per-module cache for non-ASCII code point classification under `gpt2-v1`.
+ * Values: 0 = whitespace (`\s`), 1 = digit (`\p{N}`), 2 = letter (`\p{L}`), 3 = other.
+ * Populated lazily via single-char regex tests; stable across calls.
  */
-const WORD_PUNCT_CP_CLASS_CACHE = new Map<number, 0 | 1 | 2 | 3>();
+const CP_CLASS_CACHE = new Map<number, 0 | 1 | 2 | 3>();
 
 /**
- * Classify a Unicode code point as one of four `word-and-punct-v1` character classes:
- * `0` whitespace (`\s`), `1` digit (`\d`), `2` letter (`\p{L}`), `3` other.
+ * Classify a Unicode code point as one of four character classes used by the
+ * `gpt2-v1` regex alternatives: `0` whitespace, `1` digit, `2` letter, `3` other.
  *
- * ASCII is handled by direct comparison (fast path). Non-ASCII code points are tested
- * once via single-character regex tests and the result is cached.
+ * ASCII is handled by direct comparison (fast path). Non-ASCII code points are
+ * tested once via single-character regex tests and the result is cached.
  */
-function classifyWordAndPunctCodePoint(cp: number): 0 | 1 | 2 | 3 {
+function classifyCodePoint(cp: number): 0 | 1 | 2 | 3 {
   if (cp < 0x80) {
-    // ASCII fast path — covers ≥ 95 % of typical training text.
     if (cp === 0x09 || cp === 0x0a || cp === 0x0b || cp === 0x0c || cp === 0x0d || cp === 0x20)
-      return 0; // whitespace
-    if (cp >= 0x30 && cp <= 0x39) return 1; // digit
-    if ((cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a)) return 2; // letter
-    return 3; // other
+      return 0;
+    if (cp >= 0x30 && cp <= 0x39) return 1;
+    if ((cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a)) return 2;
+    return 3;
   }
-  const cached = WORD_PUNCT_CP_CLASS_CACHE.get(cp);
+  const cached = CP_CLASS_CACHE.get(cp);
   if (cached !== undefined) return cached;
   const ch = String.fromCodePoint(cp);
   let cls: 0 | 1 | 2 | 3;
@@ -154,17 +163,150 @@ function classifyWordAndPunctCodePoint(cp: number): 0 | 1 | 2 | 3 {
   else if (/^\d$/u.test(ch)) cls = 1;
   else if (/^\p{L}$/u.test(ch)) cls = 2;
   else cls = 3;
-  WORD_PUNCT_CP_CLASS_CACHE.set(cp, cls);
+  CP_CLASS_CACHE.set(cp, cls);
   return cls;
 }
 
 /**
- * Walk raw UTF-8 bytes, classify each code point under `word-and-punct-v1`,
- * and set `boundary[i] = 1` for every byte `i` that is the **last byte of a region**
- * (i.e. the next byte starts a code point of a different class).
+ * Decode one UTF-8 code point starting at byte `i`. Returns the code point and the
+ * number of bytes consumed (1..4). Truncated multi-byte sequences at end-of-input
+ * are tolerated — missing trailing bytes are read as `0`. Lone continuation bytes
+ * (`0x80..0xC1` outside a multi-byte head) are reported as a 1-byte "code point" so
+ * the cursor stays aligned without throwing.
+ */
+function decodeOneUtf8(bytes: Uint8Array, i: number, n: number): { cp: number; seqLen: number } {
+  const b0 = bytes[i];
+  if (b0 < 0x80) return { cp: b0, seqLen: 1 };
+  if (b0 < 0xc2) return { cp: b0, seqLen: 1 };
+  if (b0 < 0xe0) {
+    return {
+      cp: ((b0 & 0x1f) << 6) | (i + 1 < n ? bytes[i + 1] & 0x3f : 0),
+      seqLen: 2,
+    };
+  }
+  if (b0 < 0xf0) {
+    return {
+      cp:
+        ((b0 & 0x0f) << 12) |
+        (i + 1 < n ? (bytes[i + 1] & 0x3f) << 6 : 0) |
+        (i + 2 < n ? bytes[i + 2] & 0x3f : 0),
+      seqLen: 3,
+    };
+  }
+  return {
+    cp:
+      ((b0 & 0x07) << 18) |
+      (i + 1 < n ? (bytes[i + 1] & 0x3f) << 12 : 0) |
+      (i + 2 < n ? (bytes[i + 2] & 0x3f) << 6 : 0) |
+      (i + 3 < n ? bytes[i + 3] & 0x3f : 0),
+    seqLen: 4,
+  };
+}
+
+/**
+ * Compute the byte length of the next region starting at `start` under the
+ * `gpt2-v1` policy. The returned value is always `>= 1` for `start < n`. This
+ * function simulates the `gpt2-v1` regex's leftmost-first alternative trial in
+ * priority order:
  *
- * Ill-formed UTF-8 bytes (lone continuation bytes) are each treated as one OT token
- * so the cursor stays in sync without throwing.
+ * 1. English contractions: `'s | 't | 'm | 'd | 're | 've | 'll`.
+ * 2. ` ?\p{L}+` — optional single ASCII space + letter run.
+ * 3. ` ?\p{N}+` — optional single ASCII space + digit run.
+ * 4. ` ?[^\s\p{L}\p{N}]+` — optional single ASCII space + other-symbol run.
+ * 5. `\s+(?!\S)` — whitespace run with greedy backtrack so the trailing position is
+ *    EOI or another whitespace code point. Concretely: if the maximal whitespace
+ *    run is followed by content, peel off the LAST whitespace code point (it will
+ *    be absorbed by branches 2–4 on the next iteration if it is ASCII space).
+ * 6. `\s+` — single whitespace code point fallback when branches 2–5 did not apply.
+ */
+function nextRegionByteLength(bytes: Uint8Array, start: number, n: number): number {
+  const head = decodeOneUtf8(bytes, start, n);
+  const cp0 = head.cp;
+  const len0 = head.seqLen;
+  const cls0 = classifyCodePoint(cp0);
+
+  // Branch 1: English contraction tails. Only fires when the apostrophe itself
+  // is the first byte of the prospective match.
+  if (cp0 === 0x27 && start + 1 < n) {
+    const c1 = bytes[start + 1];
+    if (c1 === 0x73 /* s */ || c1 === 0x74 /* t */ || c1 === 0x6d /* m */ || c1 === 0x64 /* d */) {
+      return 2;
+    }
+    if (start + 2 < n) {
+      const c2 = bytes[start + 2];
+      if (c1 === 0x72 /* r */ && c2 === 0x65 /* e */) return 3;
+      if (c1 === 0x76 /* v */ && c2 === 0x65 /* e */) return 3;
+      if (c1 === 0x6c /* l */ && c2 === 0x6c /* l */) return 3;
+    }
+  }
+
+  // Branches 2–4 with leading ASCII space: peek the next code point's class.
+  if (cp0 === 0x20 && start + len0 < n) {
+    const next = decodeOneUtf8(bytes, start + 1, n);
+    const cls1 = classifyCodePoint(next.cp);
+    if (cls1 === 1 || cls1 === 2 || cls1 === 3) {
+      let pos = start + 1 + next.seqLen;
+      while (pos < n) {
+        const cp = decodeOneUtf8(bytes, pos, n);
+        if (classifyCodePoint(cp.cp) !== cls1) break;
+        pos += cp.seqLen;
+      }
+      return pos - start;
+    }
+  }
+
+  // Branches 2–4 without leading space: cp0 is itself letter/digit/other.
+  if (cls0 === 1 || cls0 === 2 || cls0 === 3) {
+    let pos = start + len0;
+    while (pos < n) {
+      const cp = decodeOneUtf8(bytes, pos, n);
+      if (classifyCodePoint(cp.cp) !== cls0) break;
+      pos += cp.seqLen;
+    }
+    return pos - start;
+  }
+
+  // Branches 5/6: cls0 is whitespace. Find the maximal whitespace run.
+  let wsEnd = start + len0;
+  while (wsEnd < n) {
+    const cp = decodeOneUtf8(bytes, wsEnd, n);
+    if (classifyCodePoint(cp.cp) !== 0) break;
+    wsEnd += cp.seqLen;
+  }
+
+  // Run extends to EOI: branch 5 takes the entire run as one region.
+  if (wsEnd === n) {
+    return wsEnd - start;
+  }
+
+  // Run is followed by non-WS content. Find the start byte of the LAST whitespace
+  // code point in the run; branch 5 matches everything before it.
+  let lastCpStart = wsEnd - 1;
+  while (lastCpStart > start && (bytes[lastCpStart] & 0xc0) === 0x80) {
+    lastCpStart -= 1;
+  }
+  if (lastCpStart > start) {
+    return lastCpStart - start;
+  }
+
+  // Single whitespace code point followed by non-WS content. If `cp0` had been
+  // ASCII `0x20` we would already have absorbed it via the consumeSpace branch
+  // above, so here `cp0` is necessarily a non-`0x20` whitespace code point
+  // (`\t`, `\n`, NBSP, …). Branch 6 takes it as its own region.
+  return len0;
+}
+
+/**
+ * Walk raw UTF-8 bytes under `gpt2-v1` and set `boundary[i] = 1` for every byte
+ * `i` that is the **last byte of a region** (i.e. the next byte starts a new
+ * region). The final byte of the input is never set, since there is no following
+ * pair to gate.
+ *
+ * Implemented as a small priority-ordered alternative trial against the
+ * `gpt2-v1` regex; see {@link nextRegionByteLength}. The result MUST be
+ * byte-for-byte identical to running {@link PRETOKENIZER_REGEX_GPT2_V1} via
+ * `String.matchAll` on the same corpus interpreted as UTF-8 — that property is
+ * exercised by `bpe-pretokenize.spec.ts`.
  */
 function fillBoundaryFromUtf8Bytes(
   bytes: Uint8Array,
@@ -172,45 +314,20 @@ function fillBoundaryFromUtf8Bytes(
   policy: PretokenizerPolicy,
 ): void {
   const n = bytes.length;
-  let prevCls = -1;
   let i = 0;
   while (i < n) {
-    const b0 = bytes[i];
-    let cp: number;
-    let seqLen: number;
-    if (b0 < 0x80) {
-      cp = b0;
-      seqLen = 1;
-    } else if (b0 < 0xc2) {
-      // Lone continuation byte — ill-formed UTF-8; treat as OT and advance by 1.
-      cp = b0;
-      seqLen = 1;
-    } else if (b0 < 0xe0) {
-      cp = ((b0 & 0x1f) << 6) | (i + 1 < n ? bytes[i + 1] & 0x3f : 0);
-      seqLen = 2;
-    } else if (b0 < 0xf0) {
-      cp =
-        ((b0 & 0x0f) << 12) |
-        (i + 1 < n ? (bytes[i + 1] & 0x3f) << 6 : 0) |
-        (i + 2 < n ? bytes[i + 2] & 0x3f : 0);
-      seqLen = 3;
-    } else {
-      cp =
-        ((b0 & 0x07) << 18) |
-        (i + 1 < n ? (bytes[i + 1] & 0x3f) << 12 : 0) |
-        (i + 2 < n ? (bytes[i + 2] & 0x3f) << 6 : 0) |
-        (i + 3 < n ? bytes[i + 3] & 0x3f : 0);
-      seqLen = 4;
+    const regionLen = nextRegionByteLength(bytes, i, n);
+    if (regionLen <= 0) {
+      throw new Error(
+        `fillBoundaryFromUtf8Bytes: zero-length region at byte ${String(i)} (policy=${policy})`,
+      );
     }
-    const cls = classifyWordAndPunctCodePoint(cp);
-    if (prevCls !== -1 && cls !== prevCls) {
-      // Class transition: the last byte of the previous code point ends a region.
-      boundary[i - 1] = 1;
+    const regionEnd = i + regionLen;
+    if (regionEnd < n) {
+      boundary[regionEnd - 1] = 1;
     }
-    prevCls = cls;
-    i += seqLen;
+    i = regionEnd;
   }
-  void policy; // used only for error messages on the string path
 }
 
 /** Instrumentation callbacks for **`encode`** (beyond the **`Tokenizer`** contract). */
@@ -261,8 +378,8 @@ function yieldEventLoopForHostUi(): Promise<void> {
 }
 
 const JSON_KIND = 'llm-transformer-diy/bpe-tokenizer' as const;
-const JSON_VERSION = 2 as const;
-const KNOWN_PRETOKENIZER_LABELS = new Set<PretokenizerPolicy>(['word-and-punct-v1']);
+const JSON_VERSION = 3 as const;
+const KNOWN_PRETOKENIZER_LABELS = new Set<PretokenizerPolicy>(['gpt2-v1']);
 
 const fatalDecoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -387,7 +504,7 @@ export class BPETokenizer implements Tokenizer {
   private activeVocabCount = 0;
 
   /** Active pre-tokenizer policy. Set by `train{,Async,...}` / `load`; immutable on a trained tokenizer. */
-  private pretokenizerPolicy: PretokenizerPolicy = 'word-and-punct-v1';
+  private pretokenizerPolicy: PretokenizerPolicy = 'gpt2-v1';
 
   constructor(options?: BPETokenizerOptions) {
     const defaults = ['<|pad|>', '<|endoftext|>'] as const;
@@ -492,7 +609,7 @@ export class BPETokenizer implements Tokenizer {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
 
-    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+    const policy: PretokenizerPolicy = 'gpt2-v1';
     const regionBoundary = buildRegionBoundaryBitmap(corpusUtf8, policy, textForRegions);
 
     const stream = materializeUtf8BytesIntoSlotPoolSync(corpusUtf8, S);
@@ -527,7 +644,7 @@ export class BPETokenizer implements Tokenizer {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.train');
 
-    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+    const policy: PretokenizerPolicy = 'gpt2-v1';
     const regionBoundary = buildRegionBoundaryBitmap(corpusUtf8, policy, textForRegions);
 
     const stream = await materializeUtf8BytesIntoSlotPool(corpusUtf8, S, {
@@ -580,7 +697,7 @@ export class BPETokenizer implements Tokenizer {
     const { rows, floor, S } = this.buildInitialVocabRows();
     this.assertVocabCapAtLeastFloor(vocabSizeRequested, floor, 'BPETokenizer.trainFromFiles');
 
-    const policy: PretokenizerPolicy = 'word-and-punct-v1';
+    const policy: PretokenizerPolicy = 'gpt2-v1';
 
     const stream = await materializeFilesIntoSlotPool(sortedAbsolutePaths, S, {
       ...(options?.hooks?.onCorpusUtf8Bytes !== undefined
@@ -644,7 +761,7 @@ export class BPETokenizer implements Tokenizer {
     for (let i = 0; i < n; i++) {
       bytes[i] = stream.value[i] - S;
     }
-    const boundaryNarrow = buildRegionBoundaryBitmap(bytes, 'word-and-punct-v1', null);
+    const boundaryNarrow = buildRegionBoundaryBitmap(bytes, 'gpt2-v1', null);
     const boundaryFull = new Uint8Array(stream.capacity);
     boundaryFull.set(boundaryNarrow.subarray(0, n));
     return boundaryFull;
@@ -1138,7 +1255,9 @@ function parseBpeTokenizerJson(raw: unknown): BPETokenizerJsonParsed {
   }
   if (rec.version !== JSON_VERSION) {
     throw new Error(
-      `BPETokenizer.load: unsupported version ${JSON.stringify(rec.version)} (need ${String(JSON_VERSION)}); retrain the tokenizer`,
+      `BPETokenizer.load: unsupported version ${JSON.stringify(rec.version)} ` +
+        `(need ${String(JSON_VERSION)}; both legacy version 1 and version 2 are rejected); ` +
+        `retrain the tokenizer`,
     );
   }
   const version = rec.version;

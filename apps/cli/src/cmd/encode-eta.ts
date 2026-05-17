@@ -1,6 +1,6 @@
 /**
  * Heuristics for **train** TUI during **`BPETokenizer.encodeUint32Async`** under the
- * **`word-and-punct-v1`** pre-tokenizer policy: encode folds over independent regions, so the
+ * **`gpt2-v1`** pre-tokenizer policy: encode folds over independent regions, so the
  * remaining wall-time scales with regions remaining and the average outer-pass count per
  * region.
  */

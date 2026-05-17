@@ -34,7 +34,7 @@ function formatEncodeCountApprox(n: number): string {
   return String(x);
 }
 
-/** Regions encoded per second under the **`word-and-punct-v1`** pre-tokenizer. */
+/** Regions encoded per second under the **`gpt2-v1`** pre-tokenizer. */
 function formatRegionThroughput(regionsPerSec: number | null): string {
   if (regionsPerSec === null || !Number.isFinite(regionsPerSec)) return '—';
   if (regionsPerSec >= 1000) return `${(regionsPerSec / 1000).toFixed(1)}k region/s`;
@@ -116,6 +116,28 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
 
   const setupPct = setupMacroPct(snap.phase);
   const lossStr = useMemo(() => snap.trainLossLast.toFixed(4), [snap.trainLossLast]);
+  const lossSmaStr = useMemo(
+    () => (snap.trainLossSma20 !== null ? snap.trainLossSma20.toFixed(4) : '—'),
+    [snap.trainLossSma20],
+  );
+  const bitsPerCharStr = useMemo(
+    () => (snap.bitsPerCharSma20 !== null ? snap.bitsPerCharSma20.toFixed(3) : '—'),
+    [snap.bitsPerCharSma20],
+  );
+  const ppxStr = useMemo(() => {
+    if (snap.perplexitySma20 === null || !Number.isFinite(snap.perplexitySma20)) return '—';
+    const v = snap.perplexitySma20;
+    if (v >= 100_000) return v.toExponential(2);
+    if (v >= 1000) return Math.round(v).toString();
+    return v.toFixed(1);
+  }, [snap.perplexitySma20]);
+  const charsPerTokStr = useMemo(
+    () =>
+      snap.meanCharsPerToken !== null && Number.isFinite(snap.meanCharsPerToken)
+        ? snap.meanCharsPerToken.toFixed(2)
+        : '—',
+    [snap.meanCharsPerToken],
+  );
   const lrStr = useMemo(() => snap.trainLrDisplay.toExponential(3), [snap.trainLrDisplay]);
 
   const trainProgressPct =
@@ -308,8 +330,8 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
             <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
-              <Text style={{ color: 'yellow' }}>{'Loss'}</Text>
-              <Text style={{ fontWeight: 'bold' }}>{lossStr}</Text>
+              <Text style={{ color: 'yellow' }}>{'Loss · sma(20)'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>{`${lossStr} · ${lossSmaStr}`}</Text>
             </Box>
             <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
               <Text style={{ color: 'green' }}>{'LR'}</Text>
@@ -318,6 +340,20 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
             <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
               <Text style={{ color: 'blue' }}>{'tok/s ~'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{snap.tokensPerSecApprox.toFixed(0)}</Text>
+            </Box>
+          </Box>
+          <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+              <Text style={{ color: 'magenta' }}>{'bits/char (sma)'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>{bitsPerCharStr}</Text>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+              <Text style={{ color: 'magenta' }}>{'ppx/tok (sma)'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>{ppxStr}</Text>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
+              <Text style={{ color: 'gray' }}>{'chars/tok'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>{charsPerTokStr}</Text>
             </Box>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>

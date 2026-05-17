@@ -60,7 +60,7 @@ type BpeMergeTables = {
   mergeOutputIdByPackedPair: PackedPairMap;
   specialTokens: string[];
   textEncoder: TextEncoder;
-  pretokenizerPolicy: 'word-and-punct-v1';
+  pretokenizerPolicy: 'gpt2-v1';
 };
 
 /**

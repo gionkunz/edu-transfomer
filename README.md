@@ -85,7 +85,7 @@ For several disjoint globs:
 llm tokenizer train --data 'corpus/real/*.txt' --data 'notes/*.txt' --vocab-size 8000 --out out/tok-8000.json
 ```
 
-> **BPE encode speed.** Tokenizers are trained under a mandatory **`word-and-punct-v1`** pre-tokenizer (split on whitespace / digits / Unicode letters / other). Encode walks each region independently and reaches quiescence in ~5 outer passes per region regardless of corpus size, dropping per-corpus encode from "hours" to "seconds" on 100 MB+ inputs. **Tokenizer JSON files saved before this change** no longer load (schema `version: 2` with an explicit `pretokenizer` label is required) — retrain to migrate. See `docs/project.md` → _BPE Tokenizer_ for the policy details.
+> **BPE pre-tokenizer.** Tokenizers are trained under a mandatory **`gpt2-v1`** pre-tokenizer (GPT-2 / Llama style: a content region MAY absorb a single leading ASCII space, English contractions form their own regions, trailing whitespace at end-of-line stays isolated). This roughly halves token count for English text vs. the older isolated-whitespace scheme and is the standard most production tokenizers use. Encode walks each region independently and reaches quiescence in ~5 outer passes per region regardless of corpus size, dropping per-corpus encode from "hours" to "seconds" on 100 MB+ inputs. **Tokenizer JSON files saved before this change** no longer load (schema `version: 3` with `pretokenizer: 'gpt2-v1'` is required) — retrain to migrate. See `docs/project.md` → _BPE Tokenizer_ for the policy details.
 
 ---
 

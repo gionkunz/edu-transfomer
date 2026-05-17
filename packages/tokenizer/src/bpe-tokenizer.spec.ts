@@ -313,8 +313,8 @@ describe('BPETokenizer', () => {
     const specials = [...DEFAULT_SPECIALS];
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: 1,
       merges: [],
@@ -332,8 +332,8 @@ describe('BPETokenizer', () => {
     const vocab = vocabWithoutRow(baseVocabMap(specials), 255);
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: specials.length,
       merges: [],
@@ -360,8 +360,8 @@ describe('BPETokenizer', () => {
     const vocab = vocabWithoutRow(merged.vocab, S + 256);
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: S,
       merges: merged.merges,
@@ -380,8 +380,8 @@ describe('BPETokenizer', () => {
     vocab[String(200)] = [256];
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: specials.length,
       merges: [],
@@ -398,8 +398,8 @@ describe('BPETokenizer', () => {
     const specials = [...DEFAULT_SPECIALS];
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: specials.length,
       merges: JSON.parse('[["x","y"]]') as [number, number][],
@@ -424,8 +424,8 @@ describe('BPETokenizer', () => {
     });
     const { path: filePath, cleanup } = await tmpJson({
       kind: 'llm-transformer-diy/bpe-tokenizer',
-      version: 2,
-      pretokenizer: 'word-and-punct-v1',
+      version: 3,
+      pretokenizer: 'gpt2-v1',
       specialTokens: specials,
       byteOffset: S,
       merges,

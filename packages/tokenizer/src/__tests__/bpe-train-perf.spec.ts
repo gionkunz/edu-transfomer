@@ -50,7 +50,7 @@ function trainReferenceFullRescan(
   const enc = new TextEncoder();
   const S = specials.length;
   const floor = S + 256;
-  let regions: Uint32Array[] = splitIntoRegions(corpus, 'word-and-punct-v1').map((r) => {
+  let regions: Uint32Array[] = splitIntoRegions(corpus, 'gpt2-v1').map((r) => {
     const b = enc.encode(r);
     const u = new Uint32Array(b.length);
     for (let i = 0; i < b.length; i++) u[i] = S + b[i];

@@ -1,6 +1,6 @@
 export {
   BPETokenizer,
-  PRETOKENIZER_REGEX_WORD_AND_PUNCT_V1,
+  PRETOKENIZER_REGEX_GPT2_V1,
   splitIntoRegions,
   type BpeTrainFromFilesHooks,
   type BpeTrainFromFilesOptions,
