@@ -4,7 +4,7 @@
   "projectType": "application",
   "sourceRoot": "apps/cli/src",
   "targets": {
-    "build": {
+    "_esbuild": {
       "executor": "@nx/esbuild:esbuild",
       "outputs": ["{workspaceRoot}/dist/apps/cli"],
       "defaultConfiguration": "production",
@@ -40,26 +40,30 @@
         }
       }
     },
+    "build": {
+      "executor": "nx:noop",
+      "dependsOn": ["_esbuild", "fix-cli-bootstrap-shebang"]
+    },
     "serve": {
       "continuous": true,
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
-      "dependsOn": ["build"],
+      "dependsOn": ["_esbuild"],
       "options": {
-        "buildTarget": "@llm-transformer-diy/cli:build",
+        "buildTarget": "@llm-transformer-diy/cli:_esbuild",
         "runBuildTargetDependencies": false
       },
       "configurations": {
         "development": {
-          "buildTarget": "@llm-transformer-diy/cli:build:development"
+          "buildTarget": "@llm-transformer-diy/cli:_esbuild:development"
         },
         "production": {
-          "buildTarget": "@llm-transformer-diy/cli:build:production"
+          "buildTarget": "@llm-transformer-diy/cli:_esbuild:production"
         }
       }
     },
     "prune-lockfile": {
-      "dependsOn": ["build"],
+      "dependsOn": ["_esbuild"],
       "cache": true,
       "executor": "@nx/js:prune-lockfile",
       "outputs": [
@@ -67,21 +71,27 @@
         "{workspaceRoot}/dist/apps/cli/package-lock.json"
       ],
       "options": {
-        "buildTarget": "@llm-transformer-diy/cli:build"
+        "buildTarget": "@llm-transformer-diy/cli:_esbuild"
       }
     },
     "copy-workspace-modules": {
-      "dependsOn": ["build"],
+      "dependsOn": ["_esbuild"],
       "cache": true,
       "outputs": ["{workspaceRoot}/dist/apps/cli/workspace_modules"],
       "executor": "@nx/js:copy-workspace-modules",
       "options": {
-        "buildTarget": "@llm-transformer-diy/cli:build"
+        "buildTarget": "@llm-transformer-diy/cli:_esbuild"
       }
     },
     "fix-cli-bootstrap-shebang": {
       "executor": "nx:run-commands",
-      "dependsOn": ["build"],
+      "dependsOn": ["_esbuild"],
+      "cache": true,
+      "inputs": [
+        "{workspaceRoot}/tools/cli-bootstrap-shebang.mjs",
+        { "dependentTasksOutputFiles": "**/*", "transitive": false }
+      ],
+      "outputs": ["{workspaceRoot}/dist/apps/cli/main.js"],
       "options": {
         "cwd": "{workspaceRoot}",
         "commands": ["node ./tools/cli-bootstrap-shebang.mjs dist/apps/cli/main.js"],
