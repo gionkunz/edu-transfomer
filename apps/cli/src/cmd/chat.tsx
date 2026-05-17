@@ -19,6 +19,7 @@ import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
 import { resolvePackedCheckpointPaths } from '../paths';
 import { createTensorRuntime } from '../runtime';
 import { primeTuiTerminalCanvas } from '../tui-prime';
+import { sanitizeControlChars } from './generate';
 
 type ChatVm = {
   committed: string;
@@ -163,7 +164,7 @@ export async function runChatCommand(opts: {
     paint();
 
     const promptIds = Uint32Array.from(promptIdsArr);
-    const promptRendered = tok.decode([...promptIds], { utf8: 'replace' });
+    const promptRendered = sanitizeControlChars(tok.decode([...promptIds], { utf8: 'replace' }));
     const generatedIds: number[] = [];
     const tStartGen = performance.now();
     let assistantOut = '';
@@ -179,7 +180,9 @@ export async function runChatCommand(opts: {
         ...(opts.repetitionWindow !== undefined ? { repetitionWindow: opts.repetitionWindow } : {}),
         onSampledToken: (tid: number) => {
           generatedIds.push(tid);
-          const fullDecoded = tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' });
+          const fullDecoded = sanitizeControlChars(
+            tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' }),
+          );
           assistantOut = fullDecoded.slice(promptRendered.length);
           vm.streamText = assistantOut;
           vm.newTokens = generatedIds.length;

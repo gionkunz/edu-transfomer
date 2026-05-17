@@ -61,7 +61,42 @@ function fmtProb(p: number): string {
 
 /** Show whitespace / control runs visibly so the inspector is legible. */
 function escapeForRow(s: string): string {
-  return s.replaceAll('\n', '↵').replaceAll('\r', '␍').replaceAll('\t', '→').replaceAll(' ', '␣');
+  return sanitizeControlChars(s)
+    .replaceAll('\n', '↵')
+    .replaceAll('\r', '␍')
+    .replaceAll('\t', '→')
+    .replaceAll(' ', '␣');
+}
+
+/**
+ * Strip / replace control characters that would otherwise corrupt the TUI:
+ * BEL (`\x07`) rings the terminal bell, ESC (`\x1b`) starts an ANSI escape
+ * sequence and can move the cursor or repaint colors, and other C0/C1
+ * control bytes (`\x00`–`\x1f` minus tab/newline/carriage-return, plus
+ * `\x7f` and `\x80`–`\x9f`) cause similar layout damage. Streaming a model
+ * that occasionally samples raw bytes through a byte-level BPE makes this a
+ * routine occurrence, especially at low temperature where one bad logit can
+ * stick.
+ *
+ * Visible whitespace (`\n`, `\r`, `\t`) is preserved so paragraphs and
+ * indentation still render; everything else is replaced with U+FFFD so the
+ * user sees that *something* was sampled without the terminal misbehaving.
+ */
+export function sanitizeControlChars(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    const isAllowedWs = code === 0x09 || code === 0x0a || code === 0x0d;
+    const isC0 = code <= 0x1f;
+    const isDel = code === 0x7f;
+    const isC1 = code >= 0x80 && code <= 0x9f;
+    if (!isAllowedWs && (isC0 || isDel || isC1)) {
+      out += '\uFFFD';
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
 }
 
 function truncatePiece(s: string, maxLen: number): string {
@@ -76,6 +111,7 @@ type InspectorRow = {
 };
 
 type ExploreVm = {
+  readonly promptText: string;
   readonly prefixText: string;
   readonly lastPiece: string;
   readonly newTokens: number;
@@ -205,6 +241,7 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
           }}
         >
           <Text style={{ textWrap: 'wrap' }}>
+            <Text style={{ color: 'gray' }}>{vm.promptText}</Text>
             {prefixDisplay}
             <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{lastDisplay}</Text>
           </Text>
@@ -302,7 +339,7 @@ export async function runGenerateCommand(opts: {
 
   /** BPE merges are tracked in **bytes**; streaming must not call **`decode`** on single ids (often ill‑formed UTF‑8 fragments). */
   const promptIds = tok.encode(opts.prompt);
-  const promptRendered = tok.decode(promptIds, { utf8: 'replace' });
+  const promptRendered = sanitizeControlChars(tok.decode(promptIds, { utf8: 'replace' }));
   const cache = createGptKvCache(rt, model);
 
   const generatedIds: number[] = [];
@@ -313,7 +350,7 @@ export async function runGenerateCommand(opts: {
   primeTuiTerminalCanvas();
 
   if (opts.explore !== true) {
-    let textOut = '';
+    let textOut = promptRendered;
     const inst = render(<GenView text={textOut} newTokens={0} tokensPerSec={0} />, {
       exitOnCtrlC: true,
       patchConsole: true,
@@ -328,8 +365,10 @@ export async function runGenerateCommand(opts: {
         ...(opts.repetitionWindow !== undefined ? { repetitionWindow: opts.repetitionWindow } : {}),
         onSampledToken: (id: number) => {
           generatedIds.push(id);
-          const fullDecoded = tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' });
-          textOut = fullDecoded.slice(promptRendered.length);
+          const fullDecoded = sanitizeControlChars(
+            tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' }),
+          );
+          textOut = fullDecoded;
           newTok += 1;
           const dt = (performance.now() - tStart) / 1000;
           inst.rerender(
@@ -361,6 +400,7 @@ export async function runGenerateCommand(opts: {
   };
 
   const initialVm: ExploreVm = {
+    promptText: promptRendered,
     prefixText: '',
     lastPiece: '',
     newTokens: 0,
@@ -429,7 +469,9 @@ export async function runGenerateCommand(opts: {
       onStep: async ({ tokenId, newTokenIndex, probabilities }) => {
         if (exiting) return;
         generatedIds.push(tokenId);
-        const fullDecoded = tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' });
+        const fullDecoded = sanitizeControlChars(
+          tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' }),
+        );
         const visiblePrev = prevFullDecoded.slice(promptRendered.length);
         const visibleFull = fullDecoded.slice(promptRendered.length);
         const lastPiece = visibleFull.slice(visiblePrev.length);
@@ -453,6 +495,7 @@ export async function runGenerateCommand(opts: {
 
         const dt = (performance.now() - tStart) / 1000;
         currentVm = {
+          promptText: promptRendered,
           prefixText,
           lastPiece,
           newTokens: newTok,
