@@ -42,7 +42,16 @@ export type CreateGptModelOptions = {
    * gather matrices. Defaults to **`f32`** (legacy behavior).
    */
   readonly dtype?: FloatDType;
+  /**
+   * PRNG seed for weight initialization (Box–Muller Gaussian, fan-in scaled).
+   * Defaults to a fixed constant so training runs are deterministic; override
+   * to draw a different initial weight sample for the same architecture.
+   */
+  readonly initSeed?: number;
 };
+
+/** Default {@link CreateGptModelOptions.initSeed} — fixed for repro across runs. */
+export const DEFAULT_GPT_INIT_SEED = 0xc0ffee;
 
 /** Trainable weight with stable checkpoint **name** and its compute **dtype**. */
 export type GptParameterInfo = {
@@ -74,10 +83,53 @@ function paramFromInit(
   return createParameterWithMaster(rt, data, shape, dtype);
 }
 
-function smallInitRows(rows: number, cols: number, scale: number): Float32Array {
+/**
+ * Splitmix64-style 32-bit PRNG. Cheap, fast, statistically adequate for weight
+ * initialization (this is *not* a cryptographic RNG). Deterministic given the
+ * seed so training runs are reproducible.
+ */
+function createPrng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x9e3779b9) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 16), 0x85ebca6b) >>> 0;
+    t = Math.imul(t ^ (t >>> 13), 0xc2b2ae35) >>> 0;
+    t = (t ^ (t >>> 16)) >>> 0;
+    return t / 0x1_0000_0000;
+  };
+}
+
+/**
+ * Per-parameter Gaussian (std-normal × `scale / √cols`, i.e. fan-in scaled) draw
+ * using Box–Muller from a shared {@link createPrng} stream. The shared stream
+ * is what breaks symmetry across heads and across **Q/K/V** within a head —
+ * every call advances the PRNG, so two `wq` heads receive *independent* values
+ * even though they have identical shape/scale arguments.
+ *
+ * History: the previous initializer used a deterministic `sin(i · 0.13)` pattern
+ * applied identically to every weight matrix. With no per-call entropy, all
+ * heads in every layer started element-wise identical, and within each head
+ * **Q = K = V** at init. That gives a degenerate Gram-matrix attention pattern
+ * which the optimizer can only break symmetrically slowly via downstream
+ * gradient differences from `headExpand`. Empirically this made training
+ * plateau near the unigram-baseline loss for many hundreds of steps. Using a
+ * proper Gaussian init with a single shared stream fixes both symmetries.
+ */
+function smallInitRows(
+  prng: () => number,
+  rows: number,
+  cols: number,
+  scale: number,
+): Float32Array {
   const a = new Float32Array(rows * cols);
+  const std = scale / Math.sqrt(cols);
   for (let i = 0; i < a.length; i++) {
-    a[i] = (Math.sin(i * 0.13) * scale) / Math.sqrt(cols);
+    // Box–Muller. Clamp u1 away from 0 so log() stays finite.
+    const u1 = Math.max(1e-7, prng());
+    const u2 = prng();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    a[i] = z * std;
   }
   return a;
 }
@@ -114,18 +166,20 @@ export function createGptModel(
 ): GptModel {
   assertValidGptConfig(config);
   const dtype = options?.dtype ?? 'f32';
+  const initSeed = options?.initSeed ?? DEFAULT_GPT_INIT_SEED;
+  const prng = createPrng(initSeed);
   const { vocabSize, maxSeqLen, dModel, nHeads, dFf, nLayers } = config;
   const dK = dModel / nHeads;
 
   const tokenEmbed = paramFromInit(
     rt,
-    smallInitRows(vocabSize, dModel, 1.0),
+    smallInitRows(prng, vocabSize, dModel, 1.0),
     [vocabSize, dModel],
     dtype,
   );
   const posEmbed = paramFromInit(
     rt,
-    smallInitRows(maxSeqLen, dModel, 0.5),
+    smallInitRows(prng, maxSeqLen, dModel, 0.5),
     [maxSeqLen, dModel],
     dtype,
   );
@@ -144,13 +198,13 @@ export function createGptModel(
     const wk: Parameter[] = [];
     const wv: Parameter[] = [];
     for (let h = 0; h < nHeads; h++) {
-      wq.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
-      wk.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
-      wv.push(paramFromInit(rt, smallInitRows(dModel, dK, 1.0), [dModel, dK], dtype));
+      wq.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
+      wk.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
+      wv.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
     }
-    const wo = paramFromInit(rt, smallInitRows(dModel, dModel, 1.0), [dModel, dModel], dtype);
-    const w1 = paramFromInit(rt, smallInitRows(dModel, dFf, 1.0), [dModel, dFf], dtype);
-    const w2 = paramFromInit(rt, smallInitRows(dFf, dModel, 1.0), [dFf, dModel], dtype);
+    const wo = paramFromInit(rt, smallInitRows(prng, dModel, dModel, 1.0), [dModel, dModel], dtype);
+    const w1 = paramFromInit(rt, smallInitRows(prng, dModel, dFf, 1.0), [dModel, dFf], dtype);
+    const w2 = paramFromInit(rt, smallInitRows(prng, dFf, dModel, 1.0), [dFf, dModel], dtype);
     blocks.push({
       attnNormGamma,
       ffnNormGamma,
@@ -164,7 +218,7 @@ export function createGptModel(
   }
 
   const finalNormGamma = paramFromInit(rt, new Float32Array(dModel).fill(1), [dModel], dtype);
-  const lmHeadData = smallInitRows(dModel, vocabSize, 1 / Math.sqrt(dModel));
+  const lmHeadData = smallInitRows(prng, dModel, vocabSize, 1 / Math.sqrt(dModel));
   const lmHead = paramFromInit(rt, lmHeadData, [dModel, vocabSize], dtype);
 
   return {
