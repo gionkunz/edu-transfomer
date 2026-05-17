@@ -2,6 +2,13 @@ import { Command } from 'commander';
 
 import { exitCliError } from './cli-errors';
 import { runChatCommand } from './cmd/chat';
+import {
+  runEmbeddingsDecode,
+  runEmbeddingsEncode,
+  runEmbeddingsExpression,
+  runEmbeddingsNearest,
+  runEmbeddingsSimilarity,
+} from './cmd/embeddings';
 import { runGenerateCommand } from './cmd/generate';
 import { runInspect } from './cmd/inspect';
 import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
@@ -264,6 +271,127 @@ export function createCliProgram(): Command {
           : {}),
       });
     });
+
+  const emb = root
+    .command('embeddings')
+    .description(
+      'explore the trained token-embedding geometry (encode/decode/similarity/expression/nearest)',
+    );
+
+  const addCheckpointOpts = (c: Command): Command =>
+    c
+      .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
+      .requiredOption('--tokenizer <path>', 'BPE tokenizer json')
+      .option('--json', 'emit machine-readable JSON instead of table/text', false)
+      .option(
+        '--no-auto-space',
+        'do NOT prepend a leading space to bare word inputs (BPE pretokenizers usually keep " king" and "king" as different tokens; auto-space defaults to ON so words encode like they appear in real text)',
+      );
+
+  const parseTopK = (raw: unknown): number => {
+    const k = Number(raw);
+    if (!Number.isInteger(k) || k <= 0) {
+      throw new Error(`embeddings: --top-k must be a positive integer (got ${String(raw)})`);
+    }
+    return k;
+  };
+
+  const readAutoSpace = (opts: { autoSpace?: unknown }): boolean => opts.autoSpace !== false;
+
+  addCheckpointOpts(
+    emb
+      .command('encode')
+      .description('look up the token-embedding row(s) for the given text (default: mean-pooled)')
+      .argument('<text...>', 'input text (joined with spaces)')
+      .option('--per-token', 'emit one vector per token instead of mean-pooling', false),
+  ).action(async (textParts: string[], opts) => {
+    await runEmbeddingsEncode({
+      modelArg: opts.model as string,
+      tokenizerPath: opts.tokenizer as string,
+      text: textParts.join(' '),
+      perToken: Boolean(opts.perToken),
+      json: Boolean(opts.json),
+      autoSpace: readAutoSpace(opts),
+    });
+  });
+
+  addCheckpointOpts(
+    emb
+      .command('decode')
+      .description('top-K vocabulary tokens nearest a vector (word, phrase, or @file.json)')
+      .argument('<vector-spec>', 'word/phrase to encode, or @path/to/vec.json')
+      .option('--top-k <n>', 'number of results to return', '10'),
+  ).action(async (vectorSpec: string, opts) => {
+    await runEmbeddingsDecode({
+      modelArg: opts.model as string,
+      tokenizerPath: opts.tokenizer as string,
+      vectorSpec,
+      topK: parseTopK(opts.topK),
+      json: Boolean(opts.json),
+      autoSpace: readAutoSpace(opts),
+    });
+  });
+
+  addCheckpointOpts(
+    emb
+      .command('similarity')
+      .description('cosine similarity between two embeddings (each may be a word/phrase or @file)')
+      .argument('<a>', 'first input (word/phrase or @file)')
+      .argument('<b>', 'second input (word/phrase or @file)'),
+  ).action(async (a: string, b: string, opts) => {
+    await runEmbeddingsSimilarity({
+      modelArg: opts.model as string,
+      tokenizerPath: opts.tokenizer as string,
+      a,
+      b,
+      json: Boolean(opts.json),
+      autoSpace: readAutoSpace(opts),
+    });
+  });
+
+  addCheckpointOpts(
+    emb
+      .command('expression')
+      .description(
+        'evaluate an arithmetic expression over embeddings (e.g. "king - man + woman") and return top-K nearest tokens',
+      )
+      .argument('<expr>', 'expression string')
+      .option('--top-k <n>', 'number of results to return', '10')
+      .option(
+        '--exclude-inputs [bool]',
+        'exclude expression input tokens from results (default true)',
+        'true',
+      ),
+  ).action(async (expression: string, opts) => {
+    const raw = String(opts.excludeInputs ?? 'true').toLowerCase();
+    const excludeInputs = !(raw === 'false' || raw === '0' || raw === 'no');
+    await runEmbeddingsExpression({
+      modelArg: opts.model as string,
+      tokenizerPath: opts.tokenizer as string,
+      expression,
+      topK: parseTopK(opts.topK),
+      excludeInputs,
+      json: Boolean(opts.json),
+      autoSpace: readAutoSpace(opts),
+    });
+  });
+
+  addCheckpointOpts(
+    emb
+      .command('nearest')
+      .description('top-K vocabulary tokens nearest the given word (alias for `decode <word>`)')
+      .argument('<word>', 'input word or phrase')
+      .option('--top-k <n>', 'number of results to return', '10'),
+  ).action(async (word: string, opts) => {
+    await runEmbeddingsNearest({
+      modelArg: opts.model as string,
+      tokenizerPath: opts.tokenizer as string,
+      word,
+      topK: parseTopK(opts.topK),
+      json: Boolean(opts.json),
+      autoSpace: readAutoSpace(opts),
+    });
+  });
 
   root
     .command('inspect')

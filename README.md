@@ -64,6 +64,7 @@ After linking, **`llm`** exposes (among others):
 | **`llm generate`**                    | Single prompt, streaming **wolf-tui**; **`--dtype`** and optional **`--allow-dtype-upcast`** for checkpoint vs runtime dtype.                                                                                                 |
 | **`llm chat`**                        | Multi-turn **wolf-tui** (same sampling flags flavour as **`generate`)**; same dtype flags as **`generate`**.                                                                                                                  |
 | **`llm inspect`**                     | Checkpoint / **`model.json`** summary on stdout                                                                                                                                                                               |
+| **`llm embeddings`**                  | Explore the trained token-embedding geometry: `encode` / `decode` / `nearest` / `similarity` / `expression` (vector arithmetic with a tiny `+ - ( )` language). Stdout only; no fullscreen TUI.                               |
 
 For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading **`bf16`** checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
 
@@ -207,6 +208,111 @@ llm chat --model out/run-medium --tokenizer out/tok-8000.json --max-new-tokens 9
 ```
 
 Sampling flags (**`temperature`**, **`top-k`**, **`repeat-penalty`**, **`repeat-window`**) mirror **`generate`**; see **`llm chat --help`**.
+
+---
+
+## Example: explore the embedding space
+
+A trained checkpoint contains a learned **token-embedding matrix** (`tokenEmbed`, shape `[vocab, dModel]`) — one vector per BPE token. **`llm embeddings`** lets you poke at that geometry: encode words to vectors, find nearest neighbours by cosine similarity, compare two words, and evaluate small arithmetic expressions like the classic _king − man + woman ≈ queen_. It’s a fast, qualitative read on what the model has actually learned.
+
+All subcommands take a checkpoint (`--model`) and the matching tokenizer (`--tokenizer`), print to stdout, and accept **`--json`** for piping into `jq`. Math runs CPU-side; no GPU is required.
+
+> **Reading the output: cosine + band + z.** Raw cosine values are hard to interpret because the embedding cone is narrow and per-checkpoint (e.g. cos = 0.15 may be a strong relation on one model and noise on another). Every result is therefore tagged with a **z-score** and a **qualitative band** (`identical` / `very similar` / `similar` / `weakly similar` / `unrelated` / `weakly opposite` / `opposite`), calibrated against the cosine distribution from the query to the rest of the vocab on this specific checkpoint. Self-similarity sits at `identical` (z ≈ 20+); strong neighbours typically land at z ≥ 3 (`very similar`); near-mean cosines fall in `unrelated`. The reference `μ` and `σ` are printed alongside.
+
+```bash
+llm embeddings --help
+```
+
+### Subcommands at a glance
+
+| Subcommand                 | What it does                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **`encode <text...>`**     | Tokenize input and emit the token-embedding row(s). `--per-token` keeps each row separate; default mean-pools. |
+| **`decode <vector-spec>`** | Top-K nearest tokens to a vector. `<vector-spec>` is a word/phrase or `@path/to/vec.json`.                     |
+| **`nearest <word>`**       | Convenience alias for `decode <word>`.                                                                         |
+| **`similarity <a> <b>`**   | Cosine similarity in `[-1, 1]` between two inputs (each may be a word/phrase or `@file`).                      |
+| **`expression "<expr>"`**  | Evaluate `+`, `-`, parens, unary `-` over embeddings and return the top-K nearest tokens to the result.        |
+
+### Starter recipe (run these in order)
+
+Pick a trained checkpoint and matching tokenizer:
+
+```bash
+MODEL=out/medium-longctx-push2
+TOK=out/tok-8000.json
+```
+
+**1. Sanity-check the implementation.** A token compared against itself must score 1.0:
+
+```bash
+llm embeddings similarity --model $MODEL --tokenizer $TOK king king
+```
+
+**2. Verify the space encodes meaning.** Related pairs should land in `very similar` / `similar` (z ≥ 2), random controls in `unrelated` / `weakly similar`. Read the band, not the raw cosine:
+
+```bash
+llm embeddings similarity --model $MODEL --tokenizer $TOK he she
+llm embeddings similarity --model $MODEL --tokenizer $TOK boy girl
+llm embeddings similarity --model $MODEL --tokenizer $TOK he banana   # control
+```
+
+A strong run looks like `cosine: 0.158754  (very similar, z=3.2 vs reference μ=-0.003 σ=0.051)`.
+
+**3. Look at neighbourhoods.** What does the model think `the` is similar to? On most corpora you’ll see other determiners / quantifiers (`another`, `such`, `local`, …) — that’s distributional similarity in action:
+
+```bash
+llm embeddings nearest --model $MODEL --tokenizer $TOK the --top-k 10
+llm embeddings nearest --model $MODEL --tokenizer $TOK Sarah --top-k 10   # named entities cluster with names + pronouns
+```
+
+**4. The headline analogy.** This is the educational money shot — vector arithmetic over the embedding space:
+
+```bash
+llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10
+```
+
+Whether `queen` lands at rank 1 depends heavily on **corpus size and topic** (open-domain Wikipedia text reproduces the textbook result; small narrative-domain corpora typically surface female pronouns / names instead, which is _also_ a real signal: the gender axis is being learned). Both outcomes are pedagogically useful and the input-expansion trace tells you exactly what was tokenised.
+
+**5. See the trick — toggle input exclusion.** By default we hide the literal input tokens from the result list, otherwise `king` itself dominates the top by trivial self-similarity. Compare:
+
+```bash
+llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10
+llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10 --exclude-inputs=false
+```
+
+**6. Other relations worth probing.** Anything the model has seen enough of will show up:
+
+```bash
+llm embeddings expression --model $MODEL --tokenizer $TOK "father - he + she" --top-k 5     # should land near "mother" / female names
+llm embeddings expression --model $MODEL --tokenizer $TOK "boys - boy + girl" --top-k 5     # plural axis (often noisier)
+llm embeddings expression --model $MODEL --tokenizer $TOK "(king + queen) - man" --top-k 5  # parens compose
+```
+
+### About the auto-prefix space
+
+Under the **`gpt2-v1`** pretokenizer, **`king`** and **`" king"`** (with a leading space) are _different_ tokens — and `" king"` is the variant that actually appears in real text (mid-sentence). So `llm embeddings` **prepends a single leading space to bare word inputs by default** (you’ll see `encoded as " king"` in the trace). Vector files (`@path.json`), inputs that already start with whitespace, and explicitly **quoted atoms inside `expression`** are left alone:
+
+```bash
+llm embeddings expression --model $MODEL --tokenizer $TOK 'king + "queen"' --top-k 5         # bare king → " king"; quoted "queen" stays literal
+llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --no-auto-space  # opt out globally
+```
+
+Use `--no-auto-space` (or quote individual atoms in expressions) to inspect the rare no-leading-space variants — useful for understanding BPE behaviour, but most of the time you want the default.
+
+### A small expression-language reference
+
+```text
+expr   := term (('+' | '-') term)*
+term   := factor
+factor := atom | '(' expr ')' | '-' factor
+atom   := identifier | '"' phrase '"'
+```
+
+- Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`, so **`co-founder`** lexes as one atom; surround `-` with whitespace to make it an operator (**`man - woman`**).
+- Quoted atoms can contain spaces (**`"new york"`**) and bypass auto-prefix.
+- Multi-token atoms (e.g. words your tokenizer fragments into BPE pieces) are **mean-pooled** before they enter the expression — the trace shows when this happens (look for `[mean-pooled]`).
+
+If results look like noise, check the trace first: a fragmented atom (`queen → " qu" + "een" [mean-pooled]`) tells you the corpus wasn’t big enough for `queen` to earn its own merge, and the analogy can’t name a token that doesn’t exist.
 
 ---
 

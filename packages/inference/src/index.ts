@@ -7,6 +7,41 @@ export function __inferenceTouchesModel(): typeof MODEL_LAYER_MARKER {
   return MODEL_LAYER_MARKER;
 }
 
+export {
+  assertEmbeddingMatchesTokenizer,
+  classifyCosine,
+  cosineSimilarity,
+  cosineStatsAgainstMatrix,
+  describeSimilarityBand,
+  EmbeddingDimensionError,
+  EmbeddingIdOutOfRangeError,
+  EmbeddingTokenizerMismatchError,
+  EmbeddingZeroNormError,
+  lookupEmbedding,
+  makeEmbeddingMatrix,
+  topKByCosine,
+  type CosineStats,
+  type EmbeddingMatrix,
+  type LookupPool,
+  type SimilarityBand,
+  type TopKEntry,
+  type TopKOptions,
+} from './embeddings';
+export {
+  collectAtomNodes,
+  collectAtoms,
+  EmbeddingExpressionEvalError,
+  EmbeddingExpressionParseError,
+  evaluateEmbeddingExpression,
+  parseEmbeddingExpression,
+  tokenizeEmbeddingExpression,
+  type ExprAdd,
+  type ExprAtom,
+  type ExprNeg,
+  type ExprNode,
+  type ExprSub,
+  type ResolveAtom,
+} from './embedding-expression';
 export { generateAutoregressive, type GenerateOptions } from './generate';
 export {
   applyRepetitionPenalty,
