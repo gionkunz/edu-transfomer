@@ -1,4 +1,4 @@
-import { add as tensorAdd, createFromArray } from '@llm-transformer-diy/tensor';
+import { add as tensorAdd, createFromArray, destroy } from '@llm-transformer-diy/tensor';
 import type { FloatDType, Tensor, TensorRuntime } from '@llm-transformer-diy/tensor';
 
 import type { Operation, Parameter, Variable } from './types';
@@ -111,10 +111,19 @@ export function createInternalVariable(
  * Accumulate `contribution` onto `target.grad`.
  *
  * - When `target.grad === null`, assigns the contribution directly (no
- *   `tensor.add` dispatch — saves a buffer allocation on the common single-path
- *   case).
+ *   `tensor.add` dispatch — saves a buffer allocation on the common single-
+ *   path case). Ownership of `contribution` transfers to `target`.
  * - Otherwise, allocates a fresh sum via `tensor.add(rt, target.grad,
- *   contribution)` and reassigns.
+ *   contribution)`, reassigns, and **releases the previous `target.grad`
+ *   and the consumed `contribution`** back to the pool. This is the
+ *   leak-free path for residual junctions (a single `x` feeding rmsnorm AND
+ *   the residual `add` produces two backward contributions; the first
+ *   assigns, the second sums and must free the now-stale intermediate).
+ *
+ * Ownership contract: callers MUST pass a `contribution` they exclusively
+ * own (i.e., not aliased with any other live tensor / variable's `.grad`).
+ * Every op `backward` in `./ops.ts` honors this — see the `add` op comment
+ * for the historical violation and why it's now cloned.
  *
  * This helper and {@link import('./parameter-registry').zeroGrad} are the
  * **only** writes to {@link Variable.grad} in `@llm-transformer-diy/autograd`.
@@ -124,5 +133,9 @@ export function accumulateGrad(rt: TensorRuntime, target: Variable, contribution
     target.grad = contribution;
     return;
   }
-  target.grad = tensorAdd(rt, target.grad, contribution);
+  const previous = target.grad;
+  const sum = tensorAdd(rt, previous, contribution);
+  target.grad = sum;
+  destroy(previous);
+  destroy(contribution);
 }

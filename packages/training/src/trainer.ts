@@ -121,7 +121,17 @@ export class Trainer {
     }
 
     backward(this.rt, loss);
-    disposeAutogradGraphExceptParameters(loss, this.registry);
+    // Explicit external-leaves list: anything the caller / model owns and
+    // reuses across training steps. Without this, `disposeAutograd…` would
+    // either leak the per-step internally-allocated leaves (positional
+    // indices, causal mask in `forwardGpt`) or destroy long-lived shared
+    // leaves like `model.headExpand`. Passing the exact set keeps both
+    // invariants while letting internal pos / mask buffers return to the pool.
+    const externalLeaves: Tensor[] = [tokenInput, tokenTargets];
+    for (const he of this.model.headExpand) {
+      externalLeaves.push(he.tensor);
+    }
+    disposeAutogradGraphExceptParameters(loss, this.registry, externalLeaves);
 
     if (Number.isFinite(maxGradNorm) && maxGradNorm > 0) {
       await clipGradNorm(this.rt, this.registry, maxGradNorm);

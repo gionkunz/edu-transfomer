@@ -83,11 +83,15 @@ describe.skipIf(!webgpuAvailable)('backward (GPU-backed)', () => {
 
     backward(rt, out);
 
-    // For an `add`, both leaves accumulate the upstream as-is (reference equal
-    // because accumulateGrad takes the direct-assignment branch on first
-    // contribution).
-    expect(a.grad).toBe(customGrad);
-    expect(b.grad).toBe(customGrad);
+    // For an `add`, each leaf's grad is value-equal to the upstream but
+    // exclusively owned (the old "return the same gradOutput twice" path was
+    // intentionally replaced by a clone — see `ops.ts::add` comment — so
+    // `accumulateGrad` can safely free orphaned intermediates).
+    expect(a.grad).not.toBeNull();
+    expect(b.grad).not.toBeNull();
+    expect(a.grad).not.toBe(customGrad);
+    expect(b.grad).not.toBe(customGrad);
+    expect(a.grad).not.toBe(b.grad);
     expectCloseVec(await toArray(rt, a.grad as Tensor), customGradData);
     expectCloseVec(await toArray(rt, b.grad as Tensor), customGradData);
   });

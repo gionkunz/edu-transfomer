@@ -72,7 +72,7 @@ describe.skipIf(!webgpuAvailable)('autograd ops (GPU-backed)', () => {
     }
   });
 
-  it('add forward matches tensor.add and backward emits upstream to each input', async () => {
+  it('add forward matches tensor.add and backward emits an owned copy of upstream to each input', async () => {
     const aData = new Float32Array([1, 2, 3, 4]);
     const bData = new Float32Array([10, 20, 30, 40]);
     const a = trackV(createParameter(track(createFromArray(rt, aData, [2, 2]))));
@@ -89,9 +89,16 @@ describe.skipIf(!webgpuAvailable)('autograd ops (GPU-backed)', () => {
     const upstream = track(createFromArray(rt, upstreamData, [2, 2]));
     const grads = out.creator!.backward(rt, upstream);
     expect(grads).toHaveLength(2);
-    // For add, both grads are the upstream itself (reference equal).
-    expect(grads[0]).toBe(upstream);
-    expect(grads[1]).toBe(upstream);
+    // Each grad is value-equal to upstream but distinct buffers — the autograd
+    // ownership contract requires every `grads[]` entry to be exclusively
+    // owned (so `accumulateGrad` can safely free orphaned intermediates).
+    expect(grads[0]).not.toBe(upstream);
+    expect(grads[1]).not.toBe(upstream);
+    expect(grads[0]).not.toBe(grads[1]);
+    track(grads[0] as Tensor);
+    track(grads[1] as Tensor);
+    expectCloseVec(await toArray(rt, grads[0] as Tensor), upstreamData);
+    expectCloseVec(await toArray(rt, grads[1] as Tensor), upstreamData);
   });
 
   it('gelu forward matches tensor.gelu and backward matches tensor.geluBackward', async () => {

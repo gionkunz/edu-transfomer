@@ -138,14 +138,24 @@ export async function clipGradNorm(
 
 /**
  * After {@link import('./backward').backward}, release GPU buffers for every graph
- * node except registered parameters and caller-owned leaves (`creator === null`
- * and not in the registry). Parameter `.tensor` / `.grad` are kept for
- * {@link clipGradNorm} / optimizers. Skipping duplicate {@link destroy} calls
- * when several variables share one buffer (e.g. {@link import('./ops').reshape}).
+ * node except registered parameters and the caller-supplied **`externalLeaves`**.
+ * Parameter `.tensor` / `.grad` are kept for {@link clipGradNorm} / optimizers.
+ * Skipping duplicate {@link destroy} calls when several variables share one
+ * buffer (e.g. {@link import('./ops').reshape}).
+ *
+ * When **`externalLeaves`** is provided, ONLY those leaf tensor buffers (plus
+ * parameters) are preserved — any other leaf reached via topo (typically
+ * created internally by the forward pass, e.g. positional indices, causal mask)
+ * is released back to the pool. This is the leak-free contract the trainer
+ * relies on for long runs.
+ *
+ * When **`externalLeaves`** is omitted, every leaf reachable via topo is
+ * preserved (legacy behavior — kept for single-shot tests / ad-hoc callers).
  */
 export function disposeAutogradGraphExceptParameters(
   output: Variable,
   registry: ParameterRegistry,
+  externalLeaves?: readonly Tensor[],
 ): void {
   type BufferId = Tensor['buffer'];
   const paramSet = new Set<Variable>(registry.params);
@@ -162,9 +172,15 @@ export function disposeAutogradGraphExceptParameters(
   }
 
   const order = topologicalOrder(output);
-  for (const v of order) {
-    if (v.creator === null && !paramSet.has(v)) {
-      protectedBuffers.add(v.tensor.buffer);
+  if (externalLeaves === undefined) {
+    for (const v of order) {
+      if (v.creator === null && !paramSet.has(v)) {
+        protectedBuffers.add(v.tensor.buffer);
+      }
+    }
+  } else {
+    for (const t of externalLeaves) {
+      protectedBuffers.add(t.buffer);
     }
   }
 

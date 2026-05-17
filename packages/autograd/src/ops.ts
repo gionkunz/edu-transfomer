@@ -53,14 +53,34 @@ export function matmul(rt: TensorRuntime, a: Variable, b: Variable): Variable {
   return liftOp(out, [a, b], () => ({
     name: 'matmul',
     inputs: [a, b],
-    backward: (rtBackward, gradOutput) => [
-      a.requiresGrad
-        ? tensorMatmul(rtBackward, gradOutput, tensorTranspose(rtBackward, b.tensor))
-        : null,
-      b.requiresGrad
-        ? tensorMatmul(rtBackward, tensorTranspose(rtBackward, a.tensor), gradOutput)
-        : null,
-    ],
+    backward: (rtBackward, gradOutput) => {
+      // dA = gradOutput @ Bᵀ ; dB = Aᵀ @ gradOutput. The transposed operands
+      // are fresh buffers (`tensor.transpose` allocates), so we must release
+      // them as soon as the inner matmul has consumed them — otherwise every
+      // training step orphans one transpose per matmul backward, and a 6-
+      // layer / multi-head model leaks tens of buffers / step that only V8's
+      // lazy GC of `GPUBuffer` wrappers eventually collects (the source of
+      // the "VRAM still climbs over 1000 steps" sawtooth).
+      let gradA: Tensor | null = null;
+      if (a.requiresGrad) {
+        const bT = tensorTranspose(rtBackward, b.tensor);
+        try {
+          gradA = tensorMatmul(rtBackward, gradOutput, bT);
+        } finally {
+          destroy(bT);
+        }
+      }
+      let gradB: Tensor | null = null;
+      if (b.requiresGrad) {
+        const aT = tensorTranspose(rtBackward, a.tensor);
+        try {
+          gradB = tensorMatmul(rtBackward, aT, gradOutput);
+        } finally {
+          destroy(aT);
+        }
+      }
+      return [gradA, gradB];
+    },
   }));
 }
 
@@ -74,9 +94,21 @@ export function add(rt: TensorRuntime, a: Variable, b: Variable): Variable {
   return liftOp(out, [a, b], () => ({
     name: 'add',
     inputs: [a, b],
-    backward: (_rt, gradOutput) => [
-      a.requiresGrad ? gradOutput : null,
-      b.requiresGrad ? gradOutput : null,
+    // ∂(a+b)/∂a = 1, ∂(a+b)/∂b = 1. The naive emit-`gradOutput`-twice version
+    // is correct mathematically but violates the autograd ownership contract:
+    // each entry of the returned `grads[]` must be a buffer the receiving
+    // `accumulateGrad` can exclusively own (and ultimately free when replaced
+    // by a later contribution). Returning the same `gradOutput` object twice
+    // makes both inputs alias the upstream variable's `.grad`, and that alias
+    // chain blocks `accumulateGrad` from releasing orphaned intermediates at
+    // residual-junction nodes (each `x` feeds rmsnorm AND the residual add →
+    // two accumulations per layer per residual). Cloning via `tensor.scale * 1`
+    // costs one elementwise pass per backward but unlocks deterministic
+    // disposal of the per-step grad churn that previously slow-leaked VRAM
+    // even after the matmul-transpose fix.
+    backward: (rtBackward, gradOutput) => [
+      a.requiresGrad ? tensorScale(rtBackward, gradOutput, 1) : null,
+      b.requiresGrad ? tensorScale(rtBackward, gradOutput, 1) : null,
     ],
   }));
 }
