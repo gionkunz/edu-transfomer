@@ -15,6 +15,10 @@ import { toArray, type Tensor, type TensorRuntime } from '@llm-transformer-diy/t
 import type { AdamW } from './adamw';
 import type { CosineLrSchedule } from './scheduler';
 import { getCosineLr } from './scheduler';
+import {
+  buildNonFiniteLossDiagnostics,
+  type TrainStepBatchContext,
+} from './train-failure-diagnostics';
 
 export type TrainerStepInfo = {
   readonly trainingStepIndex: number;
@@ -89,6 +93,7 @@ export class Trainer {
     tokenInput: Tensor,
     tokenTargets: Tensor,
     trainingStepIndex: number,
+    batch?: TrainStepBatchContext,
   ): Promise<number> {
     const { maxGradNorm, schedule, onStep } = this.options;
 
@@ -113,11 +118,20 @@ export class Trainer {
               : lossScalar === Number.NEGATIVE_INFINITY
                 ? '-Infinity'
                 : 'non-finite';
-      throw new Error(
-        `trainer: non-finite loss at step ${String(trainingStepIndex)} (${kind}). ` +
-          `Often: exploding activations (try lower lrMax, smaller maxSeqLen), bad token id ≥ vocab in CE ` +
-          `(re-encode corpus / delete token cache), or run with tighter maxGradNorm.`,
-      );
+      const seqLen = tokenInput.shape[0];
+      if (seqLen === undefined) {
+        throw new Error(`trainer: non-finite loss at step ${String(trainingStepIndex)} (${kind})`);
+      }
+      const detail = await buildNonFiniteLossDiagnostics(this.rt, {
+        trainingStepIndex,
+        kind,
+        lr,
+        logits,
+        targets: tokenTargets,
+        batch,
+        seqLen,
+      });
+      throw new Error(detail);
     }
 
     backward(this.rt, loss);

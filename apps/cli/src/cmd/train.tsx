@@ -1,5 +1,5 @@
 import { render } from '@wolf-tui/react';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createParameterRegistry } from '@llm-transformer-diy/autograd';
@@ -13,8 +13,15 @@ import {
   assertCorpusTokenIdsInVocab,
   createLmBatch,
   getCosineLr,
+  hydrateAdamWFromCheckpoint,
+  loadGptModelFromCheckpoint,
+  loadTrainingCheckpointForResume,
   registerModelParameters,
-  saveGptCheckpoint,
+  resolveCheckpointEvery,
+  saveTrainingCheckpoint,
+  shouldSavePeriodicCheckpoint,
+  TRAIN_DEFAULT_CHECKPOINT_EVERY,
+  trainingCheckpointPaths,
 } from '@llm-transformer-diy/training';
 
 import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
@@ -23,7 +30,8 @@ import { createTensorRuntime } from '../runtime';
 import { primeTuiTerminalCanvas } from '../tui-prime';
 import {
   buildCorpusTokenCacheFingerprint,
-  tryReadCachedCorpusTokens,
+  corpusTokenCacheArtifactPaths,
+  readCorpusTokenCache,
   writeCachedCorpusTokens,
 } from './corpus-token-cache';
 import { perRegionPessimisticEta } from './encode-eta';
@@ -40,6 +48,28 @@ export const TRAIN_DEFAULT_LR_MAX = 1e-4;
 export const TRAIN_DEFAULT_LR_MIN = 1e-5;
 export const TRAIN_DEFAULT_WEIGHT_DECAY = 0.01;
 export const TRAIN_DEFAULT_MAX_GRAD_NORM = 0.5;
+/** Fraction of **`--steps`** used for linear LR warmup before cosine decay. */
+export const TRAIN_DEFAULT_WARMUP_FRACTION = 0.1;
+
+export {
+  TRAIN_DEFAULT_CHECKPOINT_EVERY,
+  resolveCheckpointEvery,
+} from '@llm-transformer-diy/training';
+
+/**
+ * Warmup step count from **`totalSteps × warmupFraction`**, clamped to **`[1, totalSteps - 1]`**
+ * so short runs still warm up and the cosine phase always has at least one step.
+ */
+export function resolveWarmupSteps(totalSteps: number, warmupFraction: number): number {
+  if (!Number.isInteger(totalSteps) || totalSteps <= 0) {
+    throw new Error(`train: total steps must be a positive integer (got ${String(totalSteps)})`);
+  }
+  if (!Number.isFinite(warmupFraction) || warmupFraction <= 0 || warmupFraction >= 1) {
+    throw new Error(`train: --warmup must satisfy 0 < warmup < 1 (got ${String(warmupFraction)})`);
+  }
+  const raw = Math.floor(totalSteps * warmupFraction);
+  return Math.max(1, Math.min(raw, totalSteps - 1));
+}
 
 export type RunTrainCommandOpts = {
   readonly dataGlobs: string[];
@@ -59,8 +89,14 @@ export type RunTrainCommandOpts = {
    * Global L2 grad clip threshold; **`0`** or **`Infinity`** disables clipping (risky on long runs).
    */
   readonly maxGradNorm: number;
+  /** Linear warmup as a fraction of **`steps`** (default **`0.1`**). */
+  readonly warmupFraction: number;
   /** Forward / parameter compute dtype (`'f32'` default). */
   readonly computeDtype: FloatDType;
+  /** Save model + optimizer every N completed steps (`0` = final only). */
+  readonly checkpointEvery: number;
+  /** Continue from **`model.bin`** + **`train-state.json`** in **`--out`**. */
+  readonly resume?: boolean;
 };
 
 function resolveTrainOptimHyperparams(opts: RunTrainCommandOpts): {
@@ -226,10 +262,10 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     cacheBaseTrimmed.length > 0 &&
     !opts.rebuildTokenCache
   ) {
-    const hit = await tryReadCachedCorpusTokens(cacheBaseTrimmed, corpusTokenFingerprint);
-    if (hit !== null) {
-      tokenIds = hit.ids;
-      corpusUtf16Units = hit.corpusUtf16Units;
+    const cacheResult = await readCorpusTokenCache(cacheBaseTrimmed, corpusTokenFingerprint);
+    if (cacheResult.status === 'hit') {
+      tokenIds = cacheResult.ids;
+      corpusUtf16Units = cacheResult.corpusUtf16Units;
 
       draft.phase = 'read_corpus';
       draft.detailLine = 'skipped (token cache)';
@@ -247,10 +283,25 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       draft.encodeProgress = null;
       dashThrottle.flush();
 
+      const cachePaths = corpusTokenCacheArtifactPaths(cacheBaseTrimmed);
       console.error(
-        `train: token cache hit → ${String(tokenIds.length)} ids (${cacheBaseTrimmed}.ids)`,
+        `train: token cache hit → ${String(tokenIds.length)} ids · ${String(files.length)} corpus file(s) · ${cachePaths.idsBin}`,
       );
+    } else {
+      console.error(`train: token cache miss (${cacheBaseTrimmed}):`);
+      for (const reason of cacheResult.reasons) {
+        console.error(`  ${reason}`);
+      }
+      console.error('train: re-encoding corpus');
     }
+  } else if (
+    opts.rebuildTokenCache &&
+    cacheBaseTrimmed !== undefined &&
+    cacheBaseTrimmed.length > 0
+  ) {
+    console.error(
+      `train: token cache bypass (--rebuild-token-cache) → will overwrite ${cacheBaseTrimmed}.{meta.json,ids}`,
+    );
   }
 
   if (!tokenIds) {
@@ -489,30 +540,65 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
 
   assertCorpusTokenIdsInVocab(tokenIds, gptCfg.vocabSize);
 
-  draft.phase = 'build_model';
-  draft.detailLine = `layers=${String(gptCfg.nLayers)} d_model inferred`;
-  dashThrottle.flush();
-  const model = createGptModel(rt, gptCfg, { dtype: computeDtype });
-  const reg = createParameterRegistry();
-  registerModelParameters(reg, collectGptParameters(model));
-  const opt = new AdamW(rt, reg, { lr: optim.lrMax, weightDecay: optim.weightDecay });
-
   const totalSteps = opts.steps;
-  // Warmup = 10% of total steps, GPT-2/-3 style. Clamp to [1, totalSteps-1] so
-  // very short runs (smoke tests) still get at least one warmup step and never
-  // consume the entire schedule. The previous `min(10, …)` cap meant 1000-step
-  // runs only warmed up for 10 steps, leaving the cosine to immediately decay
-  // from peak LR and effectively under-training at the configured `lrMax`.
-  const warmupSteps = Math.max(1, Math.min(Math.floor(totalSteps / 10), totalSteps - 1));
+  const warmupSteps = resolveWarmupSteps(totalSteps, opts.warmupFraction);
   const schedule = {
     lrMax: optim.lrMax,
     lrMin: optim.lrMin,
     warmupSteps,
     totalSteps,
   };
+  const checkpointEvery = resolveCheckpointEvery(totalSteps, opts.checkpointEvery);
+
+  let startStep = 0;
+  let model;
+
+  if (opts.resume) {
+    draft.phase = 'build_model';
+    draft.detailLine = 'loading checkpoint for --resume';
+    dashThrottle.flush();
+    const resumeInfo = await loadTrainingCheckpointForResume({
+      outDir: outAbsDisplay,
+      config: gptCfg,
+      totalSteps,
+      seqLen: opts.seqLen,
+      computeDtype,
+    });
+    startStep = resumeInfo.completedStep;
+    const ckptPaths = trainingCheckpointPaths(outAbsDisplay);
+    const loaded = await loadGptModelFromCheckpoint(rt, ckptPaths.modelBin, ckptPaths.modelJson, {
+      computeDtype,
+    });
+    model = loaded.model;
+    console.error(
+      `train: resuming from step ${String(startStep)}/${String(totalSteps)} (${ckptPaths.modelJson})`,
+    );
+  } else {
+    draft.phase = 'build_model';
+    draft.detailLine = `layers=${String(gptCfg.nLayers)} d_model inferred`;
+    dashThrottle.flush();
+    model = createGptModel(rt, gptCfg, { dtype: computeDtype });
+  }
+
+  const reg = createParameterRegistry();
+  registerModelParameters(reg, collectGptParameters(model));
+  const opt = new AdamW(rt, reg, { lr: optim.lrMax, weightDecay: optim.weightDecay });
+
+  if (opts.resume) {
+    const ckptPaths = trainingCheckpointPaths(outAbsDisplay);
+    await hydrateAdamWFromCheckpoint(
+      rt,
+      opt,
+      model,
+      ckptPaths.optimizerBin,
+      ckptPaths.optimizerJson,
+    );
+  }
 
   draft.phase = 'trainer_init';
-  draft.detailLine = `AdamW · lr ${String(optim.lrMax)}→${String(optim.lrMin)} · warmup ${String(warmupSteps)}/${String(totalSteps)} · wd ${String(optim.weightDecay)} · clip ${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`;
+  const ckptLabel =
+    checkpointEvery > 0 ? `ckpt every ${String(checkpointEvery)}` : 'ckpt final only';
+  draft.detailLine = `AdamW · lr ${String(optim.lrMax)}→${String(optim.lrMin)} · warmup ${String(warmupSteps)}/${String(totalSteps)} (${String(opts.warmupFraction)}) · wd ${String(optim.weightDecay)} · clip ${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'} · ${ckptLabel}`;
   dashThrottle.flush();
   const trainer = new Trainer(rt, model, reg, opt, {
     maxGradNorm: optim.maxGradNorm,
@@ -535,7 +621,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   dashThrottle.flush();
 
   console.error(
-    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'}`,
+    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} (fraction=${String(opts.warmupFraction)}) weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'} checkpoint_every=${String(checkpointEvery)}`,
   );
   console.error(
     'train: first optimizer step often waits on GPU shader/pipeline warmup (minutes on some setups).',
@@ -543,22 +629,69 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
 
   draft.fileProgress = null;
 
+  const writeTrainingCheckpoint = async (
+    completedStep: number,
+    trainLossLast: number,
+  ): Promise<void> => {
+    draft.phase = 'save_checkpoint';
+    draft.detailLine = `step ${String(completedStep)}/${String(totalSteps)}`;
+    draft.saveProgress = null;
+    dashThrottle.flush();
+    await mkdir(outAbsDisplay, { recursive: true });
+    await saveTrainingCheckpoint({
+      rt,
+      model,
+      optimizer: opt,
+      outDir: outAbsDisplay,
+      config: gptCfg,
+      completedStep,
+      totalSteps,
+      seqLen: opts.seqLen,
+      computeDtype,
+      schedule,
+      weightDecay: optim.weightDecay,
+      maxGradNorm: optim.maxGradNorm,
+      trainLossLast,
+      tokenizerSourcePath: opts.tokenizerPath,
+      onCheckpointTensor: (info) => {
+        draft.saveProgress = {
+          tensorIndex: info.index,
+          totalTensors: info.total,
+          tensorName: info.name,
+        };
+        dashThrottle.flush();
+      },
+    });
+    draft.saveProgress = null;
+    draft.phase = 'training';
+    draft.detailLine = 'optimizer stepping';
+    dashThrottle.flush();
+    console.error(`train: checkpoint saved at step ${String(completedStep)}/${String(totalSteps)}`);
+  };
+
+  if (startStep > 0) {
+    draft.trainStepCompleted = startStep;
+  }
+
   try {
-    for (let s = 0; s < totalSteps; s++) {
+    for (let s = startStep; s < totalSteps; s++) {
       while (draft.trainingPaused) {
         await new Promise<void>((r) => {
           globalThis.setTimeout(r, 120);
         });
         dashThrottle.schedule();
       }
-      if (s === 0) {
-        console.error('train: step 1/' + String(totalSteps) + '…');
+      if (s === startStep) {
+        console.error(`train: step ${String(s + 1)}/${String(totalSteps)}…`);
       }
       const maxStart = tokenIds.length - opts.seqLen - 1;
       const start = Math.floor((s * 9973) % (maxStart + 1));
       const { input, targets } = createLmBatch(rt, tokenIds, start, opts.seqLen);
       const t0 = performance.now();
-      const loss = await trainer.trainStep(input, targets, s);
+      const loss = await trainer.trainStep(input, targets, s, {
+        batchStart: start,
+        vocabSize: gptCfg.vocabSize,
+      });
       const dt = Math.max(1e-6, (performance.now() - t0) / 1000);
       destroy(input);
       destroy(targets);
@@ -570,7 +703,12 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       draft.recentLosses.push(loss);
       dashThrottle.flush();
 
-      // Drain Node's global perf-entry buffer every ~256 steps. The WebGPU
+      const completedStep = s + 1;
+      if (shouldSavePeriodicCheckpoint(completedStep, totalSteps, checkpointEvery)) {
+        await writeTrainingCheckpoint(completedStep, loss);
+      }
+
+      // Drain Node's global perf-entry buffer every ~256 steps.
       // bindings (dawn-node) emit a `performance.measure(...)` per kernel
       // dispatch; over very long runs (e.g. 20k steps × ~50 dispatches) this
       // buffer overflows the default 10k cap and Node prints
@@ -588,36 +726,18 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     dashThrottle.flush();
 
     draft.phase = 'save_checkpoint';
-    draft.detailLine = 'model.bin + model.json';
+    draft.detailLine = 'model.bin + model.json + optimizer';
     draft.saveProgress = null;
     dashThrottle.flush();
 
-    await mkdir(outAbsDisplay, { recursive: true });
-    const binPath = path.join(outAbsDisplay, 'model.bin');
-    const jsonPath = path.join(outAbsDisplay, 'model.json');
-    await saveGptCheckpoint({
-      rt,
-      model,
-      binPath,
-      jsonPath,
-      config: gptCfg,
-      trainingStep: totalSteps,
-      onCheckpointTensor: (info) => {
-        draft.saveProgress = {
-          tensorIndex: info.index,
-          totalTensors: info.total,
-          tensorName: info.name,
-        };
-        dashThrottle.flush();
-      },
-    });
-    draft.saveProgress = null;
-    dashThrottle.flush();
+    const finalLoss = draft.trainLossLast;
+    if (finalLoss === null || !Number.isFinite(finalLoss)) {
+      throw new Error('train: internal error — no finite final loss before checkpoint save');
+    }
+    await writeTrainingCheckpoint(totalSteps, finalLoss);
 
     draft.phase = 'finalize';
-    draft.detailLine = 'tokenizer.json';
-    dashThrottle.flush();
-    await copyFile(opts.tokenizerPath, path.join(outAbsDisplay, 'tokenizer.json'));
+    draft.detailLine = 'done';
 
     draft.phase = 'done';
     draft.detailLine = 'artifacts written';

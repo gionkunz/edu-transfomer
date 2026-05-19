@@ -17,7 +17,30 @@ export {
   loadGptModelFromCheckpoint,
   saveGptCheckpoint,
 } from './checkpoint';
+export type {
+  ResumeTrainingCheckpoint,
+  SaveTrainingCheckpointOptions,
+  TrainStateSidecar,
+  TrainingCheckpointPaths,
+} from './train-checkpoint';
+export {
+  TRAIN_DEFAULT_CHECKPOINT_EVERY,
+  TRAIN_STATE_KIND,
+  TRAIN_STATE_VERSION,
+  hydrateAdamWFromCheckpoint,
+  loadTrainingCheckpointForResume,
+  resolveCheckpointEvery,
+  saveTrainingCheckpoint,
+  shouldSavePeriodicCheckpoint,
+  trainingCheckpointPaths,
+} from './train-checkpoint';
 export { createLmBatch, assertCorpusTokenIdsInVocab } from './lm-batch';
+export {
+  buildNonFiniteLossDiagnostics,
+  scanFloat32FiniteStats,
+  type Float32FiniteScan,
+  type TrainStepBatchContext,
+} from './train-failure-diagnostics';
 export { getCosineLr, type CosineLrSchedule } from './scheduler';
 export {
   registerModelParameters,

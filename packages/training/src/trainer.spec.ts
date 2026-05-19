@@ -21,6 +21,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { AdamW } from './adamw';
 import { loadGptCheckpointTensors, saveGptCheckpoint } from './checkpoint';
 import { createLmBatch } from './lm-batch';
+import {
+  hydrateAdamWFromCheckpoint,
+  saveTrainingCheckpoint,
+  trainingCheckpointPaths,
+} from './train-checkpoint';
 import { registerModelParameters, Trainer } from './trainer';
 
 const webgpuAvailable = await probeWebGpu();
@@ -111,6 +116,65 @@ describe.skipIf(!webgpuAvailable)('Trainer (GPU)', () => {
       }
       const metaRaw = await readFile(jsonPath, 'utf8');
       expect(metaRaw).toContain('"step"');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('saveTrainingCheckpoint round-trips model and AdamW state', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'llm-diy-train-ckpt-'));
+    try {
+      const reg = createParameterRegistry();
+      const params = collectGptParameters(model);
+      registerModelParameters(reg, params);
+      const opt = new AdamW(rt, reg, { lr: 1e-2, weightDecay: 0 });
+      const { input, targets } = createLmBatch(rt, tokenStream, 0, 8);
+      const trainer = new Trainer(rt, model, reg, opt, {
+        maxGradNorm: 1.0,
+        schedule: {
+          lrMax: 1e-2,
+          lrMin: 1e-3,
+          warmupSteps: 1,
+          totalSteps: 5,
+        },
+      });
+      await trainer.trainStep(input, targets, 0);
+      destroy(input);
+      destroy(targets);
+
+      await saveTrainingCheckpoint({
+        rt,
+        model,
+        optimizer: opt,
+        outDir: dir,
+        config: tinyCfg,
+        completedStep: 1,
+        totalSteps: 5,
+        seqLen: 8,
+        computeDtype: 'f32',
+        schedule: {
+          lrMax: 1e-2,
+          lrMin: 1e-3,
+          warmupSteps: 1,
+          totalSteps: 5,
+        },
+        weightDecay: 0,
+        maxGradNorm: 1.0,
+        trainLossLast: 2.5,
+      });
+
+      const paths = trainingCheckpointPaths(dir);
+      const { sidecar } = await loadGptCheckpointTensors(paths.modelBin, paths.modelJson);
+      expect(sidecar.metadata?.step).toBe(1);
+
+      const reg2 = createParameterRegistry();
+      registerModelParameters(reg2, params);
+      const opt2 = new AdamW(rt, reg2, { lr: 1e-2, weightDecay: 0 });
+      expect(opt2.getTimestep()).toBe(0);
+      await hydrateAdamWFromCheckpoint(rt, opt2, model, paths.optimizerBin, paths.optimizerJson);
+      expect(opt2.getTimestep()).toBe(1);
+      opt.dispose();
+      opt2.dispose();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

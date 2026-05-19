@@ -4,9 +4,12 @@ import {
   adamWStepInPlace,
   cast,
   copyContiguousTensorBytes,
+  createFromArray,
   createZeros,
   destroy,
   floatDtypeOf,
+  productOfShape,
+  toArray,
   type AdamWStepHyperparams,
 } from '@llm-transformer-diy/tensor';
 
@@ -69,6 +72,97 @@ export class AdamW {
 
   setLr(lr: number): void {
     this.hyper = { ...this.hyper, lr };
+  }
+
+  /** Optimizer step counter **`t`** (Adam bias-correction exponent). */
+  getTimestep(): number {
+    return this.t;
+  }
+
+  /** Restore **`t`** when resuming from a checkpoint. */
+  setTimestep(t: number): void {
+    if (!Number.isInteger(t) || t < 0) {
+      throw new Error(`AdamW.setTimestep: t must be a non-negative integer (got ${String(t)})`);
+    }
+    this.t = t;
+  }
+
+  /**
+   * Serializes first/second moment buffers keyed by stable parameter names.
+   * Parameters without allocated moments yet export zero-filled **`m`/`v`** arrays.
+   */
+  async exportNamedMoments(
+    rt: TensorRuntime,
+    paramNames: readonly string[],
+  ): Promise<Record<string, { readonly m: Float32Array; readonly v: Float32Array }>> {
+    if (paramNames.length !== this.reg.params.length) {
+      throw new Error(
+        `AdamW.exportNamedMoments: expected ${String(this.reg.params.length)} names, got ${String(paramNames.length)}`,
+      );
+    }
+    const out: Record<string, { m: Float32Array; v: Float32Array }> = {};
+    for (let i = 0; i < this.reg.params.length; i++) {
+      const name = paramNames[i];
+      const p = this.reg.params[i];
+      if (name === undefined || p === undefined) {
+        throw new Error('AdamW.exportNamedMoments: internal index error');
+      }
+      const n = productOfShape(p.tensor.shape);
+      let mT = this.m.get(p);
+      let vT = this.v.get(p);
+      if (!mT || !vT) {
+        out[name] = { m: new Float32Array(n), v: new Float32Array(n) };
+        continue;
+      }
+      const mHost = await toArray(rt, mT);
+      const vHost = await toArray(rt, vT);
+      out[name] = { m: new Float32Array(mHost), v: new Float32Array(vHost) };
+    }
+    return out;
+  }
+
+  /**
+   * Loads moment buffers from a checkpoint. Replaces any existing moment tensors for each parameter.
+   */
+  hydrateNamedMoments(
+    rt: TensorRuntime,
+    paramNames: readonly string[],
+    moments: Readonly<Record<string, { readonly m: Float32Array; readonly v: Float32Array }>>,
+  ): void {
+    if (paramNames.length !== this.reg.params.length) {
+      throw new Error(
+        `AdamW.hydrateNamedMoments: expected ${String(this.reg.params.length)} names, got ${String(paramNames.length)}`,
+      );
+    }
+    for (let i = 0; i < this.reg.params.length; i++) {
+      const name = paramNames[i];
+      const p = this.reg.params[i];
+      if (name === undefined || p === undefined) {
+        throw new Error('AdamW.hydrateNamedMoments: internal index error');
+      }
+      const entry = moments[name];
+      if (!entry) {
+        throw new Error(`AdamW.hydrateNamedMoments: checkpoint missing moments for "${name}"`);
+      }
+      const n = productOfShape(p.tensor.shape);
+      if (entry.m.length !== n || entry.v.length !== n) {
+        throw new Error(
+          `AdamW.hydrateNamedMoments: shape mismatch for "${name}" (expected ${String(n)} elements)`,
+        );
+      }
+      const prevM = this.m.get(p);
+      const prevV = this.v.get(p);
+      if (prevM) {
+        destroy(prevM);
+      }
+      if (prevV) {
+        destroy(prevV);
+      }
+      const mT = createFromArray(rt, entry.m, [...p.tensor.shape], 'f32');
+      const vT = createFromArray(rt, entry.v, [...p.tensor.shape], 'f32');
+      this.m.set(p, mT);
+      this.v.set(p, vT);
+    }
   }
 
   /** Increments the timestep and applies AdamW to every parameter whose `grad` is set. */

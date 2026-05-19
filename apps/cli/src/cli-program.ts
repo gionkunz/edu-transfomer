@@ -15,9 +15,11 @@ import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
 import { runTokenizerTrain } from './cmd/tokenizer-train';
 import {
   runTrainCommand,
+  TRAIN_DEFAULT_CHECKPOINT_EVERY,
   TRAIN_DEFAULT_LR_MAX,
   TRAIN_DEFAULT_LR_MIN,
   TRAIN_DEFAULT_MAX_GRAD_NORM,
+  TRAIN_DEFAULT_WARMUP_FRACTION,
   TRAIN_DEFAULT_WEIGHT_DECAY,
 } from './cmd/train';
 import { parseOptionalComputeDtype } from './compute-dtype';
@@ -150,6 +152,21 @@ export function createCliProgram(): Command {
       `global L2 grad clip (0 or Infinity = off; default ${String(TRAIN_DEFAULT_MAX_GRAD_NORM)})`,
       String(TRAIN_DEFAULT_MAX_GRAD_NORM),
     )
+    .option(
+      '--warmup <x>',
+      `linear LR warmup as a fraction of --steps (0 < x < 1; default ${String(TRAIN_DEFAULT_WARMUP_FRACTION)})`,
+      String(TRAIN_DEFAULT_WARMUP_FRACTION),
+    )
+    .option(
+      '--checkpoint-every <n>',
+      `save model + optimizer every N steps (0 = final only; default ${String(TRAIN_DEFAULT_CHECKPOINT_EVERY)})`,
+      String(TRAIN_DEFAULT_CHECKPOINT_EVERY),
+    )
+    .option(
+      '--resume',
+      'continue from model.bin + train-state.json in --out (same config/steps/seq-len/dtype required)',
+      false,
+    )
     .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16', 'f32')
     .action(async (opts) => {
       const tokenCacheRaw = opts.tokenCache as string | undefined;
@@ -173,7 +190,10 @@ export function createCliProgram(): Command {
         lrMin: parseTrainFiniteOption(opts.lrMin, '--lr-min'),
         weightDecay: parseTrainFiniteOption(opts.weightDecay, '--weight-decay'),
         maxGradNorm: parseMaxGradNormOption(opts.maxGradNorm),
+        warmupFraction: parseTrainFiniteOption(opts.warmup, '--warmup'),
+        checkpointEvery: Number(opts.checkpointEvery),
         computeDtype,
+        ...(Boolean(opts.resume) ? { resume: true } : {}),
         ...(tokenCacheBase !== undefined ? { tokenCacheBase } : {}),
         ...(rebuildTokenCache ? { rebuildTokenCache: true } : {}),
       });
