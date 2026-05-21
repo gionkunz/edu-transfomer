@@ -21,6 +21,16 @@ export {
   type TransformerBlockParams,
 } from './gpt';
 export {
+  formatForwardProbeReport,
+  layerIndexFromProbeStage,
+  probeGptForward,
+  readTokenIdsSliceFromFile,
+  trainingBatchStart,
+  type ForwardProbeReport,
+  type ForwardProbeStage,
+  type HiddenRowScan,
+} from './gpt-forward-probe';
+export {
   createGptKvCache,
   destroyGptKvCache,
   forwardGptDecodeStep,
