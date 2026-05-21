@@ -36,9 +36,19 @@ export {
 } from './train-checkpoint';
 export { createLmBatch, assertCorpusTokenIdsInVocab } from './lm-batch';
 export {
+  assertModelParametersFiniteForResume,
+  auditModelParametersFinite,
   buildNonFiniteLossDiagnostics,
+  correlateBadRowsWithTokens,
   scanFloat32FiniteStats,
+  scanLogitsRowsByPosition,
+  scanTokenEmbeddingRows,
+  type EmbeddingRowScan,
   type Float32FiniteScan,
+  type LogitsRowScan,
+  type ParameterFiniteAudit,
+  type ParameterTensorAudit,
+  type TokenPositionDiagnostic,
   type TrainStepBatchContext,
 } from './train-failure-diagnostics';
 export { getCosineLr, type CosineLrSchedule } from './scheduler';
@@ -48,6 +58,7 @@ export {
   type TrainerOptions,
   type TrainerStepInfo,
 } from './trainer';
+export { runReplayStepProbe } from './train-replay';
 
 /** Training loop scaffolding */
 export const TRAINING_LAYER_MARKER = Symbol.for('@llm-transformer-diy/training');

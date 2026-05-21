@@ -127,9 +127,11 @@ export class Trainer {
         kind,
         lr,
         logits,
+        tokenInput,
         targets: tokenTargets,
         batch,
         seqLen,
+        model: this.model,
       });
       throw new Error(detail);
     }
