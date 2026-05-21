@@ -12,14 +12,33 @@ export const GELU_TANH_COEF = 0.7978845608028654;
 /** Must match elementwise-gelu.wgsl `GELU_CUBE_COEF`. */
 export const GELU_CUBE_COEF = 0.044715;
 
+/**
+ * For |x| above this, tanh(u) in the GELU approximation is ≈±1 and GELU≈x (x>0) or 0
+ * (x<0). Skipping the tanh path avoids driver bugs (e.g. D3D12/Blackwell returning NaN
+ * for large u) and matches the limit to ~1e-6 relative error.
+ */
+export const GELU_LINEAR_THRESHOLD = 8;
+
 /** Scalar GELU using tanh form — keep identical to WGSL `gelu_f32`. */
 export function geluScalar(x: number): number {
+  if (x > GELU_LINEAR_THRESHOLD) {
+    return x;
+  }
+  if (x < -GELU_LINEAR_THRESHOLD) {
+    return 0;
+  }
   const t = Math.tanh(GELU_TANH_COEF * (x + GELU_CUBE_COEF * x * x * x));
   return 0.5 * x * (1 + t);
 }
 
 /** Derivative of {@link geluScalar} — keep identical to WGSL `gelu_grad_f32`. */
 export function geluDerivativeScalar(x: number): number {
+  if (x > GELU_LINEAR_THRESHOLD) {
+    return 1;
+  }
+  if (x < -GELU_LINEAR_THRESHOLD) {
+    return 0;
+  }
   const u = GELU_TANH_COEF * (x + GELU_CUBE_COEF * x * x * x);
   const t = Math.tanh(u);
   const dtanh = 1 - t * t;

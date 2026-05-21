@@ -113,6 +113,17 @@ describe.skipIf(!webgpuAvailable)('core-kernels', () => {
     expectCloseVec(await smokeGelu(ctx, registry, a, n), cpuGelu(a, n));
   });
 
+  it('gelu is finite at large FFN activations (regression: D3D12 tanh edge case)', async () => {
+    const n = 1024 * 2048;
+    const idx = 229 * 2048 + 1100;
+    const a = new Float32Array(n);
+    a[idx] = 13.17773;
+    const expected = cpuGelu(a, n);
+    const got = await smokeGelu(ctx, registry, a, n);
+    expect(Number.isFinite(got[idx])).toBe(true);
+    expect(got[idx]).toBeCloseTo(expected[idx]!, 5);
+  });
+
   it('gelu backward matches CPU reference', async () => {
     const n = 64;
     const inp = Float32Array.from({ length: n }, (_, i) => (i - n / 2) * 0.15);

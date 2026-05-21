@@ -1,7 +1,14 @@
 const GELU_TANH_COEF: f32 = 0.7978845608028654;
 const GELU_CUBE_COEF: f32 = 0.044715;
+const GELU_LINEAR_THRESHOLD: f32 = 8.0;
 
 fn gelu_f32(x: f32) -> f32 {
+  if (x > GELU_LINEAR_THRESHOLD) {
+    return x;
+  }
+  if (x < -GELU_LINEAR_THRESHOLD) {
+    return 0.0;
+  }
   let t = tanh(GELU_TANH_COEF * (x + GELU_CUBE_COEF * x * x * x));
   return 0.5 * x * (1.0 + t);
 }
