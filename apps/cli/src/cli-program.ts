@@ -23,6 +23,21 @@ import {
   TRAIN_DEFAULT_WEIGHT_DECAY,
 } from './cmd/train';
 import { parseOptionalComputeDtype } from './compute-dtype';
+import { resolveTokenizerPath } from './paths';
+
+function tokenizerFromModelOpts(
+  opts: { model: unknown; tokenizer?: unknown },
+  commandLabel: string,
+): string {
+  try {
+    return resolveTokenizerPath(opts.model as string, opts.tokenizer as string | undefined);
+  } catch (e) {
+    if (e instanceof Error) {
+      throw new Error(`${commandLabel}: ${e.message}`);
+    }
+    throw e;
+  }
+}
 
 function parseTrainFiniteOption(raw: unknown, flag: string): number {
   const v = Number(raw);
@@ -50,6 +65,24 @@ function parseMaxGradNormOption(raw: unknown): number {
     );
   }
   return v;
+}
+
+function parseReplayRows(raw: unknown): number[] | undefined {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return undefined;
+  }
+  const parts = String(raw).split(',');
+  const rows: number[] = [];
+  for (const p of parts) {
+    const v = Number(p.trim());
+    if (!Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `llm train: --replay-rows must be comma-separated non-negative integers (got ${String(raw)})`,
+      );
+    }
+    rows.push(v);
+  }
+  return rows;
 }
 
 function collectStrings(value: string, prev: string[]): string[] {
@@ -167,6 +200,15 @@ export function createCliProgram(): Command {
       'continue from model.bin + train-state.json in --out (same config/steps/seq-len/dtype required)',
       false,
     )
+    .option(
+      '--replay-step <n>',
+      'with --resume: fast-forward to step n and run a forward layer probe (use with --replay-only)',
+    )
+    .option('--replay-only', 'exit after --replay-step probe instead of continuing training', false)
+    .option(
+      '--replay-rows <i,...>',
+      'sequence row indices for replay probe (default: 0,mid,last; e.g. 229 or 229,283)',
+    )
     .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16', 'f32')
     .action(async (opts) => {
       const tokenCacheRaw = opts.tokenCache as string | undefined;
@@ -179,6 +221,7 @@ export function createCliProgram(): Command {
         throw new Error('train: --rebuild-token-cache requires --token-cache <base>');
       }
       const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'train');
+      const replayRows = parseReplayRows(opts.replayRows);
       await runTrainCommand({
         dataGlobs: opts.data as string[],
         outDir: opts.out as string,
@@ -194,6 +237,11 @@ export function createCliProgram(): Command {
         checkpointEvery: Number(opts.checkpointEvery),
         computeDtype,
         ...(Boolean(opts.resume) ? { resume: true } : {}),
+        ...(opts.replayStep !== undefined && String(opts.replayStep).trim() !== ''
+          ? { replayStep: Number(opts.replayStep) }
+          : {}),
+        ...(Boolean(opts.replayOnly) ? { replayOnly: true } : {}),
+        ...(replayRows !== undefined ? { replayRows } : {}),
         ...(tokenCacheBase !== undefined ? { tokenCacheBase } : {}),
         ...(rebuildTokenCache ? { rebuildTokenCache: true } : {}),
       });
@@ -203,7 +251,7 @@ export function createCliProgram(): Command {
     .command('generate')
     .description('autoregressive generation with KV cache (WebGPU)')
     .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
-    .requiredOption('--tokenizer <path>', 'BPE tokenizer json')
+    .option('--tokenizer <path>', 'BPE tokenizer json (default: tokenizer.json in checkpoint dir)')
     .requiredOption('--prompt <text>', 'prompt string')
     .option('--max-new-tokens <n>', 'tokens to sample after prompt', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
@@ -235,7 +283,7 @@ export function createCliProgram(): Command {
       const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'generate');
       await runGenerateCommand({
         modelArg: opts.model as string,
-        tokenizerPath: opts.tokenizer as string,
+        tokenizerPath: tokenizerFromModelOpts(opts, 'generate'),
         prompt: opts.prompt as string,
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
@@ -253,7 +301,7 @@ export function createCliProgram(): Command {
     .command('chat')
     .description('interactive chat TUI with KV-backed generation (WebGPU)')
     .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
-    .requiredOption('--tokenizer <path>', 'BPE tokenizer json')
+    .option('--tokenizer <path>', 'BPE tokenizer json (default: tokenizer.json in checkpoint dir)')
     .option('--max-new-tokens <n>', 'tokens to sample per assistant reply', '64')
     .option('--temperature <x>', 'sampling temperature', '0.8')
     .option('--top-k <k>', 'top-k sampling (0 = off)', '40')
@@ -280,7 +328,7 @@ export function createCliProgram(): Command {
       const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'chat');
       await runChatCommand({
         modelArg: opts.model as string,
-        tokenizerPath: opts.tokenizer as string,
+        tokenizerPath: tokenizerFromModelOpts(opts, 'chat'),
         maxNewTokens: Number(opts.maxNewTokens),
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
@@ -301,7 +349,10 @@ export function createCliProgram(): Command {
   const addCheckpointOpts = (c: Command): Command =>
     c
       .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
-      .requiredOption('--tokenizer <path>', 'BPE tokenizer json')
+      .option(
+        '--tokenizer <path>',
+        'BPE tokenizer json (default: tokenizer.json in checkpoint dir)',
+      )
       .option('--json', 'emit machine-readable JSON instead of table/text', false)
       .option(
         '--no-auto-space',
@@ -327,7 +378,7 @@ export function createCliProgram(): Command {
   ).action(async (textParts: string[], opts) => {
     await runEmbeddingsEncode({
       modelArg: opts.model as string,
-      tokenizerPath: opts.tokenizer as string,
+      tokenizerPath: tokenizerFromModelOpts(opts, 'embeddings encode'),
       text: textParts.join(' '),
       perToken: Boolean(opts.perToken),
       json: Boolean(opts.json),
@@ -344,7 +395,7 @@ export function createCliProgram(): Command {
   ).action(async (vectorSpec: string, opts) => {
     await runEmbeddingsDecode({
       modelArg: opts.model as string,
-      tokenizerPath: opts.tokenizer as string,
+      tokenizerPath: tokenizerFromModelOpts(opts, 'embeddings decode'),
       vectorSpec,
       topK: parseTopK(opts.topK),
       json: Boolean(opts.json),
@@ -361,7 +412,7 @@ export function createCliProgram(): Command {
   ).action(async (a: string, b: string, opts) => {
     await runEmbeddingsSimilarity({
       modelArg: opts.model as string,
-      tokenizerPath: opts.tokenizer as string,
+      tokenizerPath: tokenizerFromModelOpts(opts, 'embeddings similarity'),
       a,
       b,
       json: Boolean(opts.json),
@@ -387,7 +438,7 @@ export function createCliProgram(): Command {
     const excludeInputs = !(raw === 'false' || raw === '0' || raw === 'no');
     await runEmbeddingsExpression({
       modelArg: opts.model as string,
-      tokenizerPath: opts.tokenizer as string,
+      tokenizerPath: tokenizerFromModelOpts(opts, 'embeddings expression'),
       expression,
       topK: parseTopK(opts.topK),
       excludeInputs,
@@ -405,7 +456,7 @@ export function createCliProgram(): Command {
   ).action(async (word: string, opts) => {
     await runEmbeddingsNearest({
       modelArg: opts.model as string,
-      tokenizerPath: opts.tokenizer as string,
+      tokenizerPath: tokenizerFromModelOpts(opts, 'embeddings nearest'),
       word,
       topK: parseTopK(opts.topK),
       json: Boolean(opts.json),

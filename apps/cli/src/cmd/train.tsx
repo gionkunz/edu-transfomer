@@ -11,6 +11,7 @@ import {
   AdamW,
   Trainer,
   assertCorpusTokenIdsInVocab,
+  assertModelParametersFiniteForResume,
   createLmBatch,
   getCosineLr,
   hydrateAdamWFromCheckpoint,
@@ -18,6 +19,7 @@ import {
   loadTrainingCheckpointForResume,
   registerModelParameters,
   resolveCheckpointEvery,
+  runReplayStepProbe,
   saveTrainingCheckpoint,
   shouldSavePeriodicCheckpoint,
   TRAIN_DEFAULT_CHECKPOINT_EVERY,
@@ -97,6 +99,12 @@ export type RunTrainCommandOpts = {
   readonly checkpointEvery: number;
   /** Continue from **`model.bin`** + **`train-state.json`** in **`--out`**. */
   readonly resume?: boolean;
+  /** Fast-forward to this step and run forward layer probe (`--replay-only`). */
+  readonly replayStep?: number;
+  /** Exit after **`--replay-step`** probe instead of continuing training. */
+  readonly replayOnly?: boolean;
+  /** Sequence row indices to inspect during replay probe (default: 0, mid, last). */
+  readonly replayRows?: readonly number[];
 };
 
 function resolveTrainOptimHyperparams(opts: RunTrainCommandOpts): {
@@ -570,6 +578,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       computeDtype,
     });
     model = loaded.model;
+    await assertModelParametersFiniteForResume(rt, model, `step ${String(startStep)}`);
     console.error(
       `train: resuming from step ${String(startStep)}/${String(totalSteps)} (${ckptPaths.modelJson})`,
     );
@@ -628,6 +637,48 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   );
 
   draft.fileProgress = null;
+
+  if (opts.replayStep !== undefined) {
+    if (!Number.isInteger(opts.replayStep) || opts.replayStep < 0) {
+      throw new Error(`train: --replay-step must be a non-negative integer`);
+    }
+    if (opts.replayStep >= totalSteps) {
+      throw new Error(
+        `train: --replay-step ${String(opts.replayStep)} must be < --steps ${String(totalSteps)}`,
+      );
+    }
+    if (opts.replayStep < startStep) {
+      throw new Error(
+        `train: --replay-step ${String(opts.replayStep)} is before resume point ${String(startStep)}`,
+      );
+    }
+    if (opts.replayOnly) {
+      console.error(
+        `train: replay-only mode → run steps ${String(startStep + 1)}..${String(opts.replayStep)} then forward probe`,
+      );
+      draft.phase = 'training';
+      dashThrottle.flush();
+      await runReplayStepProbe({
+        rt,
+        model,
+        trainer,
+        tokenIds,
+        seqLen: opts.seqLen,
+        vocabSize: gptCfg.vocabSize,
+        fromStep: startStep,
+        replayStep: opts.replayStep,
+        ...(opts.replayRows !== undefined && opts.replayRows.length > 0
+          ? { rowsToScan: opts.replayRows }
+          : {}),
+      });
+      draft.phase = 'done';
+      draft.detailLine = `replay probe step ${String(opts.replayStep)}`;
+      dashThrottle.flush();
+      dashRef.inst?.unmount();
+      opt.dispose();
+      return;
+    }
+  }
 
   const writeTrainingCheckpoint = async (
     completedStep: number,
