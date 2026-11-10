@@ -469,21 +469,62 @@ export function registerCoreKernels(device: GPUDevice, registry: KernelRegistry)
   );
 }
 
+/** Most distinct uniform payloads kept alive per context before the oldest is evicted. */
+const UNIFORM_CACHE_CAPACITY = 2048;
+
+const uniformCaches = new WeakMap<GpuContext, Map<string, GPUBuffer>>();
+
 /**
- * Allocates a transient 16-byte uniform buffer, fills it, and uploads to the GPU.
- * The caller is responsible for `destroy()` after submission. Per WebGPU spec,
- * `destroy()` may be called while submissions are still in flight — the GPU keeps
- * the underlying allocation alive until the queue drains.
+ * Returns a uniform buffer holding exactly the bytes of **`ab`**, reusing one
+ * from a small per-context LRU cache when the same payload was used before.
+ *
+ * A kernel's uniform is a handful of shape integers (plus the odd scalar), and
+ * a training step repeats the same few hundred payloads every step. Caching
+ * them removes one `createBuffer` + `writeBuffer` + `destroy` per dispatch —
+ * thousands of driver calls per step. Buffers are immutable once cached;
+ * callers must **not** destroy them. Eviction destroys through
+ * {@link GpuContext.destroyBuffer}, which waits for recorded dispatches.
  */
+function cachedUniform(ctx: GpuContext, ab: ArrayBuffer): GPUBuffer {
+  let cache = uniformCaches.get(ctx);
+  if (cache === undefined) {
+    cache = new Map();
+    uniformCaches.set(ctx, cache);
+  }
+  const words = new Uint32Array(ab);
+  let key = '';
+  for (let i = 0; i < words.length; i++) {
+    key += `${(words[i] ?? 0).toString(36)},`;
+  }
+  const hit = cache.get(key);
+  if (hit !== undefined) {
+    // Refresh recency: Map iterates in insertion order, so re-insert at the end.
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  }
+  const buf = ctx.device.createBuffer({
+    size: ab.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  // Fresh buffer: no recorded dispatch can reference it, so skip the flushing queue.
+  ctx.immediateQueue.writeBuffer(buf, 0, ab);
+  cache.set(key, buf);
+  if (cache.size > UNIFORM_CACHE_CAPACITY) {
+    const oldest = cache.entries().next().value;
+    if (oldest !== undefined) {
+      cache.delete(oldest[0]);
+      ctx.destroyBuffer(oldest[1]);
+    }
+  }
+  return buf;
+}
+
+/** Builds the 16-byte uniform payload via **`fill`** and returns a (possibly shared) buffer for it. */
 function makeUniform(ctx: GpuContext, fill: (view: DataView) => void): GPUBuffer {
   const ab = new ArrayBuffer(UNIFORM_BYTES);
   fill(new DataView(ab));
-  const buf = ctx.device.createBuffer({
-    size: UNIFORM_BYTES,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  ctx.queue.writeBuffer(buf, 0, ab);
-  return buf;
+  return cachedUniform(ctx, ab);
 }
 
 function makeAdamUniform(
@@ -518,12 +559,7 @@ function makeAdamUniform(
   v.setFloat32(36, hyper.biasCorrection1, true);
   v.setFloat32(40, hyper.biasCorrection2, true);
   v.setFloat32(44, 0, true);
-  const buf = ctx.device.createBuffer({
-    size: ADAM_UNIFORM_BYTES,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  ctx.queue.writeBuffer(buf, 0, ab);
-  return buf;
+  return cachedUniform(ctx, ab);
 }
 
 function bg(binding: number, buffer: GPUBuffer): GPUBindGroupEntry {
@@ -531,9 +567,10 @@ function bg(binding: number, buffer: GPUBuffer): GPUBindGroupEntry {
 }
 
 /**
- * Builds a bind group on `pipeline.getBindGroupLayout(0)`, encodes one compute
- * pass with `entries`, and submits. Synchronous — caller awaits a readback for
- * downstream sync, or chains more dispatches before any host-side wait.
+ * Builds a bind group on `pipeline.getBindGroupLayout(0)` and records one
+ * compute dispatch with `entries` on the context's shared encoder
+ * ({@link GpuContext.encodeComputeDispatch}). Synchronous; the work reaches the
+ * GPU at the next flush — a readback, a buffer upload, or the dispatch cap.
  */
 function dispatchKernel(
   ctx: GpuContext,
@@ -545,13 +582,7 @@ function dispatchKernel(
     layout: pipeline.getBindGroupLayout(0),
     entries,
   });
-  const encoder = ctx.device.createCommandEncoder();
-  const pass = encoder.beginComputePass();
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.dispatchWorkgroups(...dispatchGrid(workgroupCount(totalThreads)));
-  pass.end();
-  ctx.queue.submit([encoder.finish()]);
+  ctx.encodeComputeDispatch(pipeline, bindGroup, dispatchGrid(workgroupCount(totalThreads)));
 }
 
 /**
@@ -580,7 +611,6 @@ export function dispatchMatMul(
     [bg(0, u), bg(1, bufferA), bg(2, bufferB), bg(3, bufferC)],
     M * N,
   );
-  u.destroy();
 }
 
 export function dispatchMatMulBf16(
@@ -605,7 +635,6 @@ export function dispatchMatMulBf16(
     [bg(0, u), bg(1, bufferA), bg(2, bufferB), bg(3, bufferC)],
     packedThreadCount(M * N),
   );
-  u.destroy();
 }
 
 /**
@@ -631,7 +660,6 @@ export function dispatchTranspose(
     [bg(0, u), bg(1, src), bg(2, dst)],
     rows * cols,
   );
-  u.destroy();
 }
 
 export function dispatchTransposeBf16(
@@ -652,7 +680,6 @@ export function dispatchTransposeBf16(
     [bg(0, u), bg(1, src), bg(2, dst)],
     packedThreadCount(rows * cols),
   );
-  u.destroy();
 }
 
 function dispatchElementwiseBinary(
@@ -678,7 +705,6 @@ function dispatchElementwiseBinary(
     [bg(0, u), bg(1, a), bg(2, b), bg(3, out)],
     packed ? packedThreadCount(elementCount) : elementCount,
   );
-  u.destroy();
 }
 
 /** Elementwise add: `out[i] = a[i] + b[i]` for `elementCount` floats. */
@@ -746,7 +772,6 @@ export function dispatchScale(
     [bg(0, u), bg(1, a), bg(2, out)],
     elementCount,
   );
-  u.destroy();
 }
 
 export function dispatchScaleBf16(
@@ -767,7 +792,6 @@ export function dispatchScaleBf16(
     [bg(0, u), bg(1, a), bg(2, out)],
     packedThreadCount(elementCount),
   );
-  u.destroy();
 }
 
 /** Applies GELU to each element: `out[i] = gelu(inp[i])`. */
@@ -787,7 +811,6 @@ export function dispatchGelu(
     [bg(0, u), bg(1, inp), bg(2, out)],
     elementCount,
   );
-  u.destroy();
 }
 
 export function dispatchGeluBf16(
@@ -806,7 +829,6 @@ export function dispatchGeluBf16(
     [bg(0, u), bg(1, inp), bg(2, out)],
     packedThreadCount(elementCount),
   );
-  u.destroy();
 }
 
 /**
@@ -830,7 +852,6 @@ export function dispatchGeluBackward(
     [bg(0, u), bg(1, gradOut), bg(2, inp), bg(3, gradIn)],
     elementCount,
   );
-  u.destroy();
 }
 
 export function dispatchGeluBackwardBf16(
@@ -850,7 +871,6 @@ export function dispatchGeluBackwardBf16(
     [bg(0, u), bg(1, gradOut), bg(2, inp), bg(3, gradIn)],
     packedThreadCount(elementCount),
   );
-  u.destroy();
 }
 
 function assertPositiveDims(label: string, rows: number, cols: number): void {
@@ -886,7 +906,6 @@ function dispatchRowwiseReduce(
     [bg(0, u), bg(1, input), bg(2, out)],
     packed ? packedThreadCount(rows) : rows,
   );
-  u.destroy();
 }
 
 /**
@@ -973,7 +992,6 @@ export function dispatchSoftmax(
     [bg(0, u), bg(1, input), bg(2, out)],
     rows,
   );
-  u.destroy();
 }
 
 export function dispatchSoftmaxBf16(
@@ -995,7 +1013,6 @@ export function dispatchSoftmaxBf16(
     [bg(0, u), bg(1, input), bg(2, out)],
     packedThreadCount(rows),
   );
-  u.destroy();
 }
 
 /**
@@ -1023,7 +1040,6 @@ export function dispatchSoftmaxBackward(
     [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
     rows,
   );
-  u.destroy();
 }
 
 export function dispatchSoftmaxBackwardBf16(
@@ -1046,7 +1062,6 @@ export function dispatchSoftmaxBackwardBf16(
     [bg(0, u), bg(1, gradOut), bg(2, y), bg(3, gradIn)],
     packedThreadCount(rows),
   );
-  u.destroy();
 }
 
 /**
@@ -1088,7 +1103,6 @@ export function dispatchRmsNorm(
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
     rows,
   );
-  u.destroy();
 }
 
 export function dispatchRmsNormBf16(
@@ -1119,7 +1133,6 @@ export function dispatchRmsNormBf16(
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, out)],
     packedThreadCount(rows),
   );
-  u.destroy();
 }
 
 /** ∂L/∂input for RMSNorm; writes **`gradInput`** (same shape as **`input`**). */
@@ -1152,7 +1165,6 @@ export function dispatchRmsNormGradInput(
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, gradOut), bg(4, gradInput)],
     rows,
   );
-  u.destroy();
 }
 
 export function dispatchRmsNormGradInputBf16(
@@ -1184,7 +1196,6 @@ export function dispatchRmsNormGradInputBf16(
     [bg(0, u), bg(1, input), bg(2, gamma), bg(3, gradOut), bg(4, gradInput)],
     packedThreadCount(rows),
   );
-  u.destroy();
 }
 
 /** ∂L/∂γ (`[cols]`); **`gradGamma`** must be zero-initialized or overwritten entirely. */
@@ -1210,7 +1221,6 @@ export function dispatchRmsNormGradGamma(
     [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
     cols,
   );
-  u.destroy();
 }
 
 export function dispatchRmsNormGradGammaBf16(
@@ -1235,7 +1245,6 @@ export function dispatchRmsNormGradGammaBf16(
     [bg(0, u), bg(1, input), bg(2, gradOut), bg(3, gradGamma)],
     packedThreadCount(cols),
   );
-  u.destroy();
 }
 
 /**
@@ -1272,7 +1281,6 @@ export function dispatchEmbeddingGather(
     [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
     numTokens * embedDim,
   );
-  u.destroy();
 }
 
 export function dispatchEmbeddingGatherBf16(
@@ -1306,7 +1314,6 @@ export function dispatchEmbeddingGatherBf16(
     [bg(0, u), bg(1, weights), bg(2, indices), bg(3, out)],
     packedThreadCount(numTokens * embedDim),
   );
-  u.destroy();
 }
 
 /**
@@ -1344,7 +1351,6 @@ export function dispatchEmbeddingScatterAccum(
     [bg(0, u), bg(1, gradTokens), bg(2, indices), bg(3, gradWeights)],
     numTokens * embedDim,
   );
-  u.destroy();
 }
 
 export function dispatchEmbeddingScatterAccumBf16(
@@ -1379,7 +1385,6 @@ export function dispatchEmbeddingScatterAccumBf16(
     [bg(0, u), bg(1, gradTokens), bg(2, indices), bg(3, gradWeights)],
     numTokens * embedDim,
   );
-  u.destroy();
 }
 
 /** Per‑row softmax cross‑entropy losses from logits and u32 targets. */
@@ -1405,7 +1410,6 @@ export function dispatchCrossEntropyFromLogits(
     [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
     rows,
   );
-  u.destroy();
 }
 
 export function dispatchCrossEntropyFromLogitsBf16(
@@ -1430,7 +1434,6 @@ export function dispatchCrossEntropyFromLogitsBf16(
     [bg(0, u), bg(1, logits), bg(2, targets), bg(3, lossesOut)],
     packedThreadCount(rows),
   );
-  u.destroy();
 }
 
 /**
@@ -1460,7 +1463,6 @@ export function dispatchCrossEntropyLogitsGrad(
     [bg(0, u), bg(1, probs), bg(2, targets), bg(3, upstreamPerRow), bg(4, gradLogitsOut)],
     rows * cols,
   );
-  u.destroy();
 }
 
 export function dispatchCrossEntropyLogitsGradBf16(
@@ -1486,7 +1488,6 @@ export function dispatchCrossEntropyLogitsGradBf16(
     [bg(0, u), bg(1, probs), bg(2, targets), bg(3, upstreamPerRow), bg(4, gradLogitsOut)],
     packedThreadCount(rows * cols),
   );
-  u.destroy();
 }
 
 /** Writes **`out[i] = scalar[0]`** for `i ∈ [0, n)`. */
@@ -1512,7 +1513,6 @@ export function dispatchBroadcastFillScalar(
     [bg(0, u), bg(1, scalar), bg(2, out)],
     n,
   );
-  u.destroy();
 }
 
 export function dispatchBroadcastFillScalarBf16(
@@ -1537,7 +1537,6 @@ export function dispatchBroadcastFillScalarBf16(
     [bg(0, u), bg(1, scalar), bg(2, out)],
     packedThreadCount(n),
   );
-  u.destroy();
 }
 
 function assertPositiveElementCount(label: string, n: number): void {
@@ -1564,7 +1563,6 @@ export function dispatchCastF32ToBf16(
     [bg(0, u), bg(1, inp), bg(2, out)],
     packedThreadCount(elementCount),
   );
-  u.destroy();
 }
 
 /** Exact f32 widening of bf16 storage. */
@@ -1585,7 +1583,6 @@ export function dispatchCastBf16ToF32(
     [bg(0, u), bg(1, inp), bg(2, out)],
     packedThreadCount(elementCount),
   );
-  u.destroy();
 }
 
 /**
@@ -1617,5 +1614,4 @@ export function dispatchAdamWStep(
     [bg(0, u), bg(1, theta), bg(2, grad), bg(3, m), bg(4, v)],
     elementCount,
   );
-  u.destroy();
 }

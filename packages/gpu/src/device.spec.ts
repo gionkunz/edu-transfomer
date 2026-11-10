@@ -26,7 +26,7 @@ describe.skipIf(!webgpuAvailable)('GpuContext', () => {
   it('create exposes device, queue, retained gpu handle, and adapter summary', async () => {
     const ctx = await GpuContext.create();
     expect(ctx.device).toBeDefined();
-    expect(ctx.queue).toBe(ctx.device.queue);
+    expect(ctx.immediateQueue).toBe(ctx.device.queue);
     expect(ctx.gpu).toBeDefined();
     expect(typeof ctx.adapterLabel).toBe('string');
     expect(ctx.adapterLabel.trim().length).toBeGreaterThan(0);

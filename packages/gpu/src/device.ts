@@ -1,3 +1,4 @@
+import { clearPendingGpuWork, notePendingGpuWork } from './pending-work';
 import { create } from 'webgpu';
 
 import { BufferPool } from './buffer-pool';
@@ -111,7 +112,24 @@ export class GpuContext {
   readonly gpu: GPU;
 
   readonly device: GPUDevice;
+  /**
+   * The device queue, wrapped so that **`submit`** and **`writeBuffer`** first
+   * submit any dispatches recorded by {@link encodeComputeDispatch}. Everything
+   * that goes through this queue therefore observes dispatches in program
+   * order, exactly as if each had been submitted on its own.
+   */
   readonly queue: GPUQueue;
+  /**
+   * The unwrapped device queue. Only safe for writes to a buffer that no
+   * recorded dispatch can reference yet — i.e. one created just now (the
+   * per-dispatch uniform buffers). Anything else must use {@link queue}.
+   */
+  readonly immediateQueue: GPUQueue;
+
+  private pendingEncoder: GPUCommandEncoder | null = null;
+  private pendingPass: GPUComputePassEncoder | null = null;
+  private pendingDispatches = 0;
+  private readonly deferredDestroys: GPUBuffer[] = [];
 
   /** One-line **`GPUAdapter.info`** summary — see **`formatGpuAdapterLabel`**. */
   readonly adapterLabel: string;
@@ -139,11 +157,104 @@ export class GpuContext {
   ) {
     this.gpu = gpu;
     this.device = device;
-    this.queue = device.queue;
+    this.immediateQueue = device.queue;
+    const realQueue = device.queue;
+    const flushPending = (): void => {
+      this.flush();
+    };
+    this.queue = new Proxy(realQueue, {
+      get(target, prop): unknown {
+        if (prop === 'submit') {
+          return (commandBuffers: Iterable<GPUCommandBuffer>): void => {
+            flushPending();
+            target.submit(commandBuffers);
+          };
+        }
+        if (prop === 'writeBuffer') {
+          return (...args: Parameters<GPUQueue['writeBuffer']>): void => {
+            flushPending();
+            target.writeBuffer(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, target);
+        // Native methods need the real queue as receiver, not the proxy.
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
     this.adapterLabel = adapterLabel;
     this.isLikelyCpuSoftwareAdapter = isLikelyCpuSoftwareAdapter;
     this.grantedFeatures = grantedFeatures;
     this.bufferPool = new BufferPool(device);
+  }
+
+  /**
+   * Record one compute dispatch into the shared command encoder instead of
+   * submitting it on its own.
+   *
+   * Why: a training step issues thousands of tiny dispatches, and on D3D12 /
+   * Vulkan each `queue.submit` costs far more than the dispatch it carries.
+   * Recording them into one compute pass and submitting once per
+   * {@link MAX_PENDING_DISPATCHES} (or whenever the host needs a result) keeps
+   * the GPU work identical while removing most of the per-op overhead.
+   *
+   * Ordering is preserved: dispatches inside a pass run in recording order, and
+   * {@link queue} flushes before any other submit or buffer write.
+   */
+  encodeComputeDispatch(
+    pipeline: GPUComputePipeline,
+    bindGroup: GPUBindGroup,
+    workgroups: readonly [number, number?, number?],
+  ): void {
+    if (this.pendingEncoder === null || this.pendingPass === null) {
+      this.pendingEncoder = this.device.createCommandEncoder();
+      this.pendingPass = this.pendingEncoder.beginComputePass();
+      notePendingGpuWork(this);
+    }
+    this.pendingPass.setPipeline(pipeline);
+    this.pendingPass.setBindGroup(0, bindGroup);
+    this.pendingPass.dispatchWorkgroups(...workgroups);
+    this.pendingDispatches += 1;
+    if (this.pendingDispatches >= GpuContext.MAX_PENDING_DISPATCHES) {
+      this.flush();
+    }
+  }
+
+  /** Upper bound on recorded dispatches before an automatic {@link flush}. */
+  static readonly MAX_PENDING_DISPATCHES = 512;
+
+  /** Submit every recorded dispatch, then destroy buffers parked by {@link destroyBuffer}. */
+  flush(): void {
+    const encoder = this.pendingEncoder;
+    const pass = this.pendingPass;
+    if (encoder !== null && pass !== null) {
+      this.pendingEncoder = null;
+      this.pendingPass = null;
+      this.pendingDispatches = 0;
+      clearPendingGpuWork(this);
+      pass.end();
+      this.immediateQueue.submit([encoder.finish()]);
+    }
+    if (this.deferredDestroys.length > 0) {
+      for (const b of this.deferredDestroys) {
+        b.destroy();
+      }
+      this.deferredDestroys.length = 0;
+    }
+  }
+
+  /**
+   * Destroy **`buffer`** once no recorded dispatch can reference it: right away
+   * when nothing is pending, otherwise at the next {@link flush}. (Destroying a
+   * buffer used by a not-yet-submitted command buffer invalidates the submit.)
+   */
+  destroyBuffer(buffer: GPUBuffer): void {
+    if (this.pendingEncoder === null) {
+      buffer.destroy();
+    } else {
+      this.deferredDestroys.push(buffer);
+    }
   }
 
   /**

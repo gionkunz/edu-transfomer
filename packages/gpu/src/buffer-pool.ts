@@ -19,6 +19,7 @@
  */
 
 import './webgpu-globals';
+import { flushAllPendingGpuWork } from './pending-work';
 
 /** Standard usage flags for compute-shader storage buffers in this codebase. */
 export const STORAGE_BUFFER_USAGE =
@@ -159,6 +160,7 @@ export class BufferPool {
     if (entry === undefined) {
       // Foreign buffer (not tracked by us). Fall back to destroy so we don't
       // leak it, but don't count it in pool stats.
+      flushAllPendingGpuWork();
       buf.destroy();
       return;
     }
@@ -184,6 +186,7 @@ export class BufferPool {
     if (bucket.length >= this.options.maxIdlePerBucket) {
       this.overflowDestroys += 1;
       POOL_REGISTRY.delete(buf);
+      flushAllPendingGpuWork();
       buf.destroy();
       return;
     }
@@ -196,6 +199,7 @@ export class BufferPool {
    * callers can correlate trim events with subsequent miss spikes.
    */
   flush(): void {
+    flushAllPendingGpuWork();
     for (const bucket of this.buckets.values()) {
       for (const b of bucket) {
         POOL_REGISTRY.delete(b);
@@ -252,6 +256,7 @@ export function acquireReadbackBuffer(pool: BufferPool, byteSize: number): GPUBu
 export function releasePooledOrDestroy(buf: GPUBuffer): void {
   const entry = POOL_REGISTRY.get(buf);
   if (entry === undefined) {
+    flushAllPendingGpuWork();
     buf.destroy();
     return;
   }
