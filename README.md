@@ -68,13 +68,46 @@ After linking, **`llm`** exposes (among others):
 
 For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading **`bf16`** checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
 
-Built-in GPT shape **presets** for **`llm train --config`** (vocab comes from tokenizer only): **`tiny`**, **`small`**. Otherwise pass a **`GptConfig` JSON path**—see **`config/medium.json`** and **`config/medium-longctx.json`** in this repo (`vocabSize` in the file **must agree** with the tokenizer’s **`vocabSize`**).
+Built-in GPT shape **presets** for **`llm train --config`** (vocab comes from tokenizer only): **`tiny`**, **`small`**. Otherwise pass a **`GptConfig` JSON path**—see **`config/tinystories.json`**, **`config/xxs.json`**, **`config/xs.json`** and **`config/s.json`** in this repo (`vocabSize` in the file **must agree** with the tokenizer’s **`vocabSize`**).
 
 ---
 
+## Quick start: a model that tells a tiny story
+
+The fastest route to readable output is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories): 2.2 GB of short stories written with a small child's vocabulary, built so that models under ~10M parameters can learn coherent English. A handful of novels is far too little text for that (the model memorizes fragments instead of learning grammar).
+
+```bash
+# 1. Download + cut into ~100 MB shards (story boundaries) under corpus/tinystories/ (gitignored)
+node tools/prepare-tinystories.mjs
+
+# 2. Tokenizer: one shard is plenty for an 8k vocabulary (~1 min)
+llm tokenizer train --data 'corpus/tinystories/train-000.txt' --vocab-size 8000 --out out/tinystories/tokenizer.json
+
+# 3. Train. config/tinystories.json is ~10M parameters (8 layers, dModel 256, context 512).
+llm train \
+  --data 'corpus/tinystories/train-00*.txt' \
+  --val-data corpus/tinystories/valid.txt \
+  --tokenizer out/tinystories/tokenizer.json \
+  --config config/tinystories.json \
+  --out out/tinystories/run1 \
+  --token-cache out/tinystories/cache-10shards \
+  --seq-len 512 --accum 4 \
+  --steps 60000 \
+  --lr-max 1e-3 --lr-min 1e-4 --max-grad-norm 1 --warmup 0.02
+
+# 4. Sample
+llm generate --model out/tinystories/run1 --prompt "Once upon a time" --max-new-tokens 200
+```
+
+- **`--data 'train-00*.txt'`** is the first 10 shards (~1 GB, roughly 250M tokens). Use `train-*.txt` for everything; the token ids are held in memory (4 bytes per token).
+- **`--accum 4`** runs 4 sequences per optimizer step and averages their gradients — a batch of 4 at the memory cost of one. Tokens per step = `seq-len × accum`.
+- **`--val-data`** adds a held-out loss curve (every `--eval-every` steps). Train loss falling while validation loss rises means memorization.
+- Every step is appended to **`<out>/metrics.jsonl`** (`step`, `loss`, `lr`, `gradNorm`, `tokPerSec`, `valLoss`), and `--resume` re-plots it.
+- Stories in the corpus are separated by a literal `<|endoftext|>` line, which the tokenizer encodes as three ordinary tokens; generated text contains it where the model ends a story.
+
 ## Example: train a tokenizer
 
-Pick a **`--vocab-size`** that matches the model JSON you’ll use (e.g. **`8000`** for the sample **`config/medium*.json`** in this repo). **`--data`** is repeatable; each value is a glob.
+Pick a **`--vocab-size`** that matches the model JSON you’ll use (e.g. **`8000`** for **`config/tinystories.json`**, **`10000`** for **`config/xs.json`** / **`config/s.json`**). **`--data`** is repeatable; each value is a glob.
 
 ```bash
 llm tokenizer train --data 'corpus/real/*.txt' --vocab-size 8000 --out out/tok-8000.json

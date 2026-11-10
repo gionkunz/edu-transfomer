@@ -15,17 +15,18 @@ Build a transformer-based language model engine from scratch in **TypeScript** f
 
 **Allowed dependencies (and why):**
 
-| Package               | Purpose                                  | Justification                                                               |
-| --------------------- | ---------------------------------------- | --------------------------------------------------------------------------- |
-| `webgpu` (npm)        | WebGPU device access in Node.js via Dawn | Hardware interface only — we write all shaders                              |
-| `wolf-tui`            | Terminal UI rendering                    | UX layer — not ML logic                                                     |
-| Nx + `@nx/js`         | Monorepo tooling                         | Build infrastructure only                                                   |
-| `@nx/vitest`          | Nx Vitest test executor                  | Wires `project.json` `test` targets to Vitest only                          |
-| `vite`                | Vitest config loading (Vite-backed)      | Required peer for `@nx/vitest` / Vitest 3 config — not application bundling |
-| `vitest`              | Unit/integration tests                   | Test infrastructure only                                                    |
-| `eslint` + `prettier` | Code quality                             | Style enforcement only                                                      |
-| `commander` / `yargs` | CLI argument parsing                     | Ergonomics only                                                             |
-| `glob`                | File discovery for training data         | Utility only                                                                |
+| Package                 | Purpose                                  | Justification                                                               |
+| ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------- |
+| `webgpu` (npm)          | WebGPU device access in Node.js via Dawn | Hardware interface only — we write all shaders                              |
+| `wolf-tui`              | Terminal UI rendering                    | UX layer — not ML logic                                                     |
+| `@chartist-js/terminal` | Braille charts in the train dashboard    | UX layer — renders metric history, no ML logic                              |
+| Nx + `@nx/js`           | Monorepo tooling                         | Build infrastructure only                                                   |
+| `@nx/vitest`            | Nx Vitest test executor                  | Wires `project.json` `test` targets to Vitest only                          |
+| `vite`                  | Vitest config loading (Vite-backed)      | Required peer for `@nx/vitest` / Vitest 3 config — not application bundling |
+| `vitest`                | Unit/integration tests                   | Test infrastructure only                                                    |
+| `eslint` + `prettier`   | Code quality                             | Style enforcement only                                                      |
+| `commander` / `yargs`   | CLI argument parsing                     | Ergonomics only                                                             |
+| `glob`                  | File discovery for training data         | Utility only                                                                |
 
 **Explicitly forbidden:**
 
@@ -43,7 +44,7 @@ Build a transformer-based language model engine from scratch in **TypeScript** f
 
 | Concern           | Choice                                                                                                                                                                     |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language          | TypeScript (strict mode; CommonJS emit for Node libs/app)                                                                                                                  |
+| Language          | TypeScript (strict mode; ESM — the CLI is one bundled ES module)                                                                                                           |
 | Runtime           | Node.js 24 LTS                                                                                                                                                             |
 | GPU               | WebGPU via `webgpu` npm package (Dawn v0.4.0)                                                                                                                              |
 | Shader language   | WGSL                                                                                                                                                                       |
@@ -775,15 +776,15 @@ Tensors are concatenated in **lexical order** of their manifest keys. Each tenso
 
 ### Common pathology cheatsheet
 
-| Issue                              | Symptom                     | Fix                                                                             |
-| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------------- |
-| Softmax overflow                   | NaN logits                  | Subtract `max(scores)` before `exp()` — implemented in `softmax.wgsl` as 2-pass |
-| Exploding gradients                | NaN loss after N steps      | Gradient clipping (global norm ≤ 1.0)                                           |
-| Poor weight init                   | Loss stuck or diverges      | Xavier init for linear; embedding std ≈ 0.02                                    |
-| Weight tying + large embedding std | Logit overflow              | Keep std at 0.02 when tying                                                     |
-| Large LR at step 0                 | Immediate divergence        | Linear warmup for first 100 steps                                               |
-| FP32 precision on GPU              | Rounding in long reductions | Use workgroup-level Kahan summation if needed                                   |
-| Cross-entropy with raw softmax     | Catastrophic cancellation   | Fuse log-softmax + NLL into single kernel                                       |
+| Issue                              | Symptom                     | Fix                                                                                                                        |
+| ---------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Softmax overflow                   | NaN logits                  | Subtract `max(scores)` before `exp()` — implemented in `softmax.wgsl` as 2-pass                                            |
+| Exploding gradients                | NaN loss after N steps      | Gradient clipping (global norm ≤ 1.0)                                                                                      |
+| Poor weight init                   | Loss stuck or diverges      | `N(0, 0.02²)` everywhere; residual-out (`wo`, `w2`) × `1/√(2·nLayers)` — see `GPT_INIT_STD` in `packages/model/src/gpt.ts` |
+| Weight tying + large embedding std | Logit overflow              | Keep std at 0.02 when tying                                                                                                |
+| Large LR at step 0                 | Immediate divergence        | Linear warmup for first 100 steps                                                                                          |
+| FP32 precision on GPU              | Rounding in long reductions | Use workgroup-level Kahan summation if needed                                                                              |
+| Cross-entropy with raw softmax     | Catastrophic cancellation   | Fuse log-softmax + NLL into single kernel                                                                                  |
 
 ---
 
