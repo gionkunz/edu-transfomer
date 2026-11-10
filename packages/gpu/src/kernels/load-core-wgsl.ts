@@ -1,9 +1,31 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Absolute path of a kernel source file.
+ *
+ * Two layouts exist: running from source (tests), the `.wgsl` files sit next to
+ * this module; in the bundled CLI this module is inlined into `main.js` and the
+ * build copies the shaders into a `kernels/` folder beside it.
+ */
+export function resolveWgslPath(file: string): string {
+  const beside = path.join(MODULE_DIR, file);
+  if (existsSync(beside)) {
+    return beside;
+  }
+  const bundled = path.join(MODULE_DIR, 'kernels', file);
+  if (existsSync(bundled)) {
+    return bundled;
+  }
+  throw new Error(`WGSL kernel source not found: ${file} (looked in ${beside} and ${bundled})`);
+}
 
 function loadWgsl(relativePath: string): string {
   const file = relativePath.replace(/^\.\//, '');
-  return rewriteMainForLargeDispatch(readFileSync(path.join(__dirname, file), 'utf8'));
+  return rewriteMainForLargeDispatch(readFileSync(resolveWgslPath(file), 'utf8'));
 }
 
 const MAIN_HEADER_PATTERN =

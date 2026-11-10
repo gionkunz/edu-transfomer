@@ -11,8 +11,8 @@
       "options": {
         "platform": "node",
         "outputPath": "dist/apps/cli",
-        "format": ["cjs"],
-        "bundle": false,
+        "format": ["esm"],
+        "bundle": true,
         "main": "apps/cli/src/main.ts",
         "tsConfig": "apps/cli/tsconfig.app.json",
         "assets": [
@@ -20,13 +20,15 @@
           {
             "glob": "*.wgsl",
             "input": "packages/gpu/src/kernels",
-            "output": "packages/gpu/src/kernels"
+            "output": "kernels"
           }
         ],
         "generatePackageJson": true,
         "esbuildOptions": {
           "sourcemap": true,
-          "outExtension": { ".js": ".js" }
+          "outExtension": {
+            ".js": ".js"
+          }
         },
         "thirdParty": false
       },
@@ -35,7 +37,9 @@
         "production": {
           "esbuildOptions": {
             "sourcemap": false,
-            "outExtension": { ".js": ".js" }
+            "outExtension": {
+              ".js": ".js"
+            }
           }
         }
       }
@@ -89,7 +93,10 @@
       "cache": true,
       "inputs": [
         "{workspaceRoot}/tools/cli-bootstrap-shebang.mjs",
-        { "dependentTasksOutputFiles": "**/*", "transitive": false }
+        {
+          "dependentTasksOutputFiles": "**/*",
+          "transitive": false
+        }
       ],
       "outputs": ["{workspaceRoot}/dist/apps/cli/main.js"],
       "options": {

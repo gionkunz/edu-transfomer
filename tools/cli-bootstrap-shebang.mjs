@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * The Nx non-bundling Node shim at dist/apps/cli/main.js lacks a Node shebang.
- * When npm links it as bin/llm, the shell executes it as bash and blows up on "use strict".
+ * Make the bundled ESM entry at dist/apps/cli/main.js runnable as bin/llm.
+ * esbuild keeps the `#!/usr/bin/env node` line of `apps/cli/src/main.ts`; this adds one
+ * only if it is missing (without it the shell would run the file as a shell script).
  *
  * npm link also requires the bin target to be executable; esbuild output is often mode 0644.
  *
@@ -25,14 +26,6 @@ let body = fs.readFileSync(resolved, 'utf8');
 if (body.startsWith('#!')) {
   chmodScript();
   process.exit(0);
-}
-
-/** Nx bootstrap: CommonJS shim that patches Module._resolveFilename */
-if (!body.includes('Module._resolveFilename')) {
-  console.error(
-    `cli-bootstrap-shebang: expected Nx resolver shim at ${resolved}, refusing to alter.`,
-  );
-  process.exit(1);
 }
 
 fs.writeFileSync(resolved, SHEBANG + body, 'utf8');

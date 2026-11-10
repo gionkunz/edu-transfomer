@@ -2,7 +2,8 @@
   "name": "@llm-transformer-diy/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "`llm` CLI — tokenizer, train, generate, chat, inspect",
+  "type": "module",
+  "description": "`llm` CLI \u2014 tokenizer, train, generate, chat, inspect",
   "main": "./main.js",
   "types": "./main.d.ts",
   "bin": {
