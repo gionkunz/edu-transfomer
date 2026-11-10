@@ -43,7 +43,7 @@ export type CreateGptModelOptions = {
    */
   readonly dtype?: FloatDType;
   /**
-   * PRNG seed for weight initialization (Box–Muller Gaussian, fan-in scaled).
+   * PRNG seed for weight initialization (Box–Muller Gaussian, see {@link GPT_INIT_STD}).
    * Defaults to a fixed constant so training runs are deterministic; override
    * to draw a different initial weight sample for the same architecture.
    */
@@ -101,29 +101,46 @@ function createPrng(seed: number): () => number {
 }
 
 /**
- * Per-parameter Gaussian (std-normal × `scale / √cols`, i.e. fan-in scaled) draw
- * using Box–Muller from a shared {@link createPrng} stream. The shared stream
- * is what breaks symmetry across heads and across **Q/K/V** within a head —
- * every call advances the PRNG, so two `wq` heads receive *independent* values
- * even though they have identical shape/scale arguments.
+ * Standard deviation shared by every weight matrix at init (the GPT-2 recipe).
  *
- * History: the previous initializer used a deterministic `sin(i · 0.13)` pattern
- * applied identically to every weight matrix. With no per-call entropy, all
- * heads in every layer started element-wise identical, and within each head
- * **Q = K = V** at init. That gives a degenerate Gram-matrix attention pattern
- * which the optimizer can only break symmetrically slowly via downstream
- * gradient differences from `headExpand`. Empirically this made training
- * plateau near the unigram-baseline loss for many hundreds of steps. Using a
- * proper Gaussian init with a single shared stream fixes both symmetries.
+ * With Pre-LN blocks the input of every matmul has unit RMS, so a projection
+ * `x @ W` with `W ~ N(0, σ²)` produces activations of std `σ·√fanIn`. At
+ * `σ = 0.02` and `dModel` in the hundreds that is below 1, which keeps the
+ * attention scores `q·k / √dK` near zero: softmax starts close to **uniform**
+ * and every position receives gradient from step 0.
  */
-function smallInitRows(
-  prng: () => number,
-  rows: number,
-  cols: number,
-  scale: number,
-): Float32Array {
+export const GPT_INIT_STD = 0.02;
+
+/**
+ * Extra shrink for the two matrices that write into the residual stream
+ * (`wo`, `w2`): `1 / √(2 · nLayers)`. Each block adds two such outputs, so
+ * without the shrink the residual variance grows linearly with depth.
+ */
+export function residualOutInitStd(nLayers: number): number {
+  return GPT_INIT_STD / Math.sqrt(2 * nLayers);
+}
+
+/**
+ * Gaussian `N(0, std²)` draw (Box–Muller) from a shared {@link createPrng}
+ * stream. The shared stream is what breaks symmetry across heads and across
+ * **Q/K/V** within a head — every call advances the PRNG, so two `wq` heads
+ * receive *independent* values even though they have identical shapes.
+ *
+ * History, kept because both mistakes are instructive:
+ *
+ * 1. The first initializer used a deterministic `sin(i · 0.13)` pattern for
+ *    every matrix. All heads started identical and **Q = K = V** within a head;
+ *    training plateaued near the unigram loss for hundreds of steps.
+ * 2. The second used `std = 1 / √cols`, meant as fan-in scaling. Weights here
+ *    are laid out `[in, out]` and applied as `x @ W`, so `cols` is the
+ *    **fan-out**. For `wq`/`wk` (`[dModel, dK]`) that gave `std = 1/√dK`
+ *    (0.125 at `dK = 64`): attention scores started with a standard deviation
+ *    around 8, so softmax was nearly one-hot on a random position, and each
+ *    attention block wrote an output ~50× larger than the token embedding into
+ *    the residual stream. Training only survived with a tiny learning rate.
+ */
+function gaussianInit(prng: () => number, rows: number, cols: number, std: number): Float32Array {
   const a = new Float32Array(rows * cols);
-  const std = scale / Math.sqrt(cols);
   for (let i = 0; i < a.length; i++) {
     // Box–Muller. Clamp u1 away from 0 so log() stays finite.
     const u1 = Math.max(1e-7, prng());
@@ -170,16 +187,17 @@ export function createGptModel(
   const prng = createPrng(initSeed);
   const { vocabSize, maxSeqLen, dModel, nHeads, dFf, nLayers } = config;
   const dK = dModel / nHeads;
+  const residualStd = residualOutInitStd(nLayers);
 
   const tokenEmbed = paramFromInit(
     rt,
-    smallInitRows(prng, vocabSize, dModel, 1.0),
+    gaussianInit(prng, vocabSize, dModel, GPT_INIT_STD),
     [vocabSize, dModel],
     dtype,
   );
   const posEmbed = paramFromInit(
     rt,
-    smallInitRows(prng, maxSeqLen, dModel, 0.5),
+    gaussianInit(prng, maxSeqLen, dModel, GPT_INIT_STD),
     [maxSeqLen, dModel],
     dtype,
   );
@@ -198,13 +216,28 @@ export function createGptModel(
     const wk: Parameter[] = [];
     const wv: Parameter[] = [];
     for (let h = 0; h < nHeads; h++) {
-      wq.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
-      wk.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
-      wv.push(paramFromInit(rt, smallInitRows(prng, dModel, dK, 1.0), [dModel, dK], dtype));
+      wq.push(paramFromInit(rt, gaussianInit(prng, dModel, dK, GPT_INIT_STD), [dModel, dK], dtype));
+      wk.push(paramFromInit(rt, gaussianInit(prng, dModel, dK, GPT_INIT_STD), [dModel, dK], dtype));
+      wv.push(paramFromInit(rt, gaussianInit(prng, dModel, dK, GPT_INIT_STD), [dModel, dK], dtype));
     }
-    const wo = paramFromInit(rt, smallInitRows(prng, dModel, dModel, 1.0), [dModel, dModel], dtype);
-    const w1 = paramFromInit(rt, smallInitRows(prng, dModel, dFf, 1.0), [dModel, dFf], dtype);
-    const w2 = paramFromInit(rt, smallInitRows(prng, dFf, dModel, 1.0), [dFf, dModel], dtype);
+    const wo = paramFromInit(
+      rt,
+      gaussianInit(prng, dModel, dModel, residualStd),
+      [dModel, dModel],
+      dtype,
+    );
+    const w1 = paramFromInit(
+      rt,
+      gaussianInit(prng, dModel, dFf, GPT_INIT_STD),
+      [dModel, dFf],
+      dtype,
+    );
+    const w2 = paramFromInit(
+      rt,
+      gaussianInit(prng, dFf, dModel, residualStd),
+      [dFf, dModel],
+      dtype,
+    );
     blocks.push({
       attnNormGamma,
       ffnNormGamma,
@@ -218,7 +251,7 @@ export function createGptModel(
   }
 
   const finalNormGamma = paramFromInit(rt, new Float32Array(dModel).fill(1), [dModel], dtype);
-  const lmHeadData = smallInitRows(prng, dModel, vocabSize, 1 / Math.sqrt(dModel));
+  const lmHeadData = gaussianInit(prng, dModel, vocabSize, GPT_INIT_STD);
   const lmHead = paramFromInit(rt, lmHeadData, [dModel, vocabSize], dtype);
 
   return {
