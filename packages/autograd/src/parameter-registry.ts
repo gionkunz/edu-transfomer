@@ -111,7 +111,7 @@ export async function clipGradNorm(
   rt: TensorRuntime,
   reg: ParameterRegistry,
   maxNorm: number,
-): Promise<void> {
+): Promise<number> {
   if (!(maxNorm > 0) || !Number.isFinite(maxNorm)) {
     throw new Error('clipGradNorm: maxNorm must be finite and > 0');
   }
@@ -123,7 +123,7 @@ export async function clipGradNorm(
     );
   }
   if (norm === 0 || norm <= maxNorm) {
-    return;
+    return norm;
   }
   const s = maxNorm / norm;
   for (const p of reg.params) {
@@ -134,6 +134,15 @@ export async function clipGradNorm(
     destroy(p.grad);
     p.grad = scaled;
   }
+  return norm;
+}
+
+/**
+ * Global L2 norm over every registered parameter gradient, without modifying
+ * any gradient. One GPU readback. Used for logging when clipping is disabled.
+ */
+export async function gradNorm(rt: TensorRuntime, reg: ParameterRegistry): Promise<number> {
+  return Math.sqrt(await sumGradNormSq(rt, reg));
 }
 
 /**

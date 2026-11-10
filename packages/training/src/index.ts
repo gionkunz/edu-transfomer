@@ -55,8 +55,10 @@ export { getCosineLr, type CosineLrSchedule } from './scheduler';
 export {
   registerModelParameters,
   Trainer,
+  type TrainerMicroBatch,
   type TrainerOptions,
   type TrainerStepInfo,
+  type TrainerStepResult,
 } from './trainer';
 export { runReplayStepProbe } from './train-replay';
 

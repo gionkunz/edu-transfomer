@@ -42,6 +42,7 @@ export {
   clipGradNorm,
   createParameterRegistry,
   disposeAutogradGraphExceptParameters,
+  gradNorm,
   parameters,
   registerParameter,
   totalParams,

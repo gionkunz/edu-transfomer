@@ -39,6 +39,12 @@ export function topologicalOrder(output: Variable): readonly Variable[] {
  * of `Σ output` per parameter element). If `output.grad` is already set, the
  * supplied gradient is used as-is.
  *
+ * `seedScale` multiplies that implicit seed (default `1`). Gradient
+ * accumulation uses it: calling `backward(rt, loss_i, 1 / n)` for `n`
+ * micro-batches without an intervening `zeroGrad` leaves every parameter with
+ * the gradient of the **mean** loss, exactly as one batch of `n` sequences
+ * would. Ignored when `output.grad` is already set.
+ *
  * The function then walks the topo order in reverse: for each non-leaf
  * variable, it calls `creator.backward(rt, v.grad)` and accumulates each
  * non-`null` returned tensor onto the corresponding input via
@@ -49,10 +55,10 @@ export function topologicalOrder(output: Variable): readonly Variable[] {
  * {@link import('./parameter-registry').zeroGrad} accumulates contributions
  * (this matches PyTorch's default behavior).
  */
-export function backward(rt: TensorRuntime, output: Variable): void {
+export function backward(rt: TensorRuntime, output: Variable, seedScale = 1): void {
   if (output.grad === null) {
     const ones = new Float32Array(output.tensor.length);
-    ones.fill(1);
+    ones.fill(seedScale);
     const onesTensor = createFromArray(rt, ones, output.tensor.shape, floatDtypeOf(output.tensor));
     // Route through accumulateGrad so the direct-assignment branch keeps the
     // grep audit clean: only accumulateGrad and zeroGrad write Variable.grad.

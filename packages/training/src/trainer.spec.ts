@@ -56,6 +56,32 @@ describe.skipIf(!webgpuAvailable)('Trainer (GPU)', () => {
     }
   });
 
+  it('accumulating the same sequence n times matches a single-sequence step', async () => {
+    const schedule = { lrMax: 1e-3, lrMin: 1e-4, warmupSteps: 1, totalSteps: 4 };
+    const run = async (copies: number): Promise<{ gradNorm: number | null; after: number }> => {
+      const m = createGptModel(rt, tinyCfg);
+      const reg = createParameterRegistry();
+      registerModelParameters(reg, collectGptParameters(m));
+      const opt = new AdamW(rt, reg, { lr: 1e-3, weightDecay: 0 });
+      const trainer = new Trainer(rt, m, reg, opt, { maxGradNorm: 1e6, schedule });
+      const { input, targets } = createLmBatch(rt, tokenStream, 0, 8);
+      const micro = Array.from({ length: copies }, () => ({ input, targets }));
+      const res = await trainer.trainStepAccumulated(micro, 0);
+      const after = await trainer.evalLoss(input, targets);
+      const again = await trainer.evalLoss(input, targets);
+      expect(again).toBeCloseTo(after, 5);
+      destroy(input);
+      destroy(targets);
+      opt.dispose();
+      return { gradNorm: res.gradNorm, after };
+    };
+    const single = await run(1);
+    const triple = await run(3);
+    expect(single.gradNorm).not.toBeNull();
+    expect(triple.gradNorm ?? 0).toBeCloseTo(single.gradNorm ?? -1, 3);
+    expect(triple.after).toBeCloseTo(single.after, 3);
+  });
+
   it('overfits a repeating batch: loss drops', async () => {
     const reg = createParameterRegistry();
     const params = collectGptParameters(model);
