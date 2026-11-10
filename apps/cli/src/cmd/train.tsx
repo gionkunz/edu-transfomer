@@ -4,7 +4,11 @@ import path from 'node:path';
 
 import { createParameterRegistry } from '@llm-transformer-diy/autograd';
 import { discoverTrainingFiles } from '@llm-transformer-diy/io';
-import { collectGptParameters, createGptModel } from '@llm-transformer-diy/model';
+import {
+  collectGptParameters,
+  createGptModel,
+  trainingBatchStart,
+} from '@llm-transformer-diy/model';
 import { destroy, type FloatDType } from '@llm-transformer-diy/tensor';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 import {
@@ -13,7 +17,6 @@ import {
   assertCorpusTokenIdsInVocab,
   assertModelParametersFiniteForResume,
   createLmBatch,
-  getCosineLr,
   hydrateAdamWFromCheckpoint,
   loadGptModelFromCheckpoint,
   loadTrainingCheckpointForResume,
@@ -24,6 +27,7 @@ import {
   shouldSavePeriodicCheckpoint,
   TRAIN_DEFAULT_CHECKPOINT_EVERY,
   trainingCheckpointPaths,
+  type TrainerMicroBatch,
 } from '@llm-transformer-diy/training';
 
 import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
@@ -44,6 +48,12 @@ import {
   type TrainDashboardDraft,
 } from './train-dash-model';
 import { TrainDashboardView } from './train-dashboard';
+import {
+  TRAIN_METRICS_FILE,
+  TrainMetricsLog,
+  readTrainMetrics,
+  type TrainMetricsRecord,
+} from './train-metrics-log';
 
 /** Defaults for **`llm train`** (override with flags). */
 export const TRAIN_DEFAULT_LR_MAX = 1e-4;
@@ -52,6 +62,12 @@ export const TRAIN_DEFAULT_WEIGHT_DECAY = 0.01;
 export const TRAIN_DEFAULT_MAX_GRAD_NORM = 0.5;
 /** Fraction of **`--steps`** used for linear LR warmup before cosine decay. */
 export const TRAIN_DEFAULT_WARMUP_FRACTION = 0.1;
+/** Sequences per optimizer step (gradient accumulation). */
+export const TRAIN_DEFAULT_ACCUM = 1;
+/** Validation cadence in optimizer steps when **`--val-data`** is given. */
+export const TRAIN_DEFAULT_EVAL_EVERY = 250;
+/** Held-out sequences averaged per validation measurement. */
+export const TRAIN_DEFAULT_EVAL_BATCHES = 16;
 
 export {
   TRAIN_DEFAULT_CHECKPOINT_EVERY,
@@ -105,7 +121,23 @@ export type RunTrainCommandOpts = {
   readonly replayOnly?: boolean;
   /** Sequence row indices to inspect during replay probe (default: 0, mid, last). */
   readonly replayRows?: readonly number[];
+  /** Sequences per optimizer step; gradients are averaged over them (default **`1`**). */
+  readonly accum?: number;
+  /** Held-out text globs; enables the validation loss curve. */
+  readonly valGlobs?: readonly string[];
+  /** Measure validation loss every N optimizer steps (default **`250`**). */
+  readonly evalEvery?: number;
+  /** Held-out sequences averaged per measurement (default **`16`**). */
+  readonly evalBatches?: number;
 };
+
+function resolvePositiveInt(value: number | undefined, fallback: number, flag: string): number {
+  const v = value ?? fallback;
+  if (!Number.isInteger(v) || v <= 0) {
+    throw new Error(`train: ${flag} must be a positive integer (got ${String(v)})`);
+  }
+  return v;
+}
 
 function resolveTrainOptimHyperparams(opts: RunTrainCommandOpts): {
   lrMax: number;
@@ -155,6 +187,16 @@ function resolveTrainOptimHyperparams(opts: RunTrainCommandOpts): {
 export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> {
   const computeDtype = opts.computeDtype;
   const optim = resolveTrainOptimHyperparams(opts);
+  const accum = resolvePositiveInt(opts.accum, TRAIN_DEFAULT_ACCUM, '--accum');
+  const evalEvery = resolvePositiveInt(opts.evalEvery, TRAIN_DEFAULT_EVAL_EVERY, '--eval-every');
+  const evalBatches = resolvePositiveInt(
+    opts.evalBatches,
+    TRAIN_DEFAULT_EVAL_BATCHES,
+    '--eval-batches',
+  );
+  if (accum > 1 && opts.replayStep !== undefined) {
+    throw new Error('train: --replay-step replays single-sequence steps; use it with --accum 1');
+  }
   const outAbsDisplay = path.resolve(opts.outDir);
   const draft: TrainDashboardDraft = createInitialTrainDashboardDraft({
     outDirDisplay: outAbsDisplay,
@@ -548,6 +590,52 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
 
   assertCorpusTokenIdsInVocab(tokenIds, gptCfg.vocabSize);
 
+  // Held-out text: never trained on, so its loss shows generalization rather
+  // than memorization. Encoded in memory (it is small) and not cached.
+  let valTokenIds: Uint32Array | null = null;
+  if (opts.valGlobs !== undefined && opts.valGlobs.length > 0) {
+    const valFiles = await discoverTrainingFiles([...opts.valGlobs]);
+    if (valFiles.length === 0) {
+      throw new Error('train: --val-data matched no files');
+    }
+    const trainSet = new Set(files.map((f) => path.resolve(f)));
+    const overlap = valFiles.find((f) => trainSet.has(path.resolve(f)));
+    if (overlap !== undefined) {
+      throw new Error(`train: --val-data file is also in --data (not held out): ${overlap}`);
+    }
+    const chunks: Uint32Array[] = [];
+    let total = 0;
+    for (let fi = 0; fi < valFiles.length; fi++) {
+      const rel = valFiles[fi];
+      if (rel === undefined) continue;
+      draft.detailLine = `encoding validation file ${String(fi + 1)}/${String(valFiles.length)}: ${rel}`;
+      dashThrottle.flush();
+      const text = await readFile(path.resolve(rel), 'utf8');
+      const ids = await tokenizer.encodeUint32Async(text, {
+        onYield: () => {
+          dashThrottle.schedule();
+        },
+      });
+      chunks.push(ids);
+      total += ids.length;
+    }
+    valTokenIds = new Uint32Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      valTokenIds.set(c, off);
+      off += c.length;
+    }
+    if (valTokenIds.length <= opts.seqLen + 1) {
+      throw new Error(
+        `train: validation data has ${String(valTokenIds.length)} tokens, need more than seqLen + 1`,
+      );
+    }
+    assertCorpusTokenIdsInVocab(valTokenIds, gptCfg.vocabSize);
+    console.error(
+      `train: validation ${String(valTokenIds.length)} tokens · every ${String(evalEvery)} steps · ${String(evalBatches)} sequences`,
+    );
+  }
+
   const totalSteps = opts.steps;
   const warmupSteps = resolveWarmupSteps(totalSteps, opts.warmupFraction);
   const schedule = {
@@ -616,12 +704,19 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     // started with `--expose-gc`. No-op otherwise. The buffer pool already
     // eliminates most per-step churn; this is belt-and-suspenders for long runs.
     forceGcEverySteps: 50,
+    // Always read the gradient norm so the dashboard / metrics.jsonl have it
+    // even when clipping is off (one small readback per step).
+    measureGradNorm: true,
     // `logBufferPoolEverySteps` is intentionally not set: the pool's hit-rate
     // and idle-footprint behaviour is well understood and the per-100-step
     // stderr line just clutters the diagnostics stream. Re-enable on demand
     // when investigating pool regressions.
   });
 
+  draft.lrSchedule = schedule;
+  draft.accum = accum;
+  draft.maxGradNorm = Number.isFinite(optim.maxGradNorm) ? optim.maxGradNorm : null;
+  draft.uniformLoss = Math.log(gptCfg.vocabSize);
   draft.archSummary = `${String(gptCfg.nLayers)}L · d${String(model.config.dModel)} · V${String(model.config.vocabSize)} · ${computeDtype}`;
   draft.phase = 'training';
   draft.trainingPhaseStartedAtMs = Date.now();
@@ -630,7 +725,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   dashThrottle.flush();
 
   console.error(
-    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} (fraction=${String(opts.warmupFraction)}) weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'} checkpoint_every=${String(checkpointEvery)}`,
+    `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} (fraction=${String(opts.warmupFraction)}) weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'} accum=${String(accum)} checkpoint_every=${String(checkpointEvery)}`,
   );
   console.error(
     'train: first optimizer step often waits on GPU shader/pipeline warmup (minutes on some setups).',
@@ -724,6 +819,43 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     draft.trainStepCompleted = startStep;
   }
 
+  // metrics.jsonl: one line per optimizer step, next to the checkpoint. On
+  // --resume the history up to the checkpointed step is kept and re-plotted.
+  await mkdir(outAbsDisplay, { recursive: true });
+  const metricsPath = path.join(outAbsDisplay, TRAIN_METRICS_FILE);
+  const keptMetrics: TrainMetricsRecord[] = opts.resume
+    ? (await readTrainMetrics(metricsPath)).filter((r) => r.step <= startStep)
+    : [];
+  for (const r of keptMetrics) {
+    draft.lossHistory.push(r.step, r.loss);
+    if (r.gradNorm !== null) draft.gradNormHistory.push(r.step, r.gradNorm);
+    if (r.valLoss !== undefined) draft.valHistory.push({ step: r.step, loss: r.valLoss });
+  }
+  const metricsLog = await TrainMetricsLog.open(metricsPath, keptMetrics);
+
+  /**
+   * Mean loss over **`evalBatches`** held-out sequences. The windows are fixed
+   * (evenly spaced through the validation tokens), so every measurement scores
+   * the same text and the curve is comparable across steps and across runs.
+   */
+  const measureValLoss = async (): Promise<number | null> => {
+    if (valTokenIds === null) return null;
+    const maxStart = valTokenIds.length - opts.seqLen - 1;
+    const n = Math.min(evalBatches, maxStart + 1);
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const start = n === 1 ? 0 : Math.floor((i * maxStart) / (n - 1));
+      const { input, targets } = createLmBatch(rt, valTokenIds, start, opts.seqLen);
+      try {
+        sum += await trainer.evalLoss(input, targets);
+      } finally {
+        destroy(input);
+        destroy(targets);
+      }
+    }
+    return sum / n;
+  };
+
   try {
     for (let s = startStep; s < totalSteps; s++) {
       while (draft.trainingPaused) {
@@ -735,24 +867,58 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       if (s === startStep) {
         console.error(`train: step ${String(s + 1)}/${String(totalSteps)}…`);
       }
-      const maxStart = tokenIds.length - opts.seqLen - 1;
-      const start = Math.floor((s * 9973) % (maxStart + 1));
-      const { input, targets } = createLmBatch(rt, tokenIds, start, opts.seqLen);
+      // `accum` sequences per optimizer step. With accum = 1 the offsets are
+      // exactly `trainingBatchStart(…, s)`, which `--replay-step` relies on.
+      const microBatches: TrainerMicroBatch[] = [];
+      for (let m = 0; m < accum; m++) {
+        const start = trainingBatchStart(tokenIds.length, opts.seqLen, s * accum + m);
+        const { input, targets } = createLmBatch(rt, tokenIds, start, opts.seqLen);
+        microBatches.push({
+          input,
+          targets,
+          batch: { batchStart: start, vocabSize: gptCfg.vocabSize },
+        });
+      }
       const t0 = performance.now();
-      const loss = await trainer.trainStep(input, targets, s, {
-        batchStart: start,
-        vocabSize: gptCfg.vocabSize,
-      });
+      let stepResult;
+      try {
+        stepResult = await trainer.trainStepAccumulated(microBatches, s);
+      } finally {
+        for (const mb of microBatches) {
+          destroy(mb.input);
+          destroy(mb.targets);
+        }
+      }
+      const loss = stepResult.loss;
       const dt = Math.max(1e-6, (performance.now() - t0) / 1000);
-      destroy(input);
-      destroy(targets);
+      const tokPerSec = (opts.seqLen * accum) / dt;
 
-      draft.trainStepCompleted = s + 1;
+      const stepDone = s + 1;
+      const valLoss =
+        stepDone % evalEvery === 0 || stepDone === totalSteps ? await measureValLoss() : null;
+
+      draft.trainStepCompleted = stepDone;
       draft.trainLossLast = loss;
-      draft.trainLrDisplay = getCosineLr(s, schedule);
-      draft.tokensPerSecApprox = opts.seqLen / dt;
+      draft.trainLrDisplay = stepResult.lr;
+      draft.tokensPerSecApprox = tokPerSec;
       draft.recentLosses.push(loss);
-      dashThrottle.flush();
+      draft.lossHistory.push(stepDone, loss);
+      draft.gradNormLast = stepResult.gradNorm;
+      if (stepResult.gradNorm !== null) {
+        draft.gradNormHistory.push(stepDone, stepResult.gradNorm);
+      }
+      if (valLoss !== null) {
+        draft.valHistory.push({ step: stepDone, loss: valLoss });
+      }
+      metricsLog.write({
+        step: stepDone,
+        loss,
+        lr: stepResult.lr,
+        gradNorm: stepResult.gradNorm,
+        tokPerSec,
+        ...(valLoss !== null ? { valLoss } : {}),
+      });
+      dashThrottle.schedule();
 
       const completedStep = s + 1;
       if (shouldSavePeriodicCheckpoint(completedStep, totalSteps, checkpointEvery)) {
@@ -794,6 +960,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     draft.detailLine = 'artifacts written';
     dashThrottle.flush();
   } finally {
+    await metricsLog.close();
     dashRef.inst?.unmount();
     opt.dispose();
   }

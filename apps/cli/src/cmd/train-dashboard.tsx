@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
+import { detectColorMode } from '@chartist-js/terminal';
 import { Badge, Box, ProgressBar, Spinner, Text, useInput } from '@wolf-tui/react';
 
 import { formatDurationSec } from './format-duration';
+import { renderGradNormChart, renderLossChart, renderLrChart } from './train-charts';
 import {
   type TrainDashboardSnapshot,
   type TrainPipelinePhase,
@@ -74,6 +76,108 @@ function LossSparkline({ values }: { readonly values: readonly number[] }): Reac
     })
     .join('');
   return <Text style={{ color: 'cyan' }}>{line}</Text>;
+}
+
+/** Rows the dashboard needs besides the charts (header, progress, stat rows, footer). */
+const NON_CHART_ROWS = 24;
+const LOSS_CHART_MIN_ROWS = 8;
+const LOSS_CHART_MAX_ROWS = 16;
+const SMALL_CHART_ROWS = 7;
+const CHART_MAX_COLUMNS = 120;
+
+/**
+ * Chart sizes for the current terminal. The loss chart always shows once two
+ * points exist; the LR / grad-norm pair is added only when the terminal is tall
+ * enough, so a short window degrades to fewer charts rather than a scrolling TUI.
+ */
+function chartLayout(): {
+  readonly columns: number;
+  readonly lossRows: number;
+  readonly showSmall: boolean;
+} {
+  const termColumns = process.stdout.columns ?? 100;
+  const termRows = process.stdout.rows ?? 40;
+  const columns = Math.max(40, Math.min(CHART_MAX_COLUMNS, termColumns - 4));
+  const free = termRows - NON_CHART_ROWS;
+  const showSmall = free >= LOSS_CHART_MIN_ROWS + SMALL_CHART_ROWS + 3 && columns >= 70;
+  const forLoss = showSmall ? free - SMALL_CHART_ROWS - 3 : free;
+  const lossRows = Math.max(LOSS_CHART_MIN_ROWS, Math.min(LOSS_CHART_MAX_ROWS, forLoss));
+  return { columns, lossRows, showSmall };
+}
+
+function TrainCharts({ snap }: { readonly snap: TrainDashboardSnapshot }): React.ReactElement {
+  const layout = chartLayout();
+  const color = useMemo(() => detectColorMode(process.stdout, process.env), []);
+  // Re-render charts only when their data changed, not on every clock tick.
+  const lossChart = useMemo(
+    () =>
+      renderLossChart(snap.lossHistory, snap.valHistory, {
+        columns: layout.columns,
+        rows: layout.lossRows,
+        color,
+      }),
+    [snap.lossHistory, snap.valHistory, layout.columns, layout.lossRows, color],
+  );
+  const half = Math.floor((layout.columns - 2) / 2);
+  const lrChart = useMemo(
+    () =>
+      layout.showSmall && snap.lrSchedule !== null
+        ? renderLrChart(snap.lrSchedule, snap.trainStepCompleted, {
+            columns: half,
+            rows: SMALL_CHART_ROWS,
+            color,
+          })
+        : null,
+    [layout.showSmall, snap.lrSchedule, snap.trainStepCompleted, half, color],
+  );
+  const gradChart = useMemo(
+    () =>
+      layout.showSmall
+        ? renderGradNormChart(snap.gradNormHistory, snap.maxGradNorm, {
+            columns: half,
+            rows: SMALL_CHART_ROWS,
+            color,
+          })
+        : null,
+    [layout.showSmall, snap.gradNormHistory, snap.maxGradNorm, half, color],
+  );
+
+  if (lossChart === null) {
+    return (
+      <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
+        <Text style={{ color: 'gray' }}>{'Loss trend (recent steps)'}</Text>
+        <LossSparkline values={snap.recentLosses} />
+      </Box>
+    );
+  }
+  return (
+    <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
+      <Text style={{ color: 'gray' }}>
+        {`Loss over the run${snap.uniformLoss !== null ? ` · uniform guess = ln(V) = ${snap.uniformLoss.toFixed(2)}` : ''}`}
+      </Text>
+      <Text>{lossChart}</Text>
+      {lrChart !== null || gradChart !== null ? (
+        <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1 }}>
+          {lrChart !== null ? (
+            <Box style={{ display: 'flex', flexDirection: 'column', width: half + 2 }}>
+              <Text style={{ color: 'gray' }}>{'Learning rate · done / remaining'}</Text>
+              <Text>{lrChart}</Text>
+            </Box>
+          ) : null}
+          {gradChart !== null ? (
+            <Box style={{ display: 'flex', flexDirection: 'column', width: half }}>
+              <Text style={{ color: 'gray' }}>
+                {snap.maxGradNorm !== null
+                  ? `Gradient norm before clipping · clip at ${String(snap.maxGradNorm)}`
+                  : 'Gradient norm (clipping off)'}
+              </Text>
+              <Text>{gradChart}</Text>
+            </Box>
+          ) : null}
+        </Box>
+      ) : null}
+    </Box>
+  );
 }
 
 function SetupStepperRail(props: { readonly phase: TrainPipelinePhase }): React.ReactElement {
@@ -356,10 +460,25 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
               <Text style={{ fontWeight: 'bold' }}>{charsPerTokStr}</Text>
             </Box>
           </Box>
-          <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
-            <Text style={{ color: 'gray' }}>{'Loss trend (recent steps)'}</Text>
-            <LossSparkline values={snap.recentLosses} />
+          <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+              <Text style={{ color: 'yellow' }}>{'Validation loss'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>
+                {snap.valLossLast !== null ? snap.valLossLast.toFixed(4) : '— (--val-data)'}
+              </Text>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+              <Text style={{ color: 'magenta' }}>{'Grad norm'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>
+                {snap.gradNormLast !== null ? snap.gradNormLast.toFixed(3) : '—'}
+              </Text>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
+              <Text style={{ color: 'gray' }}>{'Sequences / step'}</Text>
+              <Text style={{ fontWeight: 'bold' }}>{String(snap.accum)}</Text>
+            </Box>
           </Box>
+          <TrainCharts snap={snap} />
         </>
       ) : null}
 

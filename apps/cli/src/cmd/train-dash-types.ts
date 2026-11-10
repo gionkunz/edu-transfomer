@@ -1,5 +1,15 @@
 /** Phase machine for **`llm train`** dashboards (immutable snapshot consumed by wolf-tui). */
 
+import type { CosineLrSchedule } from '@llm-transformer-diy/training';
+
+import type { MetricBucket } from './metric-series';
+
+/** One validation measurement: mean held-out loss after **`step`** completed optimizer steps. */
+export interface ValLossPoint {
+  readonly step: number;
+  readonly loss: number;
+}
+
 export type TrainPipelinePhase =
   | 'starting'
   | 'gpu_init'
@@ -116,6 +126,22 @@ export interface TrainDashboardSnapshot {
    * **`null`** before the first step.
    */
   readonly perplexitySma20: number | null;
+  /** Whole-run train loss, downsampled to a fixed number of buckets (see **`MetricSeries`**). */
+  readonly lossHistory: readonly MetricBucket[];
+  /** Whole-run pre-clip gradient L2 norm; empty when the norm is not measured. */
+  readonly gradNormHistory: readonly MetricBucket[];
+  /** Held-out loss measurements (**`--val-data`**); empty without validation data. */
+  readonly valHistory: readonly ValLossPoint[];
+  readonly valLossLast: number | null;
+  readonly gradNormLast: number | null;
+  /** Clip threshold, or **`null`** when clipping is off. */
+  readonly maxGradNorm: number | null;
+  /** LR schedule of the run, for the schedule chart; **`null`** before the trainer exists. */
+  readonly lrSchedule: CosineLrSchedule | null;
+  /** Sequences per optimizer step (**`--accum`**). */
+  readonly accum: number;
+  /** **`ln(vocabSize)`**: the loss of a model that predicts every token with equal probability. */
+  readonly uniformLoss: number | null;
   /**
    * When **`true`**, the training loop yields between steps (no **`trainStep`** / batch prep)
    * so the GPU stays idle until resumed (**`p`** in the TUI).

@@ -1,4 +1,7 @@
-import type { TrainDashboardSnapshot, TrainPipelinePhase } from './train-dash-types';
+import type { CosineLrSchedule } from '@llm-transformer-diy/training';
+
+import { MetricSeries } from './metric-series';
+import type { TrainDashboardSnapshot, TrainPipelinePhase, ValLossPoint } from './train-dash-types';
 
 /** Mutable authoring surface consumed by **`finalizeTrainDashboardDraft`**. */
 export interface TrainDashboardDraft {
@@ -25,6 +28,14 @@ export interface TrainDashboardDraft {
   trainLrDisplay: number;
   tokensPerSecApprox: number;
   recentLosses: number[];
+  lossHistory: MetricSeries;
+  gradNormHistory: MetricSeries;
+  valHistory: ValLossPoint[];
+  gradNormLast: number | null;
+  maxGradNorm: number | null;
+  lrSchedule: CosineLrSchedule | null;
+  accum: number;
+  uniformLoss: number | null;
   trainingPaused: boolean;
   /** Monotonic clock when **`phase`** became **`training`**; drives **`trainWallActiveSec`**. */
   trainingPhaseStartedAtMs: number | null;
@@ -84,6 +95,14 @@ export function createInitialTrainDashboardDraft(opts: {
     trainLrDisplay: 0,
     tokensPerSecApprox: 0,
     recentLosses: [],
+    lossHistory: new MetricSeries(),
+    gradNormHistory: new MetricSeries(),
+    valHistory: [],
+    gradNormLast: null,
+    maxGradNorm: null,
+    lrSchedule: null,
+    accum: 1,
+    uniformLoss: null,
     trainingPaused: false,
     trainingPhaseStartedAtMs: null,
     trainingPausedAccumMs: 0,
@@ -149,6 +168,15 @@ export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDa
     meanCharsPerToken,
     bitsPerCharSma20,
     perplexitySma20,
+    lossHistory: draft.lossHistory.snapshot(),
+    gradNormHistory: draft.gradNormHistory.snapshot(),
+    valHistory: draft.valHistory.slice(),
+    valLossLast: draft.valHistory[draft.valHistory.length - 1]?.loss ?? null,
+    gradNormLast: draft.gradNormLast,
+    maxGradNorm: draft.maxGradNorm,
+    lrSchedule: draft.lrSchedule,
+    accum: draft.accum,
+    uniformLoss: draft.uniformLoss,
     trainingPaused: draft.trainingPaused,
   };
 }

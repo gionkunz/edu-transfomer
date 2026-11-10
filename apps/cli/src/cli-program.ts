@@ -15,7 +15,10 @@ import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
 import { runTokenizerTrain } from './cmd/tokenizer-train';
 import {
   runTrainCommand,
+  TRAIN_DEFAULT_ACCUM,
   TRAIN_DEFAULT_CHECKPOINT_EVERY,
+  TRAIN_DEFAULT_EVAL_BATCHES,
+  TRAIN_DEFAULT_EVAL_EVERY,
   TRAIN_DEFAULT_LR_MAX,
   TRAIN_DEFAULT_LR_MIN,
   TRAIN_DEFAULT_MAX_GRAD_NORM,
@@ -210,6 +213,27 @@ export function createCliProgram(): Command {
       'sequence row indices for replay probe (default: 0,mid,last; e.g. 229 or 229,283)',
     )
     .option('--dtype <d>', 'parameter compute dtype during training: f32 | bf16', 'f32')
+    .option(
+      '--accum <n>',
+      `sequences per optimizer step, gradients averaged (default ${String(TRAIN_DEFAULT_ACCUM)})`,
+      String(TRAIN_DEFAULT_ACCUM),
+    )
+    .option(
+      '--val-data <glob>',
+      'held-out files glob for validation loss (repeatable; must not overlap --data)',
+      collectStrings,
+      [] as string[],
+    )
+    .option(
+      '--eval-every <n>',
+      `with --val-data: measure validation loss every N steps (default ${String(TRAIN_DEFAULT_EVAL_EVERY)})`,
+      String(TRAIN_DEFAULT_EVAL_EVERY),
+    )
+    .option(
+      '--eval-batches <n>',
+      `with --val-data: held-out sequences per measurement (default ${String(TRAIN_DEFAULT_EVAL_BATCHES)})`,
+      String(TRAIN_DEFAULT_EVAL_BATCHES),
+    )
     .action(async (opts) => {
       const tokenCacheRaw = opts.tokenCache as string | undefined;
       const tokenCacheBase =
@@ -236,6 +260,10 @@ export function createCliProgram(): Command {
         warmupFraction: parseTrainFiniteOption(opts.warmup, '--warmup'),
         checkpointEvery: Number(opts.checkpointEvery),
         computeDtype,
+        accum: Number(opts.accum),
+        valGlobs: opts.valData as string[],
+        evalEvery: Number(opts.evalEvery),
+        evalBatches: Number(opts.evalBatches),
         ...(Boolean(opts.resume) ? { resume: true } : {}),
         ...(opts.replayStep !== undefined && String(opts.replayStep).trim() !== ''
           ? { replayStep: Number(opts.replayStep) }

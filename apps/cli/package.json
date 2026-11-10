@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "`llm` CLI \u2014 tokenizer, train, generate, chat, inspect",
+  "description": "`llm` CLI — tokenizer, train, generate, chat, inspect",
   "main": "./main.js",
   "types": "./main.d.ts",
   "bin": {
     "llm": "./main.js"
   },
   "dependencies": {
+    "@chartist-js/terminal": "^2.1.0",
     "@llm-transformer-diy/autograd": "file:../../packages/autograd",
     "@llm-transformer-diy/gpu": "file:../../packages/gpu",
     "@llm-transformer-diy/inference": "file:../../packages/inference",
