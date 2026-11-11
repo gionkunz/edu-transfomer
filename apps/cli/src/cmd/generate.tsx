@@ -1,8 +1,23 @@
 import React from 'react';
-import { Box, Text, render, useInput, useStdout } from '@wolf-tui/react';
+import { Box, Text, Transform, render, useInput, useStdout } from '@wolf-tui/react';
 
-import { createGptKvCache, destroyGptKvCache } from '@llm-transformer-diy/model';
-import { generateAutoregressive } from '@llm-transformer-diy/inference';
+import {
+  createGptKvCache,
+  destroyGptKvCache,
+  disposeGptKvForwardGraph,
+  forwardGptDecodeStep,
+} from '@llm-transformer-diy/model';
+import {
+  bestRankByKeyIndex,
+  generateAutoregressive,
+  selectTop10GlobalConnections,
+  buildFlowTrace,
+  summarizeHeads,
+  unstackAttentionWeights,
+  type GlobalAttentionConnection,
+  type FlowTrace,
+  type HeadAttentionSummary,
+} from '@llm-transformer-diy/inference';
 import { loadGptModelFromCheckpoint } from '@llm-transformer-diy/training';
 import { BPETokenizer } from '@llm-transformer-diy/tokenizer';
 import type { FloatDType } from '@llm-transformer-diy/tensor';
@@ -12,6 +27,22 @@ import { assertRuntimeSupportsComputeDtype } from '../compute-dtype';
 import { createTensorRuntime } from '../runtime';
 import { primeTuiTerminalCanvas } from '../tui-prime';
 import { PacingController } from './generate-pacing';
+import {
+  buildContextTokenSpans,
+  tailSliceTokenSpans,
+  type ContextTokenSpan,
+} from './attention-context-spans';
+import { rankHighlightTransform } from './attention-rank-palette';
+import { exploreChromeRows, panelTier } from './generate-layout-tiers';
+import { trailingMarkerTokens } from './generate-stop';
+import {
+  AttentionPanel,
+  FlowPanel,
+  flowPanelContentRows,
+  type AttentionPanelData,
+  type FlowPanelData,
+  type FlowVariant,
+} from './generate-panels';
 
 type GenViewProps = {
   readonly text: string;
@@ -43,8 +74,6 @@ function GenView(props: GenViewProps): React.ReactElement {
 const INSPECTOR_PANEL_WIDTH = 36;
 const INSPECTOR_MIN_COLUMNS = 60;
 const INSPECTOR_MIN_ROWS = 8;
-const INSPECTOR_CHROME_ROWS = 8;
-
 const BAR_CHARS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'] as const;
 
 function barChar(p: number, scale: number): string {
@@ -110,10 +139,33 @@ type InspectorRow = {
   readonly piece: string;
 };
 
+/** Attention of one decode forward at one block, summarized for display. */
+type AttentionView = {
+  readonly layerIndex: number;
+  readonly rows: readonly Float32Array[];
+  readonly heads: readonly HeadAttentionSummary[];
+  readonly connections: readonly GlobalAttentionConnection[];
+};
+
+function attentionViewFromWeights(
+  layerIndex: number,
+  weights: Float32Array,
+  nHeads: number,
+): AttentionView {
+  const rows = unstackAttentionWeights(weights, nHeads, Math.floor(weights.length / nHeads));
+  return {
+    layerIndex,
+    rows,
+    heads: summarizeHeads(rows),
+    connections: selectTop10GlobalConnections(rows),
+  };
+}
+
+type BottomPanelMode = 'attention' | 'flow';
+
 type ExploreVm = {
-  readonly promptText: string;
-  readonly prefixText: string;
-  readonly lastPiece: string;
+  readonly promptTokenCount: number;
+  readonly contextTokenSpans: readonly ContextTokenSpan[];
   readonly newTokens: number;
   readonly tokensPerSec: number;
   readonly probabilities: Float32Array | null;
@@ -126,12 +178,31 @@ type ExploreVm = {
     readonly rank: number;
   } | null;
   readonly modeLabel: 'NORMAL' | 'SLOW' | 'PAUSED';
+  readonly nLayers: number;
+  readonly nHeads: number;
+  readonly dModel: number;
+  readonly vocabSize: number;
+  readonly temperature: number;
+  readonly topK: number;
+  readonly focusedLayerIndex: number;
+  readonly panelMode: BottomPanelMode;
+  /** Attention behind the current token; **`null`** on the first one or when not captured. */
+  readonly attention: AttentionView | null;
+  /** Per-block trace behind the current token; captured only while the flow panel is open. */
+  readonly flow: FlowTrace | null;
+  /** Set when generation ended because the model wrote the stop marker. */
+  readonly stoppedAtMarker: string | null;
+  /** Trailing tokens kept for the panels but not drawn in the text (the stop marker). */
+  readonly hiddenTailTokens: number;
 };
 
 type ExploreViewProps = {
   readonly vm: ExploreVm;
   readonly onToggleSpeed: () => void;
   readonly onTogglePause: () => void;
+  readonly onLayerUp: () => void;
+  readonly onLayerDown: () => void;
+  readonly onTogglePanel: () => void;
   readonly onQuit: () => void;
 };
 
@@ -151,14 +222,75 @@ export function tailSliceForHighlight(
   return { prefix: prefix.slice(prefix.length - prefixKeep), last };
 }
 
+/** Short visible label for a token piece: whitespace made visible, length capped. */
+function pieceLabel(piece: string): string {
+  return truncatePiece(escapeForRow(piece), 10);
+}
+
+function renderContextText(
+  spans: readonly ContextTokenSpan[],
+  promptTokenCount: number,
+  rankByKey: ReadonlyMap<number, number>,
+  sampledTokenIndex: number | null,
+  attentionQueryTokenIndex: number | null,
+  tailCharBudget: number,
+): React.ReactNode {
+  const visible = tailSliceTokenSpans(spans, tailCharBudget);
+  return visible.map((span) => {
+    const key = span.tokenIndex;
+    if (sampledTokenIndex !== null && span.tokenIndex === sampledTokenIndex) {
+      return (
+        <Text key={key} style={{ color: 'cyan', fontWeight: 'bold' }}>
+          {span.text}
+        </Text>
+      );
+    }
+    const rank = rankByKey.get(span.tokenIndex);
+    const highlightTransform = rank !== undefined ? rankHighlightTransform(rank) : undefined;
+    if (highlightTransform !== undefined) {
+      return (
+        <Transform key={key} transform={highlightTransform}>
+          {span.text}
+        </Transform>
+      );
+    }
+    if (attentionQueryTokenIndex !== null && span.tokenIndex === attentionQueryTokenIndex) {
+      return (
+        <Text key={key} style={{ fontWeight: 'bold', textDecoration: 'underline' }}>
+          {span.text}
+        </Text>
+      );
+    }
+    if (span.tokenIndex < promptTokenCount) {
+      return (
+        <Text key={key} style={{ color: 'gray' }}>
+          {span.text}
+        </Text>
+      );
+    }
+    return <Text key={key}>{span.text}</Text>;
+  });
+}
+
 function ExploreView(props: ExploreViewProps): React.ReactElement {
   const { vm } = props;
   const stdoutCtx = useStdout();
   const cols = stdoutCtx?.stdout.columns ?? 80;
   const rows = stdoutCtx?.stdout.rows ?? 24;
 
+  // Full panel height depends on the model: a row per head, or one or two rows
+  // per block. The flow diagram prefers two rows per block and falls back to one.
+  const hasSelector = vm.nLayers > 0;
+  const boxedRows = flowPanelContentRows(vm.nLayers, 'boxed');
+  const flowVariant: FlowVariant =
+    panelTier(rows, cols, hasSelector, boxedRows) === 'full' ? 'boxed' : 'compact';
+  const fullPanelContentRows =
+    vm.panelMode === 'flow' ? flowPanelContentRows(vm.nLayers, flowVariant) : vm.nHeads + 1;
+  const tier = panelTier(rows, cols, hasSelector, fullPanelContentRows);
+  const chromeRows = exploreChromeRows(tier, vm.nLayers > 0, fullPanelContentRows);
+
   const showInspector = cols >= INSPECTOR_MIN_COLUMNS && rows >= INSPECTOR_MIN_ROWS;
-  const visibleRows = Math.max(0, rows - INSPECTOR_CHROME_ROWS);
+  const visibleRows = Math.max(0, rows - chromeRows);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
@@ -175,6 +307,20 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
     }
     if (input === 'p') {
       props.onTogglePause();
+      return;
+    }
+    if (input === 'f') {
+      props.onTogglePanel();
+      return;
+    }
+    // Blocks are drawn top to bottom, so ↓ moves to the next (deeper) block.
+    // `+` / `-` stay as aliases; they are awkward to reach on many keyboards.
+    if (key.downArrow || input === '+' || input === '=') {
+      props.onLayerUp();
+      return;
+    }
+    if (key.upArrow || input === '-') {
+      props.onLayerDown();
       return;
     }
   });
@@ -194,32 +340,86 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
   const statusColor: string =
     vm.modeLabel === 'PAUSED' ? 'yellow' : vm.modeLabel === 'SLOW' ? 'magenta' : 'green';
 
-  /**
-   * Compute an explicit width for the streamed-text column so wolf-tui wraps to it instead of
-   * letting long generations spill past the right-side inspector and break the row layout.
-   * Buffer of `6` covers root padding (2) + left paddingRight (2) + inspector border/padding slop (2).
-   */
   const inspectorBudget = showInspector ? INSPECTOR_PANEL_WIDTH + 4 : 0;
   const leftPaddingRight = showInspector ? 2 : 0;
   const leftWidth = Math.max(20, cols - inspectorBudget - leftPaddingRight - 2);
-  const bodyHeight = Math.max(3, visibleRows + 1);
-  /** Cap visible streamed text from the tail so vertical overflow can't push the inspector down. */
+  const bodyHeight = Math.max(3, visibleRows);
   const tailCharBudget = leftWidth * (bodyHeight + 4);
-  const { prefix: prefixDisplay, last: lastDisplay } = tailSliceForHighlight(
-    vm.prefixText,
-    vm.lastPiece,
-    tailCharBudget,
-  );
+
+  const spans = vm.contextTokenSpans;
+  const sampledTokenIndex = spans.length > 0 ? (spans[spans.length - 1]?.tokenIndex ?? null) : null;
+  // The token the model was reading when it produced the current one.
+  const queryTokenIndex =
+    sampledTokenIndex !== null && sampledTokenIndex > 0 ? sampledTokenIndex - 1 : null;
+  const labelForIndex = (tokenIndex: number): string => {
+    const span = spans[tokenIndex];
+    return span !== undefined && span.tokenIndex === tokenIndex
+      ? pieceLabel(span.text)
+      : `#${String(tokenIndex)}`;
+  };
+  const labelForId = (id: number): string => pieceLabel(vm.displayFor(id));
+
+  const hasStepLabels = queryTokenIndex !== null && sampledTokenIndex !== null;
+  const attentionData: AttentionPanelData | null =
+    vm.attention !== null && hasStepLabels
+      ? {
+          layerIndex: vm.attention.layerIndex,
+          nLayers: vm.nLayers,
+          rows: vm.attention.rows,
+          heads: vm.attention.heads,
+          connections: vm.attention.connections,
+          queryLabel: labelForIndex(queryTokenIndex),
+          sampledLabel: labelForIndex(sampledTokenIndex),
+        }
+      : null;
+
+  const flowData: FlowPanelData | null =
+    vm.flow !== null && hasStepLabels && vm.sampledFooter !== null
+      ? {
+          flow: vm.flow,
+          focusedLayerIndex: vm.focusedLayerIndex,
+          queryLabel: labelForIndex(queryTokenIndex),
+          queryPosition: queryTokenIndex,
+          sampledLabel: labelForIndex(sampledTokenIndex),
+          sampledProbability: vm.sampledFooter.probability,
+          temperature: vm.temperature,
+          topK: vm.topK,
+          dModel: vm.dModel,
+          vocabSize: vm.vocabSize,
+        }
+      : null;
+
+  // Highlights belong to the attention panel; the flow panel keeps the text plain.
+  const showHighlights = vm.panelMode === 'attention' && tier !== 'hidden' && vm.attention !== null;
+  const rankByKey = showHighlights
+    ? bestRankByKeyIndex(vm.attention.connections)
+    : new Map<number, number>();
+  // Attention sparklines take what is left beside the labels, within sane bounds.
+  const sparkWidth = Math.max(12, Math.min(48, cols - 64));
+  const selectorNote =
+    vm.attention !== null && vm.attention.layerIndex !== vm.focusedLayerIndex
+      ? ` · showing block ${String(vm.attention.layerIndex + 1)} until the next token`
+      : '';
 
   return (
-    <Box style={{ display: 'flex', flexDirection: 'column', padding: 1, flexGrow: 1 }}>
+    <Box style={{ display: 'flex', flexDirection: 'column', padding: 1 }}>
       <Text style={{ fontWeight: 'bold' }}>Generate · explore</Text>
-      <Box style={{ display: 'flex', flexDirection: 'row' }}>
+      <Text style={{ textWrap: 'truncate-end' }}>
         <Text style={{ color: statusColor, fontWeight: 'bold' }}>{`mode: ${vm.modeLabel}`}</Text>
         <Text style={{ color: 'gray' }}>
-          {` · tok/s ${vm.tokensPerSec.toFixed(1)} · new ${String(vm.newTokens)} · s = slow · p = pause · q = quit`}
+          {` · tok/s ${vm.tokensPerSec.toFixed(1)} · new ${String(vm.newTokens)}${selectorNote}`}
         </Text>
-      </Box>
+      </Text>
+      <Text style={{ marginTop: 1, textWrap: 'truncate-end' }}>
+        {vm.nLayers > 0 ? (
+          <Text
+            style={{ fontWeight: 'bold' }}
+          >{`Block ${String(vm.focusedLayerIndex + 1)}/${String(vm.nLayers)}`}</Text>
+        ) : null}
+        <Text style={{ color: 'gray' }}>
+          {`${vm.nLayers > 0 ? ' · ↑/↓ block · ' : ''}f ${vm.panelMode === 'flow' ? 'attention' : 'architecture'} view · s slow · p pause · q quit`}
+        </Text>
+      </Text>
       <Box
         style={{
           display: 'flex',
@@ -241,9 +441,14 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
           }}
         >
           <Text style={{ textWrap: 'wrap' }}>
-            <Text style={{ color: 'gray' }}>{vm.promptText}</Text>
-            {prefixDisplay}
-            <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{lastDisplay}</Text>
+            {renderContextText(
+              vm.hiddenTailTokens > 0 ? spans.slice(0, -vm.hiddenTailTokens) : spans,
+              vm.promptTokenCount,
+              rankByKey,
+              sampledTokenIndex,
+              showHighlights ? queryTokenIndex : null,
+              tailCharBudget,
+            )}
           </Text>
         </Box>
         {showInspector ? (
@@ -288,7 +493,11 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
           </Box>
         ) : null}
       </Box>
-      {vm.sampledFooter !== null ? (
+      {vm.stoppedAtMarker !== null ? (
+        <Text style={{ color: 'yellow', textWrap: 'truncate-end' }}>
+          {`finished: the model wrote ${vm.stoppedAtMarker} (end of text) · --no-stop to keep going`}
+        </Text>
+      ) : vm.sampledFooter !== null ? (
         <Text style={{ color: 'gray' }}>
           {`sampled: id=${String(vm.sampledFooter.id)} p=${fmtProb(vm.sampledFooter.probability)} rank=${String(
             vm.sampledFooter.rank + 1,
@@ -296,6 +505,23 @@ function ExploreView(props: ExploreViewProps): React.ReactElement {
         </Text>
       ) : (
         <Text style={{ color: 'gray' }}>{'(no token sampled yet)'}</Text>
+      )}
+      {vm.panelMode === 'flow' ? (
+        <FlowPanel
+          tier={tier}
+          variant={flowVariant}
+          data={flowData}
+          labelForId={labelForId}
+          labelForIndex={labelForIndex}
+          cols={cols}
+        />
+      ) : (
+        <AttentionPanel
+          tier={tier}
+          data={attentionData}
+          labelForIndex={labelForIndex}
+          sparkWidth={sparkWidth}
+        />
       )}
     </Box>
   );
@@ -314,6 +540,11 @@ export async function runGenerateCommand(opts: {
   readonly repetitionWindow?: number;
   readonly computeDtype?: FloatDType;
   readonly allowDtypeUpcast?: boolean;
+  /**
+   * End generation when the generated text contains this marker (the marker
+   * itself is not shown). Omit to generate until **`maxNewTokens`**.
+   */
+  readonly stopText?: string;
 }): Promise<void> {
   const rt = await createTensorRuntime();
   const dtype = opts.computeDtype ?? 'f32';
@@ -343,7 +574,10 @@ export async function runGenerateCommand(opts: {
   const cache = createGptKvCache(rt, model);
 
   const generatedIds: number[] = [];
-  let prevFullDecoded = promptRendered;
+  const decodeIds = (ids: readonly number[]): string => tok.decode([...ids], { utf8: 'replace' });
+  /** Trailing tokens that spell the stop marker, or 0 (also when `--no-stop`). */
+  const stopMarkerTokens = (): number =>
+    opts.stopText !== undefined ? trailingMarkerTokens(generatedIds, decodeIds, opts.stopText) : 0;
   let newTok = 0;
   const tStart = performance.now();
 
@@ -363,12 +597,11 @@ export async function runGenerateCommand(opts: {
           ? { repetitionPenalty: opts.repetitionPenalty }
           : {}),
         ...(opts.repetitionWindow !== undefined ? { repetitionWindow: opts.repetitionWindow } : {}),
-        onSampledToken: (id: number) => {
-          generatedIds.push(id);
-          const fullDecoded = sanitizeControlChars(
-            tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' }),
-          );
-          textOut = fullDecoded;
+        onStep: ({ tokenId }) => {
+          generatedIds.push(tokenId);
+          const markerTokens = stopMarkerTokens();
+          const shownIds = markerTokens > 0 ? generatedIds.slice(0, -markerTokens) : generatedIds;
+          textOut = sanitizeControlChars(decodeIds([...promptIds, ...shownIds]));
           newTok += 1;
           const dt = (performance.now() - tStart) / 1000;
           inst.rerender(
@@ -378,6 +611,7 @@ export async function runGenerateCommand(opts: {
               tokensPerSec={newTok / Math.max(dt, 1e-6)}
             />,
           );
+          return markerTokens > 0 ? 'stop' : undefined;
         },
       });
     } finally {
@@ -392,17 +626,19 @@ export async function runGenerateCommand(opts: {
   const displayFor = (id: number): string => {
     const cached = decodeCache.get(id);
     if (cached !== undefined) return cached;
-    const piece = tok.decode([id], { utf8: 'replace' });
-    const onlyReplacement = /^\uFFFD+$/.test(piece);
+    const piece = sanitizeControlChars(tok.decode([id], { utf8: 'replace' }));
+    const onlyReplacement = /^�+$/.test(piece);
     const display = piece.length === 0 || onlyReplacement ? `‹${String(id)}›` : piece;
     decodeCache.set(id, display);
     return display;
   };
 
+  let focusedLayerIndex = config.nLayers - 1;
+  let panelMode: BottomPanelMode = 'attention';
+
   const initialVm: ExploreVm = {
-    promptText: promptRendered,
-    prefixText: '',
-    lastPiece: '',
+    promptTokenCount: promptIds.length,
+    contextTokenSpans: buildContextTokenSpans(promptIds, [], displayFor),
     newTokens: 0,
     tokensPerSec: 0,
     probabilities: null,
@@ -411,6 +647,18 @@ export async function runGenerateCommand(opts: {
     displayFor,
     sampledFooter: null,
     modeLabel: pacing.statusLabel,
+    nLayers: config.nLayers,
+    nHeads: config.nHeads,
+    dModel: config.dModel,
+    vocabSize: config.vocabSize,
+    temperature: opts.temperature,
+    topK: opts.topK,
+    focusedLayerIndex,
+    panelMode,
+    attention: null,
+    flow: null,
+    stoppedAtMarker: null,
+    hiddenTailTokens: 0,
   };
   let currentVm: ExploreVm = initialVm;
 
@@ -421,28 +669,98 @@ export async function runGenerateCommand(opts: {
     pacing.cancel();
   };
 
-  function paint(): void {
-    inst.rerender(
-      <ExploreView
-        vm={currentVm}
-        onToggleSpeed={() => {
-          pacing.toggleSpeed();
-          currentVm = { ...currentVm, modeLabel: pacing.statusLabel };
-          paint();
-        }}
-        onTogglePause={() => {
-          pacing.togglePause();
-          currentVm = { ...currentVm, modeLabel: pacing.statusLabel };
-          paint();
-        }}
-        onQuit={requestExit}
-      />,
-    );
+  let recaptureInFlight = false;
+
+  /**
+   * Re-run the last decode forward to fetch what the panel now needs — attention
+   * for a newly focused block, or the lens after switching to the flow view.
+   * Only useful while generation is waiting (paused / slow); otherwise the next
+   * token brings fresh data anyway.
+   *
+   * The forward re-processes the token at the last cache position: it rewrites
+   * that position's K/V rows with identical values and leaves `cache.seqLen`
+   * where it was, so generation continues undisturbed.
+   */
+  async function recaptureCurrentStep(): Promise<void> {
+    if (recaptureInFlight || generatedIds.length < 2) return;
+    // Valid only between steps: every generated token except the newest is in
+    // the cache. If the main loop has already forwarded the newest one, the
+    // last cache row belongs to it and must not be rewritten.
+    if (cache.seqLen !== promptIds.length + generatedIds.length - 1) return;
+    const prevTokenId = generatedIds[generatedIds.length - 2];
+    const sampledTokenId = generatedIds[generatedIds.length - 1];
+    if (prevTokenId === undefined || sampledTokenId === undefined) return;
+    recaptureInFlight = true;
+    const stepAtStart = generatedIds.length;
+    const layerAtStart = focusedLayerIndex;
+    const wantFlow = panelMode === 'flow';
+    try {
+      cache.seqLen -= 1;
+      const decodeResult = await forwardGptDecodeStep(rt, model, prevTokenId, cache, {
+        attentionCapture: { layerIndex: layerAtStart },
+        ...(wantFlow ? { flowTrace: true } : {}),
+      });
+      disposeGptKvForwardGraph(decodeResult.logits, model, cache);
+      // A new token may have arrived while the readback was pending; its own
+      // step already painted newer data, so drop this result.
+      if (generatedIds.length !== stepAtStart) return;
+      currentVm = {
+        ...currentVm,
+        ...(decodeResult.attention !== undefined
+          ? {
+              attention: attentionViewFromWeights(
+                layerAtStart,
+                decodeResult.attention,
+                config.nHeads,
+              ),
+            }
+          : {}),
+        ...(decodeResult.layerLogits !== undefined &&
+        decodeResult.allAttention !== undefined &&
+        decodeResult.blockVectors !== undefined
+          ? {
+              flow: buildFlowTrace({
+                layerLogits: decodeResult.layerLogits,
+                allAttention: decodeResult.allAttention,
+                blockVectors: decodeResult.blockVectors,
+                nLayers: config.nLayers,
+                nHeads: config.nHeads,
+                sampledTokenId,
+              }),
+            }
+          : {}),
+      };
+      paint();
+    } finally {
+      recaptureInFlight = false;
+    }
   }
 
-  const inst = render(
+  const generationIsWaiting = (): boolean => pacing.paused || pacing.speed === 'slow';
+
+  const cycleLayer = (delta: number): void => {
+    const next = Math.max(0, Math.min(config.nLayers - 1, focusedLayerIndex + delta));
+    if (next === focusedLayerIndex) return;
+    focusedLayerIndex = next;
+    currentVm = { ...currentVm, focusedLayerIndex };
+    paint();
+    if (generationIsWaiting()) {
+      void recaptureCurrentStep();
+    }
+  };
+
+  const togglePanel = (): void => {
+    panelMode = panelMode === 'flow' ? 'attention' : 'flow';
+    currentVm = { ...currentVm, panelMode };
+    paint();
+    if (panelMode === 'flow' && currentVm.flow === null && generationIsWaiting()) {
+      void recaptureCurrentStep();
+    }
+  };
+
+  const view = (vm: ExploreVm): React.ReactElement => (
     <ExploreView
-      vm={initialVm}
+      vm={vm}
       onToggleSpeed={() => {
         pacing.toggleSpeed();
         currentVm = { ...currentVm, modeLabel: pacing.statusLabel };
@@ -453,10 +771,22 @@ export async function runGenerateCommand(opts: {
         currentVm = { ...currentVm, modeLabel: pacing.statusLabel };
         paint();
       }}
+      onLayerUp={() => {
+        cycleLayer(1);
+      }}
+      onLayerDown={() => {
+        cycleLayer(-1);
+      }}
+      onTogglePanel={togglePanel}
       onQuit={requestExit}
-    />,
-    { exitOnCtrlC: false, patchConsole: true },
+    />
   );
+
+  function paint(): void {
+    inst.rerender(view(currentVm));
+  }
+
+  const inst = render(view(initialVm), { exitOnCtrlC: false, patchConsole: true });
 
   try {
     await generateAutoregressive(rt, model, Uint32Array.from(promptIds), cache, {
@@ -466,18 +796,21 @@ export async function runGenerateCommand(opts: {
         ? { repetitionPenalty: opts.repetitionPenalty }
         : {}),
       ...(opts.repetitionWindow !== undefined ? { repetitionWindow: opts.repetitionWindow } : {}),
-      onStep: async ({ tokenId, newTokenIndex, probabilities }) => {
+      attentionLayerIndex: () => focusedLayerIndex,
+      // The trace costs one vocabulary-sized matmul per block plus readbacks,
+      // so it is only captured while the flow panel is the one on screen.
+      captureFlow: () => panelMode === 'flow',
+      onStep: async ({ tokenId, newTokenIndex, probabilities, attention, flow }) => {
         if (exiting) return;
         generatedIds.push(tokenId);
-        const fullDecoded = sanitizeControlChars(
-          tok.decode([...promptIds, ...generatedIds], { utf8: 'replace' }),
-        );
-        const visiblePrev = prevFullDecoded.slice(promptRendered.length);
-        const visibleFull = fullDecoded.slice(promptRendered.length);
-        const lastPiece = visibleFull.slice(visiblePrev.length);
-        const prefixText = visibleFull.slice(0, visibleFull.length - lastPiece.length);
-        prevFullDecoded = fullDecoded;
         newTok = newTokenIndex + 1;
+
+        // When the model has just finished writing the stop marker, its tokens
+        // are hidden from the text (the panels still describe that last step,
+        // which really was "write the marker") and generation ends here.
+        const markerTokens = stopMarkerTokens();
+
+        const contextTokenSpans = buildContextTokenSpans(promptIds, generatedIds, displayFor);
 
         const V = probabilities.length;
         const sortedIds = new Int32Array(V);
@@ -495,21 +828,38 @@ export async function runGenerateCommand(opts: {
 
         const dt = (performance.now() - tStart) / 1000;
         currentVm = {
-          promptText: promptRendered,
-          prefixText,
-          lastPiece,
+          ...currentVm,
+          contextTokenSpans,
           newTokens: newTok,
           tokensPerSec: newTok / Math.max(dt, 1e-6),
           probabilities,
           sortedIds,
           maxProb,
-          displayFor,
           sampledFooter: { id: tokenId, probability: probabilities[tokenId], rank },
           modeLabel: pacing.statusLabel,
+          focusedLayerIndex,
+          panelMode,
+          attention:
+            attention !== undefined
+              ? attentionViewFromWeights(attention.layerIndex, attention.weights, attention.nHeads)
+              : null,
+          flow: flow ?? null,
+          hiddenTailTokens: markerTokens,
+          stoppedAtMarker: markerTokens > 0 ? (opts.stopText ?? null) : null,
         };
         paint();
+        if (markerTokens > 0) {
+          return 'stop';
+        }
 
         await pacing.waitBetweenSteps();
+        // Never start the next decode forward while a recapture is mid-readback:
+        // both would move `cache.seqLen`.
+        while (recaptureInFlight) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+          });
+        }
         if (exiting) return;
       },
     });

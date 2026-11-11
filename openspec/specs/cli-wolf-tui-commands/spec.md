@@ -213,3 +213,175 @@ The **`@llm-transformer-diy/inference`** package MAY expose an awaitable per-ste
 
 - **WHEN** the user presses **`q`** (or **`Ctrl+C`**) while explore-mode generation is paused or sleeping in SLOW mode
 - **THEN** the process SHALL tear down the TUI and exit without hanging on the pending wait
+
+---
+
+### Requirement: Generate explore attention spotlight panel
+
+When **`llm generate`** is running in explore mode, the **wolf-tui** SHALL display an **Attention Spotlight** panel that visualizes the strongest attention links from the current decode query position to earlier context tokens for the **focused transformer block** (see the block-selector requirement below). The spotlight SHALL be active only in explore mode; **`--no-explore`** SHALL continue to use the pre-spotlight minimal streaming view with no attention readback or spotlight chrome.
+
+The panel SHALL list up to **10** **global** connections — the ten largest post-softmax attention weights across all heads at the focused block for the current decode step — **grouped by attention head**. Within each head group, entries SHALL be sorted by descending strength. Each entry SHALL show:
+
+1. The **source context token** (decoded display piece, with the same documented placeholder behavior as the probability inspector for incomplete UTF-8 fragments).
+2. The **source position index** in the current prefix (0-based or 1-based, but consistent within a build).
+3. The **relationship strength** (see the decode-only and semantics requirement below).
+
+The panel has two forms, chosen by the layout-tier requirement below:
+
+- **Full** — one row per attention head: a sparkline of that head's weights over the whole visible prefix (oldest position on the left, scaled to the strongest weight of any head at this step), the head's entropy in bits, then the head's entries from the global connections. A head with no entry among the global connections SHALL show its own strongest link in a muted style instead.
+- **Compressed** — the global connections grouped by head on at most two lines.
+
+The same up-to-10 connections SHALL also appear as **colored highlights** on the streamed completion context: each connection receives a fixed rank color from a **10-color palette** (rank 1 → color 1, …, rank 10 → color 10). The highlight color for a context token in the streamed text SHALL match the color used for that connection in the spotlight panel. Highlights SHALL be rendered with **`@wolf-tui/react`** primitives (no new dependency). The panel caption SHALL name the block the displayed weights were captured from; if the user has since focused a different block, the view SHALL say so until fresh weights arrive.
+
+Spotlight data SHALL come from attention weights supplied by **`@llm-transformer-diy/inference`** for that decode step; **`apps/cli`** SHALL NOT compute softmax, top-k selection across heads, entropy, or other attention math to populate the panel (selection and per-head summaries are exported by **`@llm-transformer-diy/inference`**).
+
+The existing **probability inspector** behavior (ranking, sampler-shaped probabilities, omission on tiny terminals) SHALL remain unchanged when the terminal has sufficient **`rows`** and **`cols`**.
+
+#### Scenario: Spotlight lists up to ten connections grouped by head
+
+- **WHEN** **`llm generate`** is running in explore mode and a decode step completes with captured attention for the focused block
+- **THEN** the Attention Spotlight panel SHALL list at most ten connections, grouped by head, with each entry showing source token, position, and relationship strength ordered by descending strength within each head group
+
+#### Scenario: Context highlights match spotlight rank colors
+
+- **WHEN** the spotlight panel displays a connection with a given rank color
+- **THEN** the corresponding source context token in the streamed completion SHALL be rendered with the same rank color until the next decode step refreshes the spotlight
+
+#### Scenario: Spotlight omitted in --no-explore mode
+
+- **WHEN** the user runs **`llm generate --no-explore`**
+- **THEN** the process SHALL NOT render the Attention Spotlight panel, block selector, or context attention highlights, and SHALL NOT request attention readback beyond the existing logits path
+
+#### Scenario: Inspector unchanged when layout allows
+
+- **WHEN** explore mode renders on a terminal with sufficient **`rows`** and **`cols`** for both the probability inspector and spotlight chrome
+- **THEN** the probability inspector SHALL continue to rank vocabulary by descending probability and reflect sampler-shaped distributions as defined in the explore probability-inspector requirement
+
+---
+
+### Requirement: Generate explore attention layout tiers
+
+When **`llm generate`** is running in explore mode, the **wolf-tui** layout SHALL reserve vertical chrome for the block selector row and the Attention Spotlight panel without breaking core streamed output. When the terminal is too small to render all explore affordances, the implementation SHALL degrade in this order:
+
+1. **Omit the probability inspector** first (existing minimum, e.g. **`cols < 60`** or **`rows < 8`**).
+2. **Compress or omit the bottom panel** (Attention Spotlight or architecture view). The full form needs one row per head (or one to two rows per block for the architecture view), so its threshold depends on the loaded model; the implementation SHALL pick the largest form that still leaves a usable body for the streamed text, and hide the panel below **40** columns.
+3. **Continue streaming completion text** without error even when the spotlight is compressed or omitted.
+
+The **`llm generate --help`** text SHALL document the **minimum recommended terminal size** for the full explore experience (block selector + spotlight + probability inspector), including the fact that smaller terminals may omit or compress panels gracefully.
+
+#### Scenario: Spotlight compresses on short terminals
+
+- **WHEN** the user resizes the terminal below the documented spotlight threshold during explore-mode generation
+- **THEN** the next render SHALL compress or omit the Attention Spotlight panel while continuing to stream tokens without throwing
+
+#### Scenario: Help documents minimum terminal size
+
+- **WHEN** the user runs **`llm generate --help`**
+- **THEN** the help text SHALL include minimum recommended terminal dimensions for the full explore layout (spotlight + inspector)
+
+---
+
+### Requirement: Generate explore block selector
+
+When **`llm generate`** is running in explore mode, the **wolf-tui** SHALL display a **block selector** row showing the currently **focused transformer block** in the form **`Block N / L`** (where **`N`** is the 1-based layer index and **`L`** is **`nLayers`**). On startup, the focused block SHALL default to the **last layer** (**`N = L`**, i.e. layer index **`nLayers − 1`**). The user SHALL change the focused block with keyboard hotkeys:
+
+1. **`↓`** (down arrow) — move focus to the **next** layer (increment layer index, clamped at **`L − 1`**).
+2. **`↑`** (up arrow) — move focus to the **previous** layer (decrement layer index, clamped at **`0`**).
+
+The arrows follow the architecture view, which draws block 1 at the top. **`+`** / **`=`** and **`-`** MAY remain as aliases but SHALL NOT be the documented keys, since they are not reachable on every keyboard layout.
+
+The focused block selection SHALL **persist across subsequent decode steps** until the user changes it again; it SHALL NOT reset to the default on each sampled token. Changing the focused block SHALL refresh the spotlight and context highlights on the next render using attention for the newly selected layer (when available for the current step).
+
+The block selector and its hotkeys SHALL be available **only in explore mode**. **`--no-explore`** SHALL NOT show the block selector or bind the arrow keys for layer cycling.
+
+#### Scenario: Default focused block is last layer
+
+- **WHEN** the user starts **`llm generate`** in explore mode on a model with **`L`** layers
+- **THEN** the block selector SHALL display **`Block L / L`** before any layer hotkey is pressed
+
+#### Scenario: Arrow keys change focused block
+
+- **WHEN** the user presses **`↓`** or **`↑`** while explore-mode generation is active
+- **THEN** the focused block index SHALL increment or decrement within **`0 … L − 1`**, the selector label SHALL update, and subsequent decode steps SHALL drive the spotlight from the new focused layer until changed again
+
+#### Scenario: Focus persists across token steps
+
+- **WHEN** the user selects a focused block and the model samples one or more additional tokens without further layer hotkeys
+- **THEN** the focused block SHALL remain unchanged across those decode steps
+
+#### Scenario: Block selector absent in --no-explore mode
+
+- **WHEN** the user runs **`llm generate --no-explore`**
+- **THEN** the block selector row SHALL NOT be rendered and the arrow keys SHALL NOT change layer focus
+
+---
+
+### Requirement: Generate explore attention decode-only and semantics
+
+Attention spotlight data SHALL reflect **decode steps only**, not the initial prefill forward that processes the prompt. The **first sampled token** after prefill SHALL NOT display attention connections or context attention highlights, because no prior decode attention row exists for that step in the v1 contract; the panel MAY show a one-line note in their place so the layout does not jump. From the **second sampled token onward**, each decode step MAY supply attention for the focused block and the spotlight SHALL update accordingly.
+
+**Relationship strength** displayed in the spotlight SHALL mean the **post-softmax attention weight** from the current query row to each key position for the focused head — a value in **`[0, 1]`** where each head's query row sums to **1** over visible prefix keys. The UI SHALL NOT label or present pre-softmax Q·K dot products as relationship strength. Values SHALL be obtained from **`@llm-transformer-diy/inference`** (and its documented model callees), not recomputed in **`apps/cli`**.
+
+#### Scenario: No spotlight on first sampled token
+
+- **WHEN** **`llm generate`** is running in explore mode and the model samples the **first** token after prefill
+- **THEN** no attention connections and no context attention highlights SHALL appear for that step
+
+#### Scenario: Spotlight appears from second sampled token
+
+- **WHEN** explore-mode generation has sampled at least **two** tokens and the current step captured attention for the focused block
+- **THEN** the Attention Spotlight panel and matching context highlights SHALL render for that decode step
+
+#### Scenario: Relationship strength is post-softmax probability
+
+- **WHEN** the spotlight displays a relationship strength for a connection
+- **THEN** the value SHALL be a post-softmax attention weight in **`[0, 1]`** sourced from inference, not a raw Q·K score
+
+---
+
+### Requirement: Generate explore architecture view
+
+When **`llm generate`** is running in explore mode, pressing **`f`** SHALL switch the bottom panel between the Attention Spotlight and an **architecture view**, and back. The architecture view SHALL draw the model in the order data flows through it, top to bottom, with a continuous line for the **residual stream**: the query token entering it (token vector + position vector), one section per transformer block, and the output stage (final norm, vocabulary scores, softmax, sampler settings, sampled token and its sampler probability).
+
+Each block section SHALL show, for the current decode step:
+
+1. **Attention activity** — one cell per attention head whose height reflects how sharply the head focuses (its largest post-softmax weight), and the size of the attention update relative to the residual stream entering the block.
+2. **Feed-forward activity** — the size of the feed-forward update relative to the same stream.
+3. A **logit lens** — the token the model would most likely predict if the residual stream after that block were sent through the final norm and LM head, that token's probability, and the probability at that depth of the token that was finally sampled (bar and number).
+
+When vertical space allows, each block SHALL also name its strongest attention link (head, source token, position, weight); on shorter terminals blocks SHALL collapse to one row each, and below that to the compressed panel form. The focused block SHALL be marked.
+
+All values SHALL be computed in **`@llm-transformer-diy/inference`** from tensors captured by **`@llm-transformer-diy/model`** in a single decode forward; **`apps/cli`** SHALL NOT compute them. Lens probabilities SHALL be the **raw** softmax (no temperature or top-k). Capture SHALL be requested only while the architecture view is the visible panel. Like attention, the trace describes decode steps only: the first sampled token has none. When the view is opened or the focused block changes while generation is paused or in slow mode, the view SHALL fetch the data for the current step without advancing generation.
+
+#### Scenario: f toggles the architecture view
+
+- **WHEN** the user presses **`f`** during explore-mode generation
+- **THEN** the bottom panel SHALL switch between the Attention Spotlight and the architecture view, and context attention highlights SHALL be shown only with the Attention Spotlight
+
+#### Scenario: Last block matches the model output
+
+- **WHEN** the architecture view shows a decode step
+- **THEN** the last block's lens SHALL reflect the model's final raw distribution, and earlier blocks SHALL reflect the same residual stream at earlier depths
+
+#### Scenario: Architecture view absent in --no-explore mode
+
+- **WHEN** the user runs **`llm generate --no-explore`**
+- **THEN** the architecture view SHALL NOT be rendered, **`f`** SHALL NOT be bound, and no trace SHALL be read back
+
+---
+
+### Requirement: Generate stops at an end-of-text marker
+
+**`llm generate`** SHALL end generation when the **decoded generated text** contains a stop marker, in both the explore view and **`--no-explore`**. The marker SHALL default to **`<|endoftext|>`**, SHALL be configurable with **`--stop <text>`**, and SHALL be disabled with **`--no-stop`** (generation then runs to **`--max-new-tokens`**). Matching SHALL be done on text, not token ids, because the tokenizer has no dedicated end-of-text token and may split the marker differently depending on context. Only generated tokens SHALL be considered; a marker inside the prompt SHALL NOT stop generation.
+
+The marker itself SHALL NOT be shown in the streamed text. The explore view SHALL state that generation finished at the marker; its panels MAY continue to describe the last decode step (the one that completed the marker). **`@llm-transformer-diy/inference`** SHALL offer hosts a way to end generation from the per-step hook; the text matching itself lives in **`apps/cli`**.
+
+#### Scenario: Story ends at the marker
+
+- **WHEN** the model writes **`<|endoftext|>`** during **`llm generate`** with default options
+- **THEN** generation SHALL stop without running another decode forward, and the marker SHALL NOT appear in the displayed text
+
+#### Scenario: --no-stop continues
+
+- **WHEN** the user passes **`--no-stop`**
+- **THEN** generation SHALL continue past any marker until **`--max-new-tokens`**, and the marker SHALL be displayed as ordinary text

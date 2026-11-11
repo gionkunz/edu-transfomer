@@ -103,7 +103,7 @@ llm generate --model out/tinystories/run1 --prompt "Once upon a time" --max-new-
 - **`--accum 4`** runs 4 sequences per optimizer step and averages their gradients — a batch of 4 at the memory cost of one. Tokens per step = `seq-len × accum`.
 - **`--val-data`** adds a held-out loss curve (every `--eval-every` steps). Train loss falling while validation loss rises means memorization.
 - Every step is appended to **`<out>/metrics.jsonl`** (`step`, `loss`, `lr`, `gradNorm`, `tokPerSec`, `valLoss`), and `--resume` re-plots it.
-- Stories in the corpus are separated by a literal `<|endoftext|>` line, which the tokenizer encodes as three ordinary tokens; generated text contains it where the model ends a story.
+- Stories in the corpus are separated by a literal `<|endoftext|>` line, which the tokenizer encodes as three ordinary tokens. A trained model writes it when a story is over, and **`llm generate`** stops there by default (`--stop <text>` picks another marker, `--no-stop` keeps going).
 
 ## Example: train a tokenizer
 
@@ -233,6 +233,13 @@ llm train \
 ```bash
 llm generate --model out/run-medium --tokenizer out/tok-8000.json --prompt "Once upon a time" --max-new-tokens 128
 ```
+
+**`generate` is an explore view by default** (use `--no-explore` for plain streaming). Next to the streamed text it shows the next-token probabilities and a bottom panel you switch with **`f`**:
+
+- **Attention** — for the focused block (**`↑`** / **`↓`**), one row per head: where it looks across the context, how spread out it is (entropy in bits), and its strongest links, color-matched to highlights in the text.
+- **Architecture** — the model drawn top to bottom along its residual stream: the token entering, every block with its attention heads lighting up (tall cell = head locked onto one earlier token), how strongly attention and feed-forward each change the stream, and a _logit lens_ (what the model would predict if it stopped at that block), then the output head and sampler.
+
+**`p`** pauses on a token, **`s`** slows generation down; while paused or slow, changing the block or the panel refetches the data for the current token. The full panels need a tall terminal (one row per head or block) and compress below that.
 
 **Interactive chat** (wolf-tui; Ctrl+C exits):
 

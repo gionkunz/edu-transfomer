@@ -10,6 +10,7 @@ import {
   runEmbeddingsSimilarity,
 } from './cmd/embeddings';
 import { runGenerateCommand } from './cmd/generate';
+import { DEFAULT_STOP_TEXT } from './cmd/generate-stop';
 import { runInspect } from './cmd/inspect';
 import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
 import { runTokenizerTrain } from './cmd/tokenizer-train';
@@ -295,9 +296,11 @@ export function createCliProgram(): Command {
       '1',
     )
     .option('--repeat-window <n>', 'tail context length for --repeat-penalty', '64')
+    .option('--stop <text>', 'end generation when the model writes this marker', DEFAULT_STOP_TEXT)
+    .option('--no-stop', 'keep generating past the end-of-text marker, up to --max-new-tokens')
     .option(
       '--no-explore',
-      'disable the educational explore TUI (probability inspector, recent-token highlight, s/p hotkeys); use the minimal streaming view instead',
+      'disable the educational explore TUI (probability inspector, attention panel, architecture view, hotkeys: s slow, p pause, up/down block, f architecture); use the minimal streaming view instead. Explore needs a terminal of at least 60×24; the full attention / architecture panels (one row per head, one to two per block) need a taller one and compress or hide below that.',
     )
     .action(async (opts) => {
       const repeatPenalty = Number(opts.repeatPenalty as string);
@@ -317,6 +320,7 @@ export function createCliProgram(): Command {
         temperature: Number(opts.temperature),
         topK: Number(opts.topK),
         explore: opts.explore !== false,
+        ...(typeof opts.stop === 'string' && opts.stop.length > 0 ? { stopText: opts.stop } : {}),
         computeDtype,
         ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
         ...(repeatPenalty > 1
