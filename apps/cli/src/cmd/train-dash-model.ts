@@ -36,6 +36,8 @@ export interface TrainDashboardDraft {
   lrSchedule: CosineLrSchedule | null;
   accum: number;
   uniformLoss: number | null;
+  /** Most recent diagnostic lines (also written to the run's log file). */
+  logTail: string[];
   trainingPaused: boolean;
   /** Monotonic clock when **`phase`** became **`training`**; drives **`trainWallActiveSec`**. */
   trainingPhaseStartedAtMs: number | null;
@@ -103,6 +105,7 @@ export function createInitialTrainDashboardDraft(opts: {
     lrSchedule: null,
     accum: 1,
     uniformLoss: null,
+    logTail: [],
     trainingPaused: false,
     trainingPhaseStartedAtMs: null,
     trainingPausedAccumMs: 0,
@@ -177,6 +180,7 @@ export function finalizeTrainDashboardDraft(draft: TrainDashboardDraft): TrainDa
     lrSchedule: draft.lrSchedule,
     accum: draft.accum,
     uniformLoss: draft.uniformLoss,
+    logTail: draft.logTail.slice(),
     trainingPaused: draft.trainingPaused,
   };
 }

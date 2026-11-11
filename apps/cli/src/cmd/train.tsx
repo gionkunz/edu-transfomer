@@ -1,4 +1,5 @@
 import { render } from '@wolf-tui/react';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -68,6 +69,10 @@ export const TRAIN_DEFAULT_ACCUM = 1;
 export const TRAIN_DEFAULT_EVAL_EVERY = 250;
 /** Held-out sequences averaged per validation measurement. */
 export const TRAIN_DEFAULT_EVAL_BATCHES = 16;
+/** Diagnostics log inside the checkpoint directory. */
+export const TRAIN_LOG_FILE = 'train.log';
+/** Most recent log lines kept on the dashboard. */
+const TRAIN_LOG_TAIL_LINES = 3;
 
 export {
   TRAIN_DEFAULT_CHECKPOINT_EVERY,
@@ -233,6 +238,25 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   };
   const dashThrottle = createTrainDashboardThrottle(96, paintDashboard);
 
+  // Diagnostics go to <out>/train.log and to a short tail inside the dashboard.
+  // Writing them to stderr would print above the TUI on every message and push
+  // long file paths over the top of the screen.
+  mkdirSync(outAbsDisplay, { recursive: true });
+  const logPath = path.join(outAbsDisplay, TRAIN_LOG_FILE);
+  if (opts.resume !== true) {
+    writeFileSync(logPath, '', 'utf8');
+  }
+  const log = (message: string): void => {
+    appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`, 'utf8');
+    for (const line of message.split('\n')) {
+      draft.logTail.push(line.replace(/^train: /, '').trim());
+    }
+    while (draft.logTail.length > TRAIN_LOG_TAIL_LINES) {
+      draft.logTail.shift();
+    }
+    dashThrottle.schedule();
+  };
+
   draft.phase = 'starting';
   draft.detailLine = 'mounting dashboard';
   primeTuiTerminalCanvas();
@@ -250,20 +274,26 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
 
   draft.phase = 'gpu_init';
   draft.detailLine = 'WebGPU adapter + tensor runtime';
-  console.error('train: initializing WebGPU runtime…');
+  log('train: initializing WebGPU runtime…');
   dashThrottle.flush();
   const rt = await createTensorRuntime();
+  // Some WebGPU backends print driver warnings straight to the terminal while
+  // the device is created, which shifts the cursor under the dashboard and
+  // leaves stale lines behind. Wipe the screen and repaint from scratch.
+  dashRef.inst?.clear();
+  primeTuiTerminalCanvas();
+  dashThrottle.flush();
   assertRuntimeSupportsComputeDtype(rt.ctx, computeDtype, 'train');
   draft.gpuAdapterSummary = rt.ctx.adapterLabel;
   draft.detailLine = rt.ctx.adapterLabel;
-  console.error(`train: WebGPU adapter: ${rt.ctx.adapterLabel}`);
-  console.error(`train: compute dtype: ${computeDtype}`);
+  log(`train: WebGPU adapter: ${rt.ctx.adapterLabel}`);
+  log(`train: compute dtype: ${computeDtype}`);
   if (rt.ctx.isLikelyCpuSoftwareAdapter) {
     const stderrMsg =
       'WebGPU reports a software adapter (e.g. LLVMpipe). Work runs on CPU. For NVIDIA on Linux: install the proprietary driver + Vulkan ICD so `vulkaninfo` lists your GPU (not only llvmpipe). You can point loaders at the NVIDIA ICD with e.g. VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json (path varies). On Windows use native Node; WSL often falls back to software unless GPU + Vulkan are wired for your stack.';
     draft.gpuSoftwareWarning =
-      'Software WebGPU (LLVMpipe/SwiftShader): training is CPU-bound. Fix OS Vulkan/ICD or run native Windows — details on stderr.';
-    console.error(`train: ${stderrMsg}`);
+      'Software WebGPU (LLVMpipe/SwiftShader): training is CPU-bound. Fix OS Vulkan/ICD or run native Windows — details in train.log.';
+    log(`train: ${stderrMsg}`);
   } else {
     draft.gpuSoftwareWarning = null;
   }
@@ -334,22 +364,22 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       dashThrottle.flush();
 
       const cachePaths = corpusTokenCacheArtifactPaths(cacheBaseTrimmed);
-      console.error(
+      log(
         `train: token cache hit → ${String(tokenIds.length)} ids · ${String(files.length)} corpus file(s) · ${cachePaths.idsBin}`,
       );
     } else {
-      console.error(`train: token cache miss (${cacheBaseTrimmed}):`);
+      log(`train: token cache miss (${cacheBaseTrimmed}):`);
       for (const reason of cacheResult.reasons) {
-        console.error(`  ${reason}`);
+        log(`  ${reason}`);
       }
-      console.error('train: re-encoding corpus');
+      log('train: re-encoding corpus');
     }
   } else if (
     opts.rebuildTokenCache &&
     cacheBaseTrimmed !== undefined &&
     cacheBaseTrimmed.length > 0
   ) {
-    console.error(
+    log(
       `train: token cache bypass (--rebuild-token-cache) → will overwrite ${cacheBaseTrimmed}.{meta.json,ids}`,
     );
   }
@@ -426,7 +456,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       };
       dashThrottle.flush();
 
-      console.error(
+      log(
         `train: encoding file ${String(fi + 1)}/${String(files.length)} (${String(text.length)} chars): ${rel}`,
       );
 
@@ -557,7 +587,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
         tokenIds,
         corpusUtf16Units,
       );
-      console.error(
+      log(
         `train: wrote token cache (${String(tokenIds.length)} ids): ${cacheBaseTrimmed}.{meta.json,ids}`,
       );
     }
@@ -574,7 +604,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   draft.corpusTokens = tokenIds.length;
   dashThrottle.flush();
 
-  console.error(
+  log(
     `train: ${String(tokenIds.length)} tokens · seqLen=${String(opts.seqLen)} · steps=${String(opts.steps)}`,
   );
 
@@ -631,7 +661,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       );
     }
     assertCorpusTokenIdsInVocab(valTokenIds, gptCfg.vocabSize);
-    console.error(
+    log(
       `train: validation ${String(valTokenIds.length)} tokens · every ${String(evalEvery)} steps · ${String(evalBatches)} sequences`,
     );
   }
@@ -667,7 +697,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     });
     model = loaded.model;
     await assertModelParametersFiniteForResume(rt, model, `step ${String(startStep)}`);
-    console.error(
+    log(
       `train: resuming from step ${String(startStep)}/${String(totalSteps)} (${ckptPaths.modelJson})`,
     );
   } else {
@@ -724,10 +754,10 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
   draft.detailLine = 'optimizer stepping (GPU shader warmup may pause step 1)';
   dashThrottle.flush();
 
-  console.error(
+  log(
     `train: optim lr_max=${String(optim.lrMax)} lr_min=${String(optim.lrMin)} warmup=${String(warmupSteps)}/${String(totalSteps)} (fraction=${String(opts.warmupFraction)}) weight_decay=${String(optim.weightDecay)} max_grad_norm=${Number.isFinite(optim.maxGradNorm) ? String(optim.maxGradNorm) : 'off'} accum=${String(accum)} checkpoint_every=${String(checkpointEvery)}`,
   );
-  console.error(
+  log(
     'train: first optimizer step often waits on GPU shader/pipeline warmup (minutes on some setups).',
   );
 
@@ -748,7 +778,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
       );
     }
     if (opts.replayOnly) {
-      console.error(
+      log(
         `train: replay-only mode → run steps ${String(startStep + 1)}..${String(opts.replayStep)} then forward probe`,
       );
       draft.phase = 'training';
@@ -812,7 +842,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
     draft.phase = 'training';
     draft.detailLine = 'optimizer stepping';
     dashThrottle.flush();
-    console.error(`train: checkpoint saved at step ${String(completedStep)}/${String(totalSteps)}`);
+    log(`train: checkpoint saved at step ${String(completedStep)}/${String(totalSteps)}`);
   };
 
   if (startStep > 0) {
@@ -865,7 +895,7 @@ export async function runTrainCommand(opts: RunTrainCommandOpts): Promise<void> 
         dashThrottle.schedule();
       }
       if (s === startStep) {
-        console.error(`train: step ${String(s + 1)}/${String(totalSteps)}…`);
+        log(`train: step ${String(s + 1)}/${String(totalSteps)}…`);
       }
       // `accum` sequences per optimizer step. With accum = 1 the offsets are
       // exactly `trainingBatchStart(…, s)`, which `--replay-step` relies on.

@@ -142,6 +142,8 @@ export interface TrainDashboardSnapshot {
   readonly accum: number;
   /** **`ln(vocabSize)`**: the loss of a model that predicts every token with equal probability. */
   readonly uniformLoss: number | null;
+  /** Most recent diagnostic lines; the full log is `train.log` in the output directory. */
+  readonly logTail: readonly string[];
   /**
    * When **`true`**, the training loop yields between steps (no **`trainStep`** / batch prep)
    * so the GPU stays idle until resumed (**`p`** in the TUI).

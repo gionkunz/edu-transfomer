@@ -78,35 +78,49 @@ function LossSparkline({ values }: { readonly values: readonly number[] }): Reac
   return <Text style={{ color: 'cyan' }}>{line}</Text>;
 }
 
-/** Rows the dashboard needs besides the charts (header, progress, stat rows, footer). */
-const NON_CHART_ROWS = 24;
+/**
+ * Rows the training block needs besides the charts: header, paths, adapter,
+ * phase, progress, three stat rows, log tail, footer and padding.
+ */
+const NON_CHART_ROWS = 32;
+/** Extra rows of the software-adapter warning. */
+const SOFTWARE_WARNING_ROWS = 4;
+/** Title, legend and top margin around the loss chart. */
+const LOSS_CHART_CHROME_ROWS = 3;
 const LOSS_CHART_MIN_ROWS = 8;
 const LOSS_CHART_MAX_ROWS = 16;
 const SMALL_CHART_ROWS = 7;
+/** Title and top margin of the LR / grad-norm row. */
+const SMALL_CHART_CHROME_ROWS = 2;
 const CHART_MAX_COLUMNS = 120;
 
 /**
- * Chart sizes for the current terminal. The loss chart always shows once two
- * points exist; the LR / grad-norm pair is added only when the terminal is tall
- * enough, so a short window degrades to fewer charts rather than a scrolling TUI.
+ * Chart sizes for the current terminal, so the dashboard never grows taller
+ * than the screen (a taller frame scrolls and leaves stale lines behind).
+ * Order of sacrifice as the terminal gets shorter: the LR / grad-norm pair,
+ * then loss-chart height, then the loss chart itself (sparkline instead).
  */
-function chartLayout(): {
+function chartLayout(hasSoftwareWarning: boolean): {
   readonly columns: number;
   readonly lossRows: number;
+  readonly showLoss: boolean;
   readonly showSmall: boolean;
 } {
   const termColumns = process.stdout.columns ?? 100;
   const termRows = process.stdout.rows ?? 40;
   const columns = Math.max(40, Math.min(CHART_MAX_COLUMNS, termColumns - 4));
-  const free = termRows - NON_CHART_ROWS;
-  const showSmall = free >= LOSS_CHART_MIN_ROWS + SMALL_CHART_ROWS + 3 && columns >= 70;
-  const forLoss = showSmall ? free - SMALL_CHART_ROWS - 3 : free;
+  const free = termRows - NON_CHART_ROWS - (hasSoftwareWarning ? SOFTWARE_WARNING_ROWS : 0);
+  const smallBlock = SMALL_CHART_ROWS + SMALL_CHART_CHROME_ROWS;
+  const lossMin = LOSS_CHART_MIN_ROWS + LOSS_CHART_CHROME_ROWS;
+  const showLoss = free >= lossMin;
+  const showSmall = free >= lossMin + smallBlock && columns >= 70;
+  const forLoss = free - LOSS_CHART_CHROME_ROWS - (showSmall ? smallBlock : 0);
   const lossRows = Math.max(LOSS_CHART_MIN_ROWS, Math.min(LOSS_CHART_MAX_ROWS, forLoss));
-  return { columns, lossRows, showSmall };
+  return { columns, lossRows, showLoss, showSmall };
 }
 
 function TrainCharts({ snap }: { readonly snap: TrainDashboardSnapshot }): React.ReactElement {
-  const layout = chartLayout();
+  const layout = chartLayout(snap.gpuSoftwareWarning !== null);
   const color = useMemo(() => detectColorMode(process.stdout, process.env), []);
   // Re-render charts only when their data changed, not on every clock tick.
   const lossChart = useMemo(
@@ -142,7 +156,7 @@ function TrainCharts({ snap }: { readonly snap: TrainDashboardSnapshot }): React
     [layout.showSmall, snap.gradNormHistory, snap.maxGradNorm, half, color],
   );
 
-  if (lossChart === null) {
+  if (lossChart === null || !layout.showLoss) {
     return (
       <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
         <Text style={{ color: 'gray' }}>{'Loss trend (recent steps)'}</Text>
@@ -289,13 +303,15 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
         ) : null}
       </Box>
 
-      <Text style={{ color: 'gray', marginTop: 1 }}>{snap.outDirDisplay}</Text>
+      <Text style={{ color: 'gray', marginTop: 1, textWrap: 'truncate-start' }}>
+        {snap.outDirDisplay}
+      </Text>
 
       {snap.gpuAdapterSummary !== null && snap.gpuAdapterSummary.length > 0 ? (
-        <Box style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', marginTop: 1 }}>
+        <Text style={{ marginTop: 1, textWrap: 'truncate-end' }}>
           <Text style={{ color: 'gray' }}>{'WebGPU adapter  '}</Text>
           <Text style={{ color: 'cyan' }}>{snap.gpuAdapterSummary}</Text>
-        </Box>
+        </Text>
       ) : null}
 
       {snap.gpuSoftwareWarning !== null && snap.gpuSoftwareWarning.length > 0 ? (
@@ -433,47 +449,47 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
             </Text>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'yellow' }}>{'Loss · sma(20)'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{`${lossStr} · ${lossSmaStr}`}</Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'green' }}>{'LR'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{lrStr}</Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'blue' }}>{'tok/s ~'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{snap.tokensPerSecApprox.toFixed(0)}</Text>
             </Box>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'magenta' }}>{'bits/char (sma)'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{bitsPerCharStr}</Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'magenta' }}>{'ppx/tok (sma)'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{ppxStr}</Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'gray' }}>{'chars/tok'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{charsPerTokStr}</Text>
             </Box>
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 1, flexWrap: 'wrap' }}>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'yellow' }}>{'Validation loss'}</Text>
               <Text style={{ fontWeight: 'bold' }}>
                 {snap.valLossLast !== null ? snap.valLossLast.toFixed(4) : '— (--val-data)'}
               </Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '33%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'magenta' }}>{'Grad norm'}</Text>
               <Text style={{ fontWeight: 'bold' }}>
                 {snap.gradNormLast !== null ? snap.gradNormLast.toFixed(3) : '—'}
               </Text>
             </Box>
-            <Box style={{ display: 'flex', flexDirection: 'column', width: '34%' }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: '32%' }}>
               <Text style={{ color: 'gray' }}>{'Sequences / step'}</Text>
               <Text style={{ fontWeight: 'bold' }}>{String(snap.accum)}</Text>
             </Box>
@@ -492,10 +508,23 @@ export function TrainDashboardView(props: TrainDashboardViewProps): React.ReactE
         </Box>
       ) : null}
 
-      <Text style={{ color: 'gray', marginTop: 1 }}>
+      {snap.logTail.length > 0 ? (
+        <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 1 }}>
+          {snap.logTail.map((line, i) => (
+            <Text
+              key={`${String(i)}-${line}`}
+              style={{ color: 'gray', textWrap: 'truncate-middle' }}
+            >
+              {`· ${line}`}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+
+      <Text style={{ color: 'gray', marginTop: 1, textWrap: 'truncate-end' }}>
         {snap.phase === 'training'
-          ? 'p pause/resume GPU · Ctrl+C / q quit · stderr still shows GPU / encode diagnostics'
-          : 'Ctrl+C / q quit · stderr still shows GPU / encode diagnostics'}
+          ? 'p pause/resume GPU · Ctrl+C / q quit · full log: train.log in the output directory'
+          : 'Ctrl+C / q quit · full log: train.log in the output directory'}
       </Text>
     </Box>
   );
