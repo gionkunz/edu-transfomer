@@ -61,7 +61,7 @@ describe.skipIf(!webgpuAvailable)('KV decode vs full forward', () => {
     forwardGptPrefill(rt, model, tokPre, cache);
     destroy(tokPre);
 
-    const logitsDec = forwardGptDecodeStep(rt, model, 2, cache);
+    const { logits: logitsDec } = await forwardGptDecodeStep(rt, model, 2, cache);
     const dec = await toArray(rt, logitsDec.tensor);
 
     expect(cache.seqLen).toBe(3);
@@ -77,7 +77,7 @@ describe.skipIf(!webgpuAvailable)('KV decode vs full forward', () => {
     destroy(tokFull);
 
     const cache = createGptKvCache(rt, model);
-    const logitsDec = forwardGptDecodeStep(rt, model, 5, cache);
+    const { logits: logitsDec } = await forwardGptDecodeStep(rt, model, 5, cache);
     const dec = await toArray(rt, logitsDec.tensor);
 
     expect(cache.seqLen).toBe(1);

@@ -1,13 +1,17 @@
 import {
   add,
   createLeafVariable,
+  createParameterRegistry,
+  disposeAutogradGraphExceptParameters,
   embedding,
   gelu,
   matmul,
+  registerParameter,
   rmsnorm,
   scale,
   softmax,
   transpose,
+  type ParameterRegistry,
   type Variable,
 } from '@llm-transformer-diy/autograd';
 import {
@@ -16,12 +20,18 @@ import {
   createZeros,
   destroy,
   floatDtypeOf,
+  toArray,
   view2dRowPrefix,
   type Tensor,
   type TensorRuntime,
 } from '@llm-transformer-diy/tensor';
 
-import { buildCausalBiasTensor, type GptModel, type TransformerBlockParams } from './gpt';
+import {
+  buildCausalBiasTensor,
+  collectGptParameters,
+  type GptModel,
+  type TransformerBlockParams,
+} from './gpt';
 
 export type GptKVHeadCache = {
   readonly k: Tensor;
@@ -39,6 +49,49 @@ export type GptKVLayerCache = {
 export type GptKVCache = {
   readonly layers: readonly GptKVLayerCache[];
   seqLen: number;
+};
+
+/** Request post-softmax attention weights for one transformer block during decode. */
+export type DecodeAttentionCaptureOptions = {
+  readonly layerIndex: number;
+};
+
+export type ForwardGptDecodeStepOptions = {
+  readonly attentionCapture?: DecodeAttentionCaptureOptions;
+  /**
+   * Also read back a **logit lens**: after every block, the residual stream is
+   * pushed through the final norm and the LM head as if the model stopped
+   * there. Shows the prediction forming layer by layer. One extra
+   * `[1, dModel] × [dModel, vocab]` matmul per block and one readback.
+   */
+  readonly layerLens?: boolean;
+  /**
+   * Capture everything a "what is the model doing" view needs, in one forward:
+   * the logit lens (as **`layerLens`**), post-softmax attention of **every**
+   * block, and for each block the residual stream entering it plus the two
+   * updates (attention, feed-forward) it adds.
+   */
+  readonly flowTrace?: boolean;
+};
+
+/** Decode step output; **`attention`** is row-major stacked **`[nHeads, prefixRows]`**. */
+export type GptDecodeStepResult = {
+  readonly logits: Variable;
+  readonly attention?: Float32Array;
+  /**
+   * With **`layerLens`**: row-major **`[nLayers, vocabSize]`** raw logits, row
+   * **`l`** = prediction from the residual stream after block **`l`**. The last
+   * row equals **`logits`**.
+   */
+  readonly layerLogits?: Float32Array;
+  /** With **`flowTrace`**: row-major **`[nLayers · nHeads, prefixRows]`** attention, block by block. */
+  readonly allAttention?: Float32Array;
+  /**
+   * With **`flowTrace`**: row-major **`[3 · nLayers, dModel]`**. For block **`l`**,
+   * row **`3l`** is the residual stream entering the block, **`3l + 1`** the
+   * attention update added to it, **`3l + 2`** the feed-forward update.
+   */
+  readonly blockVectors?: Float32Array;
 };
 
 export function createGptKvCache(rt: TensorRuntime, model: GptModel): GptKVCache {
@@ -61,6 +114,51 @@ export function destroyGptKvCache(cache: GptKVCache): void {
       destroy(h.v);
     }
   }
+}
+
+/** Residual stream → final norm → LM head, as if the model ended at this point. */
+function lensLogits(
+  rt: TensorRuntime,
+  model: GptModel,
+  h: Variable,
+): { readonly normed: Variable; readonly logits: Variable } {
+  const normed = rmsnorm(rt, h, model.finalNormGamma);
+  return { normed, logits: matmul(rt, normed, model.lmHead) };
+}
+
+const disposalRegistries = new WeakMap<GptModel, ParameterRegistry>();
+
+/**
+ * Release every intermediate buffer of one prefill / decode forward once its
+ * logits have been read back.
+ *
+ * Inference never calls `backward`, but each forward still builds an autograd
+ * graph of small tensors (per layer, per head). Without this, a generation of
+ * `n` tokens keeps `n` graphs alive. Model parameters, the constant head-expand
+ * matrices and the KV cache (whose row-prefix views share its buffers) are kept;
+ * everything else — including the token-id tensor passed to the forward — is
+ * returned to the buffer pool.
+ */
+export function disposeGptKvForwardGraph(
+  output: Variable,
+  model: GptModel,
+  cache: GptKVCache,
+): void {
+  let registry = disposalRegistries.get(model);
+  if (registry === undefined) {
+    registry = createParameterRegistry();
+    for (const p of collectGptParameters(model)) {
+      registerParameter(registry, p);
+    }
+    disposalRegistries.set(model, registry);
+  }
+  const keep: Tensor[] = model.headExpand.map((he) => he.tensor);
+  for (const layer of cache.layers) {
+    for (const head of layer.heads) {
+      keep.push(head.k, head.v);
+    }
+  }
+  disposeAutogradGraphExceptParameters(output, registry, keep);
 }
 
 function mhaForwardPrefill(
@@ -122,6 +220,7 @@ function mhaForwardDecode(
   layerIndex: number,
   cache: GptKVCache,
   rowWrite: number,
+  captureProbs?: Variable[],
 ): Variable {
   const H = blk.wq.length;
   const dK = blk.wq[0]?.tensor.shape[1];
@@ -147,11 +246,19 @@ function mhaForwardDecode(
     }
     copyContiguousElems(rt, kNew.tensor, 0, slot.k, rowWrite * dK, dK);
     copyContiguousElems(rt, vNew.tensor, 0, slot.v, rowWrite * dK, dK);
+    // From here on attention reads K/V through the cache, so the fresh rows are
+    // not part of the graph that leads to the logits and nothing else would
+    // ever release them.
+    destroy(kNew.tensor);
+    destroy(vNew.tensor);
     const kPrefix = view2dRowPrefix(slot.k, prefixRows);
     const kt = transpose(rt, createLeafVariable(kPrefix, false));
     let scores = matmul(rt, q, kt);
     scores = scale(rt, scores, invSqrtDk);
     const prob = softmax(rt, scores);
+    if (captureProbs !== undefined) {
+      captureProbs.push(prob);
+    }
     const vPrefix = view2dRowPrefix(slot.v, prefixRows);
     const mixed = matmul(rt, prob, createLeafVariable(vPrefix, false));
     const contrib = matmul(rt, mixed, he);
@@ -207,12 +314,26 @@ function blockForwardDecode(
   layerIndex: number,
   cache: GptKVCache,
   rowWrite: number,
+  captureProbs?: Variable[],
+  captureParts?: { input: Variable; attn: Variable; ff: Variable }[],
 ): Variable {
+  const input = x;
   let y = rmsnorm(rt, x, blk.attnNormGamma);
-  const attn = mhaForwardDecode(rt, blk, y, invSqrtDk, headExpand, layerIndex, cache, rowWrite);
+  const attn = mhaForwardDecode(
+    rt,
+    blk,
+    y,
+    invSqrtDk,
+    headExpand,
+    layerIndex,
+    cache,
+    rowWrite,
+    captureProbs,
+  );
   x = add(rt, x, attn);
   y = rmsnorm(rt, x, blk.ffnNormGamma);
   const ff = ffnForward(rt, blk, y);
+  captureParts?.push({ input, attn, ff });
   return add(rt, x, ff);
 }
 
@@ -283,12 +404,13 @@ export function forwardGptPrefill(
  *
  * **Position** is **`cache.seqLen`** (0-based index of this token). Requires **`cache.seqLen < maxSeqLen`**.
  */
-export function forwardGptDecodeStep(
+export async function forwardGptDecodeStep(
   rt: TensorRuntime,
   model: GptModel,
   tokenId: number,
   cache: GptKVCache,
-): Variable {
+  options?: ForwardGptDecodeStepOptions,
+): Promise<GptDecodeStepResult> {
   if (!Number.isInteger(tokenId) || tokenId < 0 || tokenId >= model.config.vocabSize) {
     throw new Error(`forwardGptDecodeStep: tokenId out of range (got ${String(tokenId)})`);
   }
@@ -311,16 +433,135 @@ export function forwardGptDecodeStep(
 
   const dK = model.config.dModel / model.config.nHeads;
   const invSqrtDk = 1 / Math.sqrt(dK);
+  const captureLayer = options?.attentionCapture?.layerIndex;
+  if (captureLayer !== undefined) {
+    if (
+      !Number.isInteger(captureLayer) ||
+      captureLayer < 0 ||
+      captureLayer >= model.blocks.length
+    ) {
+      throw new Error(
+        `forwardGptDecodeStep: attentionCapture.layerIndex out of range (got ${String(captureLayer)}, nLayers=${String(model.blocks.length)})`,
+      );
+    }
+  }
+  const traceAll = options?.flowTrace === true;
+  const probsByLayer: (Variable[] | undefined)[] = [];
+  const blockParts: { input: Variable; attn: Variable; ff: Variable }[] | undefined = traceAll
+    ? []
+    : undefined;
+  // Lens branches hang off the residual stream but are not ancestors of the
+  // final logits, so the graph disposal never reaches them; they are released
+  // here once copied out.
+  const lensRows: { readonly normed: Variable; readonly logits: Variable }[] | undefined =
+    options?.layerLens === true || traceAll ? [] : undefined;
 
   for (let li = 0; li < model.blocks.length; li++) {
     const blk = model.blocks[li];
     if (!blk) {
       throw new Error('forwardGptDecodeStep: missing block');
     }
-    h = blockForwardDecode(rt, blk, h, invSqrtDk, model.headExpand, li, cache, rowWrite);
+    const probsForLayer: Variable[] | undefined = traceAll || captureLayer === li ? [] : undefined;
+    probsByLayer.push(probsForLayer);
+    if (lensRows !== undefined && li > 0) {
+      lensRows.push(lensLogits(rt, model, h));
+    }
+    h = blockForwardDecode(
+      rt,
+      blk,
+      h,
+      invSqrtDk,
+      model.headExpand,
+      li,
+      cache,
+      rowWrite,
+      probsForLayer,
+      blockParts,
+    );
   }
+  const captureProbs = captureLayer !== undefined ? probsByLayer[captureLayer] : undefined;
 
   cache.seqLen = pos + 1;
   h = rmsnorm(rt, h, model.finalNormGamma);
-  return matmul(rt, h, model.lmHead);
+  const logits = matmul(rt, h, model.lmHead);
+
+  let attention: Float32Array | undefined;
+  if (captureProbs !== undefined) {
+    const prefixRows = rowWrite + 1;
+    const { nHeads } = model.config;
+    if (captureProbs.length !== nHeads) {
+      throw new Error(
+        `forwardGptDecodeStep: expected ${String(nHeads)} captured head probs, got ${String(captureProbs.length)}`,
+      );
+    }
+    const dt = floatDtypeOf(model.tokenEmbed.tensor);
+    const stack = createZeros(rt, [nHeads, prefixRows], dt);
+    for (let hi = 0; hi < nHeads; hi++) {
+      const prob = captureProbs[hi];
+      if (!prob) {
+        throw new Error('forwardGptDecodeStep: missing captured head prob');
+      }
+      copyContiguousElems(rt, prob.tensor, 0, stack, hi * prefixRows, prefixRows);
+    }
+    attention = await toArray(rt, stack);
+    destroy(stack);
+  }
+
+  let layerLogits: Float32Array | undefined;
+  if (lensRows !== undefined) {
+    // lensRows holds blocks 0 … L-2 (captured before the next block ran); the
+    // last block's lens is the real output, so reuse `logits` for that row.
+    const V = model.config.vocabSize;
+    const L = model.blocks.length;
+    const stack = createZeros(rt, [L, V], floatDtypeOf(model.tokenEmbed.tensor));
+    for (let li = 0; li < L - 1; li++) {
+      const row = lensRows[li];
+      if (!row) {
+        throw new Error('forwardGptDecodeStep: missing lens row');
+      }
+      copyContiguousElems(rt, row.logits.tensor, 0, stack, li * V, V);
+    }
+    copyContiguousElems(rt, logits.tensor, 0, stack, (L - 1) * V, V);
+    layerLogits = await toArray(rt, stack);
+    destroy(stack);
+    for (const row of lensRows) {
+      destroy(row.normed.tensor);
+      destroy(row.logits.tensor);
+    }
+  }
+
+  let allAttention: Float32Array | undefined;
+  let blockVectors: Float32Array | undefined;
+  if (blockParts !== undefined) {
+    const prefixRows = rowWrite + 1;
+    const { nHeads, dModel } = model.config;
+    const L = model.blocks.length;
+    const dt = floatDtypeOf(model.tokenEmbed.tensor);
+    const attnStack = createZeros(rt, [L * nHeads, prefixRows], dt);
+    const vecStack = createZeros(rt, [3 * L, dModel], dt);
+    for (let li = 0; li < L; li++) {
+      const probs = probsByLayer[li];
+      const parts = blockParts[li];
+      if (!probs || probs.length !== nHeads || !parts) {
+        throw new Error('forwardGptDecodeStep: incomplete flow trace capture');
+      }
+      for (let hi = 0; hi < nHeads; hi++) {
+        const prob = probs[hi];
+        if (!prob) {
+          throw new Error('forwardGptDecodeStep: missing captured head prob');
+        }
+        const row = (li * nHeads + hi) * prefixRows;
+        copyContiguousElems(rt, prob.tensor, 0, attnStack, row, prefixRows);
+      }
+      copyContiguousElems(rt, parts.input.tensor, 0, vecStack, 3 * li * dModel, dModel);
+      copyContiguousElems(rt, parts.attn.tensor, 0, vecStack, (3 * li + 1) * dModel, dModel);
+      copyContiguousElems(rt, parts.ff.tensor, 0, vecStack, (3 * li + 2) * dModel, dModel);
+    }
+    allAttention = await toArray(rt, attnStack);
+    blockVectors = await toArray(rt, vecStack);
+    destroy(attnStack);
+    destroy(vecStack);
+  }
+
+  return { logits, attention, layerLogits, allAttention, blockVectors };
 }

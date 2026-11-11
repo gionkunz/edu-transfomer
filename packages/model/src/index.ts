@@ -33,8 +33,12 @@ export {
 export {
   createGptKvCache,
   destroyGptKvCache,
+  disposeGptKvForwardGraph,
   forwardGptDecodeStep,
   forwardGptPrefill,
+  type DecodeAttentionCaptureOptions,
+  type ForwardGptDecodeStepOptions,
+  type GptDecodeStepResult,
   type GptKVCache,
   type GptKVHeadCache,
   type GptKVLayerCache,

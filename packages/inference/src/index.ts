@@ -42,7 +42,32 @@ export {
   type ExprSub,
   type ResolveAtom,
 } from './embedding-expression';
-export { generateAutoregressive, type GenerateOptions } from './generate';
+export {
+  bestConnectionByKeyIndex,
+  bestRankByKeyIndex,
+  bucketAttentionRow,
+  groupConnectionsByHead,
+  selectTop10GlobalConnections,
+  summarizeHeads,
+  unstackAttentionWeights,
+  type GlobalAttentionConnection,
+  type HeadAttentionSummary,
+} from './attention-connections';
+export {
+  buildFlowTrace,
+  summarizeLayerLens,
+  type FlowLayer,
+  type FlowTrace,
+  type LayerLensEntry,
+  type LayerLensPayload,
+} from './flow-trace';
+export {
+  generateAutoregressive,
+  type DecodeAttentionPayload,
+  type GenerateOptions,
+  type GenerateStep,
+  type GenerateStepSignal,
+} from './generate';
 export {
   applyRepetitionPenalty,
   DEFAULT_SAMPLE_OPTIONS,
