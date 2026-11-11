@@ -24,10 +24,10 @@ When adding code, place it in the lowest layer that can own the concern, and kee
 
 ## Repository workflow (OpenSpec)
 
-This repo uses an OpenSpec-style loop under **`.cursor/`**:
+This repo uses an OpenSpec-style loop. The same commands and skills are installed for Cursor (**`.cursor/`**) and Claude Code (**`.claude/`**):
 
-- **`.cursor/commands/`** — `opsx-explore`, `opsx-propose`, `opsx-apply`, `opsx-archive` for the change lifecycle.
-- **`.cursor/skills/`** — `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change` skills; read the relevant `SKILL.md` before driving that phase.
+- **Commands** — `opsx-explore`, `opsx-propose`, `opsx-apply`, `opsx-sync`, `opsx-archive` for the change lifecycle (**`.cursor/commands/`**, **`.claude/commands/opsx/`**).
+- **Skills** — `openspec-explore`, `openspec-propose`, `openspec-apply-change`, `openspec-sync-specs`, `openspec-archive-change` (**`.cursor/skills/`**, **`.claude/skills/`**); read the relevant `SKILL.md` before driving that phase.
 
 For substantial features or behavior changes, follow that workflow instead of ad-hoc edits when the user expects spec-driven work.
 

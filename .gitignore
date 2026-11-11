@@ -18,7 +18,6 @@ tmp/
 .idea/
 
 vitest.config.*.timestamp*
-.viper/**/.viper-runtime/
 
 # Downloaded corpora (see tools/prepare-tinystories.mjs)
 corpus/tinystories/
