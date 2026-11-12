@@ -69,12 +69,27 @@ export {
   type GenerateStepSignal,
 } from './generate';
 export {
+  bucketVector,
+  maxAbsComponent,
+  mostFocusedHead,
+  readLessonHeadKv,
+  runLessonForward,
+  visibleTokenWindow,
+  type LessonHead,
+  type LessonHeadKv,
+  type LessonTrace,
+  type TokenWindow,
+} from './lesson-trace';
+export {
   applyRepetitionPenalty,
   DEFAULT_SAMPLE_OPTIONS,
+  explainSampling,
   greedyArgmax,
   sampleLogits,
   sampleLogitsWithProbs,
   type Random01,
   type SampleOptions,
   type SampleWithProbsResult,
+  type SamplingBreakdown,
+  type SamplingBreakdownRow,
 } from './sampling';

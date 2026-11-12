@@ -72,6 +72,13 @@ export type ForwardGptDecodeStepOptions = {
    * updates (attention, feed-forward) it adds.
    */
   readonly flowTrace?: boolean;
+  /**
+   * Everything **`flowTrace`** captures, plus what a step-by-step explanation
+   * of attention needs: the two input vectors, and for every head its query,
+   * its scores before softmax and its weighted mix of values. Keys and values
+   * are not returned here; they live in the KV cache (see **`readKvCacheHead`**).
+   */
+  readonly lessonTrace?: boolean;
 };
 
 /** Decode step output; **`attention`** is row-major stacked **`[nHeads, prefixRows]`**. */
@@ -92,6 +99,29 @@ export type GptDecodeStepResult = {
    * attention update added to it, **`3l + 2`** the feed-forward update.
    */
   readonly blockVectors?: Float32Array;
+  /** With **`lessonTrace`**: row-major **`[2, dModel]`** — token embedding row, then position embedding row. */
+  readonly inputVectors?: Float32Array;
+  /** With **`lessonTrace`**: row-major **`[nLayers · nHeads, d_k]`** — each head's query for this token. */
+  readonly allQueries?: Float32Array;
+  /**
+   * With **`lessonTrace`**: row-major **`[nLayers · nHeads, prefixRows]`** — each
+   * head's scores **`(q · k) / √d_k`** before softmax. Softmax of a row is the
+   * matching row of **`allAttention`**.
+   */
+  readonly allScores?: Float32Array;
+  /**
+   * With **`lessonTrace`**: row-major **`[nLayers · nHeads, d_k]`** — each head's
+   * output before it is placed back into the residual stream: its values
+   * averaged with its attention weights.
+   */
+  readonly allMixed?: Float32Array;
+};
+
+/** Per-head intermediates of one block, collected for **`lessonTrace`**. */
+type HeadDetailCapture = {
+  readonly queries: Variable[];
+  readonly scores: Variable[];
+  readonly mixed: Variable[];
 };
 
 export function createGptKvCache(rt: TensorRuntime, model: GptModel): GptKVCache {
@@ -221,6 +251,7 @@ function mhaForwardDecode(
   cache: GptKVCache,
   rowWrite: number,
   captureProbs?: Variable[],
+  captureDetail?: HeadDetailCapture,
 ): Variable {
   const H = blk.wq.length;
   const dK = blk.wq[0]?.tensor.shape[1];
@@ -261,6 +292,11 @@ function mhaForwardDecode(
     }
     const vPrefix = view2dRowPrefix(slot.v, prefixRows);
     const mixed = matmul(rt, prob, createLeafVariable(vPrefix, false));
+    if (captureDetail !== undefined) {
+      captureDetail.queries.push(q);
+      captureDetail.scores.push(scores);
+      captureDetail.mixed.push(mixed);
+    }
     const contrib = matmul(rt, mixed, he);
     acc = acc === null ? contrib : add(rt, acc, contrib);
   }
@@ -316,6 +352,7 @@ function blockForwardDecode(
   rowWrite: number,
   captureProbs?: Variable[],
   captureParts?: { input: Variable; attn: Variable; ff: Variable }[],
+  captureDetail?: HeadDetailCapture,
 ): Variable {
   const input = x;
   let y = rmsnorm(rt, x, blk.attnNormGamma);
@@ -329,6 +366,7 @@ function blockForwardDecode(
     cache,
     rowWrite,
     captureProbs,
+    captureDetail,
   );
   x = add(rt, x, attn);
   y = rmsnorm(rt, x, blk.ffnNormGamma);
@@ -425,11 +463,9 @@ export async function forwardGptDecodeStep(
   const tokVar = createLeafVariable(tokTensor, false);
   const posVar = createLeafVariable(posTensor, false);
 
-  let h: Variable = add(
-    rt,
-    embedding(rt, model.tokenEmbed, tokVar),
-    embedding(rt, model.posEmbed, posVar),
-  );
+  const tokenRow = embedding(rt, model.tokenEmbed, tokVar);
+  const positionRow = embedding(rt, model.posEmbed, posVar);
+  let h: Variable = add(rt, tokenRow, positionRow);
 
   const dK = model.config.dModel / model.config.nHeads;
   const invSqrtDk = 1 / Math.sqrt(dK);
@@ -445,7 +481,9 @@ export async function forwardGptDecodeStep(
       );
     }
   }
-  const traceAll = options?.flowTrace === true;
+  const lesson = options?.lessonTrace === true;
+  const traceAll = options?.flowTrace === true || lesson;
+  const headDetails: HeadDetailCapture[] | undefined = lesson ? [] : undefined;
   const probsByLayer: (Variable[] | undefined)[] = [];
   const blockParts: { input: Variable; attn: Variable; ff: Variable }[] | undefined = traceAll
     ? []
@@ -466,6 +504,11 @@ export async function forwardGptDecodeStep(
     if (lensRows !== undefined && li > 0) {
       lensRows.push(lensLogits(rt, model, h));
     }
+    const detail: HeadDetailCapture | undefined =
+      headDetails !== undefined ? { queries: [], scores: [], mixed: [] } : undefined;
+    if (detail !== undefined) {
+      headDetails?.push(detail);
+    }
     h = blockForwardDecode(
       rt,
       blk,
@@ -477,6 +520,7 @@ export async function forwardGptDecodeStep(
       rowWrite,
       probsForLayer,
       blockParts,
+      detail,
     );
   }
   const captureProbs = captureLayer !== undefined ? probsByLayer[captureLayer] : undefined;
@@ -563,5 +607,96 @@ export async function forwardGptDecodeStep(
     destroy(vecStack);
   }
 
-  return { logits, attention, layerLogits, allAttention, blockVectors };
+  let inputVectors: Float32Array | undefined;
+  let allQueries: Float32Array | undefined;
+  let allScores: Float32Array | undefined;
+  let allMixed: Float32Array | undefined;
+  if (headDetails !== undefined) {
+    const prefixRows = rowWrite + 1;
+    const { nHeads, dModel } = model.config;
+    const L = model.blocks.length;
+    const dt = floatDtypeOf(model.tokenEmbed.tensor);
+    const inputStack = createZeros(rt, [2, dModel], dt);
+    copyContiguousElems(rt, tokenRow.tensor, 0, inputStack, 0, dModel);
+    copyContiguousElems(rt, positionRow.tensor, 0, inputStack, dModel, dModel);
+    const queryStack = createZeros(rt, [L * nHeads, dK], dt);
+    const scoreStack = createZeros(rt, [L * nHeads, prefixRows], dt);
+    const mixedStack = createZeros(rt, [L * nHeads, dK], dt);
+    for (let li = 0; li < L; li++) {
+      const detail = headDetails[li];
+      if (
+        !detail ||
+        detail.queries.length !== nHeads ||
+        detail.scores.length !== nHeads ||
+        detail.mixed.length !== nHeads
+      ) {
+        throw new Error('forwardGptDecodeStep: incomplete lesson trace capture');
+      }
+      for (let hi = 0; hi < nHeads; hi++) {
+        const q = detail.queries[hi];
+        const sc = detail.scores[hi];
+        const mx = detail.mixed[hi];
+        if (!q || !sc || !mx) {
+          throw new Error('forwardGptDecodeStep: missing captured head detail');
+        }
+        const row = li * nHeads + hi;
+        copyContiguousElems(rt, q.tensor, 0, queryStack, row * dK, dK);
+        copyContiguousElems(rt, sc.tensor, 0, scoreStack, row * prefixRows, prefixRows);
+        copyContiguousElems(rt, mx.tensor, 0, mixedStack, row * dK, dK);
+      }
+    }
+    inputVectors = await toArray(rt, inputStack);
+    allQueries = await toArray(rt, queryStack);
+    allScores = await toArray(rt, scoreStack);
+    allMixed = await toArray(rt, mixedStack);
+    destroy(inputStack);
+    destroy(queryStack);
+    destroy(scoreStack);
+    destroy(mixedStack);
+  }
+
+  return {
+    logits,
+    attention,
+    layerLogits,
+    allAttention,
+    blockVectors,
+    inputVectors,
+    allQueries,
+    allScores,
+    allMixed,
+  };
+}
+
+/**
+ * Read one head's cached keys and values: row-major **`[cache.seqLen, d_k]`**
+ * each, row **`i`** belonging to the token at position **`i`**. These are the
+ * rows attention compares the query against (keys) and mixes (values).
+ */
+export async function readKvCacheHead(
+  rt: TensorRuntime,
+  cache: GptKVCache,
+  layerIndex: number,
+  headIndex: number,
+): Promise<{ readonly keys: Float32Array; readonly values: Float32Array; readonly dK: number }> {
+  const layer = cache.layers[layerIndex];
+  if (!Number.isInteger(layerIndex) || layer === undefined) {
+    throw new Error(
+      `readKvCacheHead: layerIndex out of range (got ${String(layerIndex)}, nLayers=${String(cache.layers.length)})`,
+    );
+  }
+  const slot = layer.heads[headIndex];
+  if (!Number.isInteger(headIndex) || slot === undefined) {
+    throw new Error(
+      `readKvCacheHead: headIndex out of range (got ${String(headIndex)}, nHeads=${String(layer.heads.length)})`,
+    );
+  }
+  const dK = slot.k.shape[1];
+  if (dK === undefined) {
+    throw new Error('readKvCacheHead: cache tensor missing head dimension');
+  }
+  const elems = cache.seqLen * dK;
+  const keys = (await toArray(rt, slot.k)).slice(0, elems);
+  const values = (await toArray(rt, slot.v)).slice(0, elems);
+  return { keys, values, dK };
 }

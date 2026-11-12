@@ -63,10 +63,11 @@ After linking, **`llm`** exposes (among others):
 | **`llm train`**                       | Load corpus + tokenizer → **WebGPU** training → checkpoint dir (**wolf-tui** dashboard, including corpus **BPE encode** progress where applicable). Optional **`--dtype f32\|bf16`** (default **`f32`**) for compute weights. |
 | **`llm generate`**                    | Single prompt, streaming **wolf-tui**; **`--dtype`** and optional **`--allow-dtype-upcast`** for checkpoint vs runtime dtype.                                                                                                 |
 | **`llm chat`**                        | Multi-turn **wolf-tui** (same sampling flags flavour as **`generate`)**; same dtype flags as **`generate`**.                                                                                                                  |
+| **`llm learn`**                       | Guided lesson in the terminal: how the model predicts the next token of a prompt, step by step, with the real numbers of your checkpoint.                                                                                     |
 | **`llm inspect`**                     | Checkpoint / **`model.json`** summary on stdout                                                                                                                                                                               |
 | **`llm embeddings`**                  | Explore the trained token-embedding geometry: `encode` / `decode` / `nearest` / `similarity` / `expression` (vector arithmetic with a tiny `+ - ( )` language). Stdout only; no fullscreen TUI.                               |
 
-For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading **`bf16`** checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
+For full flags, run **`llm train --help`**, **`llm tokenizer train --help`**, **`llm generate --help`**, **`llm learn --help`**, **`llm chat --help`**, etc. Training and inference share the **`--dtype`** knob (`f32` / `bf16`); **`generate`** / **`chat`** also expose **`--allow-dtype-upcast`** when loading **`bf16`** checkpoints into an **`f32`** model—see **`docs/project.md`** (checkpoint + CLI sections).
 
 Built-in GPT shape **presets** for **`llm train --config`** (vocab comes from tokenizer only): **`tiny`**, **`small`**. Otherwise pass a **`GptConfig` JSON path**—see **`config/tinystories.json`**, **`config/xxs.json`**, **`config/xs.json`** and **`config/s.json`** in this repo (`vocabSize` in the file **must agree** with the tokenizer’s **`vocabSize`**).
 
@@ -248,6 +249,36 @@ llm chat --model out/run-medium --tokenizer out/tok-8000.json --max-new-tokens 9
 ```
 
 Sampling flags (**`temperature`**, **`top-k`**, **`repeat-penalty`**, **`repeat-window`**) mirror **`generate`**; see **`llm chat --help`**.
+
+---
+
+## Example: learn how the model predicts
+
+```bash
+llm learn --model out/tinystories/run1 "Once upon a time, there was a little"
+```
+
+**`llm learn`** runs the model once on your prompt and then walks you through how it arrived at the next token. Nothing on screen is a textbook example: every vector, score and probability comes from that one forward of your checkpoint. One step is one screen, with a schematic on top and a short explanation below.
+
+| Chapter                       | Steps                                                                                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1. One attention head**     | The last token's _query_ → compared with the _key_ of every token so far → _scores_ → softmax into _weights_ → the _values_ mixed by those weights into the head's output.           |
+| **2. The stack of blocks**    | The residual stream entering → what each block's attention and feed-forward add to it → the model's best guess after each block (the same diagram as **`generate`**'s **`f`** view). |
+| **3. Picking the next token** | The model's raw probabilities → after temperature → after top-k → the random draw.                                                                                                   |
+
+| Key               | Does                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| **`←`** / **`→`** | Previous / next step                                                                             |
+| **`1`** – **`3`** | Jump to a chapter                                                                                |
+| **`space`**       | Pause, resume or replay the step's animation                                                     |
+| **`↑`** / **`↓`** | Chapters 1–2: select the block. Chapter 3: raise / lower the temperature (the footer says which) |
+| **`h`** / **`H`** | Chapter 1: next / previous attention head                                                        |
+| **`k`**           | Chapter 3: cycle top-k (off, 5, 10, 40, and your **`--top-k`**)                                  |
+| **`r`**           | Chapter 3: draw again                                                                            |
+| **`n`**           | On the last step: append the drawn token and run the lesson again for the next position          |
+| **`q`**           | Quit                                                                                             |
+
+The prompt is optional (default **`Once upon a time`**). **`--temperature`** and **`--top-k`** set where the sampler starts, **`--no-animation`** shows every step in its finished state, **`--tokenizer`** / **`--dtype`** work as in **`generate`**. It needs an interactive terminal of at least **80×24**; long prompts show their most recent tokens.
 
 ---
 

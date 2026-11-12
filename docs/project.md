@@ -684,6 +684,7 @@ Single entry point with subcommands. Short commands use plain stdout; long-runni
 | `llm tokenizer decode --tokenizer ./tok.json 42,17,8`                      | Decode IDs to text                            | No                     |
 | `llm train --data ./corpus/**/*.txt --config small --out ./model/`         | Train a model                                 | Yes — live dashboard   |
 | `llm generate --model ./model/ --prompt "Once upon"`                       | Generate text                                 | Yes — streaming output |
+| `llm learn --model ./model/ "Once upon"`                                   | Step-by-step lesson on one prediction         | Yes — interactive      |
 | `llm inspect --model ./model/`                                             | Print model config, param count, layer shapes | No                     |
 
 ### Train Dashboard (wolf-tui)

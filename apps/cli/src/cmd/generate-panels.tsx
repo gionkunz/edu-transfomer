@@ -247,25 +247,66 @@ function strongestHead(layer: FlowLayer): FlowLayer['heads'][number] | undefined
   return best;
 }
 
+/**
+ * How much of the diagram is drawn. Lets a caller build the picture up piece
+ * by piece; parts not yet revealed keep their space so nothing shifts.
+ */
+export type FlowReveal = {
+  /**
+   * Block steps shown, counted along the stream: block 1 attention, block 1
+   * feed-forward, block 2 attention, … (**`2 · nLayers`** shows all).
+   */
+  readonly steps: number;
+  /** Number of blocks, from the first, whose logit lens is shown. */
+  readonly lens: number;
+  /** Whether the output row (final norm → scores → sampled token) is shown. */
+  readonly output: boolean;
+};
+
+/** Steps of one block visible under **`reveal`**: 0 none, 1 attention, 2 attention and feed-forward. */
+export function revealedBlockSteps(reveal: FlowReveal | undefined, layerIndex: number): 0 | 1 | 2 {
+  if (reveal === undefined) return 2;
+  const n = reveal.steps - 2 * layerIndex;
+  return n >= 2 ? 2 : n === 1 ? 1 : 0;
+}
+
 /** `attention [▁█▃…] ⊕ +12%  ─▶  feed-forward ⊕ +8%` — the two steps of a block, with live activity. */
 function BlockSteps(props: {
   readonly layer: FlowLayer;
   readonly short: boolean;
+  /** Steps to draw (see **`revealedBlockSteps`**); hidden ones become blanks of the same width. */
+  readonly parts: 0 | 1 | 2;
 }): React.ReactElement {
-  const { layer, short } = props;
+  const { layer, short, parts } = props;
+  const attentionLabel = short ? 'att ' : 'attention ';
+  const feedForwardLabel = short ? ' ffn ⊕ ' : ' ─▶ feed-forward ⊕ ';
+  const attentionWidth = attentionLabel.length + 1 + layer.heads.length + 4 + 6;
+  const feedForwardWidth = feedForwardLabel.length + 6;
   return (
     <Text>
-      <Text style={{ color: 'gray' }}>{short ? 'att ' : 'attention '}</Text>
-      <Text style={{ color: 'gray' }}>{'['}</Text>
-      <Text style={{ color: 'cyan' }}>{headActivityCells(layer.heads)}</Text>
-      <Text style={{ color: 'gray' }}>{'] ⊕ '}</Text>
-      <Text style={{ color: updateColor(layer.attentionUpdate) }}>
-        {fmtUpdate(layer.attentionUpdate).padEnd(6, ' ')}
-      </Text>
-      <Text style={{ color: 'gray' }}>{short ? ' ffn ⊕ ' : ' ─▶ feed-forward ⊕ '}</Text>
-      <Text style={{ color: updateColor(layer.feedForwardUpdate) }}>
-        {fmtUpdate(layer.feedForwardUpdate).padEnd(6, ' ')}
-      </Text>
+      {parts >= 1 ? (
+        <Text>
+          <Text style={{ color: 'gray' }}>{attentionLabel}</Text>
+          <Text style={{ color: 'gray' }}>{'['}</Text>
+          <Text style={{ color: 'cyan' }}>{headActivityCells(layer.heads)}</Text>
+          <Text style={{ color: 'gray' }}>{'] ⊕ '}</Text>
+          <Text style={{ color: updateColor(layer.attentionUpdate) }}>
+            {fmtUpdate(layer.attentionUpdate).padEnd(6, ' ')}
+          </Text>
+        </Text>
+      ) : (
+        <Text>{' '.repeat(attentionWidth)}</Text>
+      )}
+      {parts >= 2 ? (
+        <Text>
+          <Text style={{ color: 'gray' }}>{feedForwardLabel}</Text>
+          <Text style={{ color: updateColor(layer.feedForwardUpdate) }}>
+            {fmtUpdate(layer.feedForwardUpdate).padEnd(6, ' ')}
+          </Text>
+        </Text>
+      ) : (
+        <Text>{' '.repeat(feedForwardWidth)}</Text>
+      )}
     </Text>
   );
 }
@@ -275,14 +316,19 @@ function BlockLens(props: {
   readonly layer: FlowLayer;
   readonly labelForId: (tokenId: number) => string;
   readonly short: boolean;
+  /** Tighter columns, so the row fits an 80-column terminal. */
+  readonly narrow?: boolean;
 }): React.ReactElement {
   const { layer } = props;
+  const narrow = props.narrow === true;
   return (
     <Text>
-      <Text style={{ color: 'gray' }}>{props.short ? ' ┆ ' : ' ┆ would say '}</Text>
-      <Text>{`«${props.labelForId(layer.topTokenId)}»`.padEnd(13, ' ')}</Text>
+      <Text style={{ color: 'gray' }}>{narrow ? '┆ ' : props.short ? ' ┆ ' : ' ┆ would say '}</Text>
+      <Text>{`«${props.labelForId(layer.topTokenId)}»`.padEnd(narrow ? 12 : 13, ' ')}</Text>
       <Text style={{ color: 'gray' }}>{`${fmtWeight(layer.topProbability)} `}</Text>
-      <Text style={{ color: 'cyan' }}>{probabilityBar(layer.sampledProbability, 8)}</Text>
+      <Text style={{ color: 'cyan' }}>
+        {probabilityBar(layer.sampledProbability, narrow ? 5 : 8)}
+      </Text>
       <Text style={{ color: 'gray' }}>{` ${fmtWeight(layer.sampledProbability)}`}</Text>
     </Text>
   );
@@ -312,8 +358,10 @@ export function FlowPanel(props: {
   readonly labelForId: (tokenId: number) => string;
   readonly labelForIndex: (tokenIndex: number) => string;
   readonly cols: number;
+  /** Draw only part of the diagram (used to build it up step by step). Omit for all of it. */
+  readonly reveal?: FlowReveal;
 }): React.ReactElement | null {
-  const { tier, data } = props;
+  const { tier, data, reveal } = props;
   if (tier === 'hidden') return null;
   if (data === null) {
     return (
@@ -349,16 +397,20 @@ export function FlowPanel(props: {
   }
 
   const short = props.cols < 104;
+  // Below this width the one-row-per-block form drops words to keep its numbers visible.
+  const narrow = props.cols < 88;
   const sampler =
     data.temperature <= 1e-8
       ? 'take the top one'
-      : `sample T=${String(data.temperature)}${data.topK > 0 ? ` top-${String(data.topK)}` : ''}`;
+      : `${narrow ? '' : 'sample '}T=${String(data.temperature)}${data.topK > 0 ? ` top-${String(data.topK)}` : ''}`;
   const ruleWidth = Math.max(8, Math.min(props.cols - 24, 96));
 
   return (
     <Box style={panelBox}>
       <Text style={{ color: 'gray', textWrap: 'truncate-end' }}>
-        {`${caption} · [head cells] tall = locked on one token · ⊕ +% = change to the stream · bar = p(«${data.sampledLabel}»)`}
+        {narrow
+          ? `${caption} · [cells] head focus · ⊕ change · bar p(«${data.sampledLabel}»)`
+          : `${caption} · [head cells] tall = locked on one token · ⊕ +% = change to the stream · bar = p(«${data.sampledLabel}»)`}
       </Text>
       <Text style={{ textWrap: 'truncate-end' }}>
         <Text style={{ color: 'gray' }}>{'  ┌ '}</Text>
@@ -371,20 +423,26 @@ export function FlowPanel(props: {
         const focused = l.layerIndex === data.focusedLayerIndex;
         const titleColor = focused ? 'yellow' : 'gray';
         const title = `block ${String(l.layerIndex + 1)}`;
+        const parts = revealedBlockSteps(reveal, l.layerIndex);
+        const lensShown = reveal === undefined || l.layerIndex < reveal.lens;
         if (props.variant === 'compact') {
           return (
             <Text key={l.layerIndex} style={{ textWrap: 'truncate-end' }}>
               <Text style={{ color: titleColor }}>
-                {`  ${focused ? '┝▶' : '├─'} ${title.padEnd(9, ' ')}`}
+                {`  ${focused ? '┝▶' : '├─'} ${
+                  narrow ? `b${String(l.layerIndex + 1)}`.padEnd(4, ' ') : title.padEnd(9, ' ')
+                }`}
               </Text>
-              <BlockSteps layer={l} short={true} />
-              <BlockLens layer={l} labelForId={props.labelForId} short={true} />
+              <BlockSteps layer={l} short={true} parts={parts} />
+              {lensShown ? (
+                <BlockLens layer={l} labelForId={props.labelForId} short={true} narrow={narrow} />
+              ) : null}
             </Text>
           );
         }
         const top = strongestHead(l);
         const link =
-          top !== undefined
+          top !== undefined && parts >= 1
             ? ` strongest: H${String(top.headIndex)} → «${props.labelForIndex(top.peakKeyIndex)}»@${String(top.peakKeyIndex)} ${fmtWeight(top.peakStrength)} `
             : ' ';
         const lead = `  ${focused ? '┝▶' : '├─'} ${title} ─`;
@@ -400,19 +458,25 @@ export function FlowPanel(props: {
             </Text>
             <Text style={{ textWrap: 'truncate-end' }}>
               <Text style={{ color: 'gray' }}>{'  │   '}</Text>
-              <BlockSteps layer={l} short={short} />
-              <BlockLens layer={l} labelForId={props.labelForId} short={short} />
+              <BlockSteps layer={l} short={short} parts={parts} />
+              {lensShown ? (
+                <BlockLens layer={l} labelForId={props.labelForId} short={short} />
+              ) : null}
             </Text>
           </React.Fragment>
         );
       })}
-      <Text style={{ textWrap: 'truncate-end' }}>
-        <Text style={{ color: 'gray' }}>
-          {`  └▶ final norm ─▶ ${String(data.vocabSize)} scores ─▶ softmax ─▶ ${sampler} ─▶ `}
+      {reveal !== undefined && !reveal.output ? (
+        <Text style={{ color: 'gray' }}>{'  ┆'}</Text>
+      ) : (
+        <Text style={{ textWrap: 'truncate-end' }}>
+          <Text style={{ color: 'gray' }}>
+            {`  └▶ ${narrow ? 'norm' : 'final norm'} ─▶ ${String(data.vocabSize)} scores ─▶ softmax ─▶ ${sampler} ─▶ `}
+          </Text>
+          <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{`«${data.sampledLabel}»`}</Text>
+          <Text style={{ color: 'gray' }}>{` ${fmtWeight(data.sampledProbability)}`}</Text>
         </Text>
-        <Text style={{ color: 'cyan', fontWeight: 'bold' }}>{`«${data.sampledLabel}»`}</Text>
-        <Text style={{ color: 'gray' }}>{` ${fmtWeight(data.sampledProbability)}`}</Text>
-      </Text>
+      )}
     </Box>
   );
 }

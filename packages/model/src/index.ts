@@ -36,6 +36,7 @@ export {
   disposeGptKvForwardGraph,
   forwardGptDecodeStep,
   forwardGptPrefill,
+  readKvCacheHead,
   type DecodeAttentionCaptureOptions,
   type ForwardGptDecodeStepOptions,
   type GptDecodeStepResult,

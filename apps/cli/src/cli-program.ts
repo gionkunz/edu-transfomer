@@ -12,6 +12,7 @@ import {
 import { runGenerateCommand } from './cmd/generate';
 import { DEFAULT_STOP_TEXT } from './cmd/generate-stop';
 import { runInspect } from './cmd/inspect';
+import { DEFAULT_LEARN_PROMPT, runLearnCommand } from './cmd/learn';
 import { runTokenizerDecode, runTokenizerEncode } from './cmd/tokenizer';
 import { runTokenizerTrain } from './cmd/tokenizer-train';
 import {
@@ -326,6 +327,48 @@ export function createCliProgram(): Command {
         ...(repeatPenalty > 1
           ? { repetitionPenalty: repeatPenalty, repetitionWindow: repeatWindow }
           : {}),
+      });
+    });
+
+  root
+    .command('learn')
+    .description(
+      'guided lesson: how the model predicts the next token, step by step (WebGPU, interactive)',
+    )
+    .argument('[prompt...]', 'prompt whose next token is explained', [])
+    .requiredOption('--model <path>', 'checkpoint dir or model.json sidecar')
+    .option('--tokenizer <path>', 'BPE tokenizer json (default: tokenizer.json in checkpoint dir)')
+    .option('--temperature <x>', 'sampling temperature the lesson starts with', '0.8')
+    .option('--top-k <k>', 'top-k the lesson starts with (0 = off)', '40')
+    .option('--dtype <d>', 'parameter compute dtype for the loaded model: f32 | bf16', 'f32')
+    .option(
+      '--allow-dtype-upcast',
+      'allow checkpoints whose manifest dtypes differ from --dtype (16-bit → f32; OpenSpec §8)',
+    )
+    .option(
+      '--no-animation',
+      'show every step in its finished state instead of building it up. Keys: left/right step, up/down block or temperature, h/H head, k top-k, r redraw, n continue with the drawn token, space replay, q quit. Needs a terminal of at least 80×24.',
+    )
+    .action(async (promptWords: string[], opts) => {
+      const temperature = Number(opts.temperature as string);
+      const topK = Number(opts.topK as string);
+      if (!Number.isFinite(temperature) || temperature < 0) {
+        throw new Error('learn: --temperature must be a finite number ≥ 0');
+      }
+      if (!Number.isInteger(topK) || topK < 0) {
+        throw new Error('learn: --top-k must be a non-negative integer');
+      }
+      const computeDtype = parseOptionalComputeDtype(opts.dtype as string | undefined, 'learn');
+      const prompt = promptWords.join(' ');
+      await runLearnCommand({
+        modelArg: opts.model as string,
+        ...(typeof opts.tokenizer === 'string' ? { tokenizerArg: opts.tokenizer } : {}),
+        prompt: prompt.length > 0 ? prompt : DEFAULT_LEARN_PROMPT,
+        temperature,
+        topK,
+        animation: opts.animation !== false,
+        computeDtype,
+        ...(opts.allowDtypeUpcast === true ? { allowDtypeUpcast: true } : {}),
       });
     });
 
