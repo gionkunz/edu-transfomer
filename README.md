@@ -73,6 +73,17 @@ Built-in GPT shape **presets** for **`llm train --config`** (vocab comes from to
 
 ---
 
+## Try it without training: the included model
+
+**`examples/tinystories/`** holds a trained checkpoint (`model.bin`, `model.json`, `tokenizer.json`; 42 MB), so `generate`, `chat`, `learn` and `embeddings` work right after the build:
+
+```bash
+llm generate --model examples/tinystories --prompt "Once upon a time, there was a little" --max-new-tokens 200
+llm learn --model examples/tinystories "Once upon a time, there was a little"
+```
+
+It is the model from the quick start below: `config/tinystories.json` (~10M parameters, 8 layers, 8 heads, dModel 256, context 512, 8k vocabulary), trained for 40,000 steps on four shards of [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) to a validation loss of 1.60. It writes short children's stories in simple English and knows nothing else. The optimizer state is not included, so it cannot be resumed with `llm train --resume`. The TinyStories dataset is published under CDLA-Sharing-1.0.
+
 ## Quick start: a model that tells a tiny story
 
 The fastest route to readable output is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories): 2.2 GB of short stories written with a small child's vocabulary, built so that models under ~10M parameters can learn coherent English. A handful of novels is far too little text for that (the model memorizes fragments instead of learning grammar).
@@ -232,7 +243,7 @@ llm train \
 **One-shot:**
 
 ```bash
-llm generate --model out/run-medium --tokenizer out/tok-8000.json --prompt "Once upon a time" --max-new-tokens 128
+llm generate --model examples/tinystories --prompt "Once upon a time" --max-new-tokens 128
 ```
 
 **`generate` is an explore view by default** (use `--no-explore` for plain streaming). Next to the streamed text it shows the next-token probabilities and a bottom panel you switch with **`f`**:
@@ -242,11 +253,13 @@ llm generate --model out/run-medium --tokenizer out/tok-8000.json --prompt "Once
 
 **`p`** pauses on a token, **`s`** slows generation down; while paused or slow, changing the block or the panel refetches the data for the current token. The full panels need a tall terminal (one row per head or block) and compress below that.
 
-**Interactive chat** (wolf-tui; Ctrl+C exits):
+**Interactive chat** (wolf-tui; Ctrl+C exits). The included model was trained on stories only, so it continues what you type as a story instead of answering:
 
 ```bash
-llm chat --model out/run-medium --tokenizer out/tok-8000.json --max-new-tokens 96
+llm chat --model examples/tinystories --max-new-tokens 96
 ```
+
+The examples use the included model in **`examples/tinystories/`**; point **`--model`** at your own checkpoint directory to use that instead. The tokenizer is read from **`tokenizer.json`** in the checkpoint directory unless you pass **`--tokenizer`**.
 
 Sampling flags (**`temperature`**, **`top-k`**, **`repeat-penalty`**, **`repeat-window`**) mirror **`generate`**; see **`llm chat --help`**.
 
@@ -255,7 +268,7 @@ Sampling flags (**`temperature`**, **`top-k`**, **`repeat-penalty`**, **`repeat-
 ## Example: learn how the model predicts
 
 ```bash
-llm learn --model out/tinystories/run1 "Once upon a time, there was a little"
+llm learn --model examples/tinystories "Once upon a time, there was a little"
 ```
 
 **`llm learn`** runs the model once on your prompt and then walks you through how it arrived at the next token. Nothing on screen is a textbook example: every vector, score and probability comes from that one forward of your checkpoint. One step is one screen, with a schematic on top and a short explanation below.
@@ -286,7 +299,7 @@ The prompt is optional (default **`Once upon a time`**). **`--temperature`** and
 
 A trained checkpoint contains a learned **token-embedding matrix** (`tokenEmbed`, shape `[vocab, dModel]`) — one vector per BPE token. **`llm embeddings`** lets you poke at that geometry: encode words to vectors, find nearest neighbours by cosine similarity, compare two words, and evaluate small arithmetic expressions like the classic _king − man + woman ≈ queen_. It’s a fast, qualitative read on what the model has actually learned.
 
-All subcommands take a checkpoint (`--model`) and the matching tokenizer (`--tokenizer`), print to stdout, and accept **`--json`** for piping into `jq`. Math runs CPU-side; no GPU is required.
+All subcommands take a checkpoint (`--model`; the tokenizer is read from its directory unless you pass `--tokenizer`), print to stdout, and accept **`--json`** for piping into `jq`. Math runs CPU-side; no GPU is required.
 
 > **Reading the output: cosine + band + z.** Raw cosine values are hard to interpret because the embedding cone is narrow and per-checkpoint (e.g. cos = 0.15 may be a strong relation on one model and noise on another). Every result is therefore tagged with a **z-score** and a **qualitative band** (`identical` / `very similar` / `similar` / `weakly similar` / `unrelated` / `weakly opposite` / `opposite`), calibrated against the cosine distribution from the query to the rest of the vocab on this specific checkpoint. Self-similarity sits at `identical` (z ≈ 20+); strong neighbours typically land at z ≥ 3 (`very similar`); near-mean cosines fall in `unrelated`. The reference `μ` and `σ` are printed alongside.
 
@@ -306,57 +319,56 @@ llm embeddings --help
 
 ### Starter recipe (run these in order)
 
-Pick a trained checkpoint and matching tokenizer:
+The recipe uses the included model; set `MODEL` to your own checkpoint directory to probe that instead. The results quoted below are from the included model:
 
 ```bash
-MODEL=out/medium-longctx-push2
-TOK=out/tok-8000.json
+MODEL=examples/tinystories
 ```
 
 **1. Sanity-check the implementation.** A token compared against itself must score 1.0:
 
 ```bash
-llm embeddings similarity --model $MODEL --tokenizer $TOK king king
+llm embeddings similarity --model $MODEL king king
 ```
 
 **2. Verify the space encodes meaning.** Related pairs should land in `very similar` / `similar` (z ≥ 2), random controls in `unrelated` / `weakly similar`. Read the band, not the raw cosine:
 
 ```bash
-llm embeddings similarity --model $MODEL --tokenizer $TOK he she
-llm embeddings similarity --model $MODEL --tokenizer $TOK boy girl
-llm embeddings similarity --model $MODEL --tokenizer $TOK he banana   # control
+llm embeddings similarity --model $MODEL he she
+llm embeddings similarity --model $MODEL boy girl
+llm embeddings similarity --model $MODEL he banana   # control
 ```
 
-A strong run looks like `cosine: 0.158754  (very similar, z=3.2 vs reference μ=-0.003 σ=0.051)`.
+The included model gives `he`/`she` `cosine: 0.661086  (identical, z=7.0 vs reference μ=-0.0472473 σ=0.101363)` and `he`/`banana` `cosine: -0.0656036  (unrelated, z=-0.2 …)`.
 
-**3. Look at neighbourhoods.** What does the model think `the` is similar to? On most corpora you’ll see other determiners / quantifiers (`another`, `such`, `local`, …) — that’s distributional similarity in action:
+**3. Look at neighbourhoods.** What does the model think `the` is similar to? The included model lists its other spellings (`The`) and then determiners and possessives (`these`, `this`, `my`, `his`, `our`) — that’s distributional similarity in action:
 
 ```bash
-llm embeddings nearest --model $MODEL --tokenizer $TOK the --top-k 10
-llm embeddings nearest --model $MODEL --tokenizer $TOK Sarah --top-k 10   # named entities cluster with names + pronouns
+llm embeddings nearest --model $MODEL the --top-k 10
+llm embeddings nearest --model $MODEL Sarah --top-k 10   # names cluster with other names (Kate, Sally, Lisa, Mary, …)
 ```
 
 **4. The headline analogy.** This is the educational money shot — vector arithmetic over the embedding space:
 
 ```bash
-llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10
+llm embeddings expression --model $MODEL "king - man + woman" --top-k 10
 ```
 
-Whether `queen` lands at rank 1 depends heavily on **corpus size and topic** (open-domain Wikipedia text reproduces the textbook result; small narrative-domain corpora typically surface female pronouns / names instead, which is _also_ a real signal: the gender axis is being learned). Both outcomes are pedagogically useful and the input-expansion trace tells you exactly what was tokenised.
+On the included model `queen` is rank 1 (z=5.2), followed by girls’ names. Whether it lands at rank 1 on your own checkpoint depends heavily on **corpus size and topic** (open-domain Wikipedia text reproduces the textbook result; small narrative-domain corpora typically surface female pronouns / names instead, which is _also_ a real signal: the gender axis is being learned). Both outcomes are pedagogically useful and the input-expansion trace tells you exactly what was tokenised.
 
 **5. See the trick — toggle input exclusion.** By default we hide the literal input tokens from the result list, otherwise `king` itself dominates the top by trivial self-similarity. Compare:
 
 ```bash
-llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10
-llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --top-k 10 --exclude-inputs=false
+llm embeddings expression --model $MODEL "king - man + woman" --top-k 10
+llm embeddings expression --model $MODEL "king - man + woman" --top-k 10 --exclude-inputs=false
 ```
 
 **6. Other relations worth probing.** Anything the model has seen enough of will show up:
 
 ```bash
-llm embeddings expression --model $MODEL --tokenizer $TOK "father - he + she" --top-k 5     # should land near "mother" / female names
-llm embeddings expression --model $MODEL --tokenizer $TOK "boys - boy + girl" --top-k 5     # plural axis (often noisier)
-llm embeddings expression --model $MODEL --tokenizer $TOK "(king + queen) - man" --top-k 5  # parens compose
+llm embeddings expression --model $MODEL "father - he + she" --top-k 5     # included model: mother, Mommy, mommy
+llm embeddings expression --model $MODEL "boys - boy + girl" --top-k 5     # plural axis; included model: girls, sisters
+llm embeddings expression --model $MODEL "(king + queen) - man" --top-k 5  # parens compose
 ```
 
 ### About the auto-prefix space
@@ -364,8 +376,8 @@ llm embeddings expression --model $MODEL --tokenizer $TOK "(king + queen) - man"
 Under the **`gpt2-v1`** pretokenizer, **`king`** and **`" king"`** (with a leading space) are _different_ tokens — and `" king"` is the variant that actually appears in real text (mid-sentence). So `llm embeddings` **prepends a single leading space to bare word inputs by default** (you’ll see `encoded as " king"` in the trace). Vector files (`@path.json`), inputs that already start with whitespace, and explicitly **quoted atoms inside `expression`** are left alone:
 
 ```bash
-llm embeddings expression --model $MODEL --tokenizer $TOK 'king + "queen"' --top-k 5         # bare king → " king"; quoted "queen" stays literal
-llm embeddings expression --model $MODEL --tokenizer $TOK "king - man + woman" --no-auto-space  # opt out globally
+llm embeddings expression --model $MODEL 'king + "queen"' --top-k 5         # bare king → " king"; quoted "queen" stays literal
+llm embeddings expression --model $MODEL "king - man + woman" --no-auto-space  # opt out globally
 ```
 
 Use `--no-auto-space` (or quote individual atoms in expressions) to inspect the rare no-leading-space variants — useful for understanding BPE behaviour, but most of the time you want the default.
